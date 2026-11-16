@@ -115,6 +115,34 @@ class SerializedToolCallsTest(unittest.TestCase):
         self.assertTrue(redact(summary).endswith('password: \\"<redacted>'))
 
 
+class SecretNameTest(unittest.TestCase):
+    """A secret word counts when it is a whole part of the name, split at _ - . and camelCase."""
+
+    def test_names_whose_part_is_a_secret_word(self) -> None:
+        for name in (
+            "GH_TOKEN",
+            "access_token",
+            "AWS_SECRET_ACCESS_KEY",
+            "apiKey",
+            "APIKey",
+            "accessToken",
+            "x-api-key",
+            "spring.datasource.password",
+            "_authToken",
+            "apikey",
+            "Cookie",
+        ):
+            with self.subTest(name=name):
+                self.assertTrue(redact_module.secret_name(name))
+                self.assertEqual(redact(f"{name}={FAKE}"), f"{name}=<redacted>")
+
+    def test_names_that_only_hold_a_secret_word_inside_a_part(self) -> None:
+        for name in ("input_tokens", "max_tokens", "TOKENS", "tokenizer", "secretary", "dbpasswords"):
+            with self.subTest(name=name):
+                self.assertFalse(redact_module.secret_name(name))
+                self.assertEqual(redact(f"{name}={FAKE}"), f"{name}={FAKE}")
+
+
 class TokenPrefixesTest(unittest.TestCase):
     def test_tokens_without_a_name(self) -> None:
         tokens = {
@@ -189,6 +217,12 @@ class ProseTest(unittest.TestCase):
             "lookup(max_tokens=LOOKUP_TOKENS)",
             '{"token": null}',
             "GITHUB_TOKEN=$(gh auth token)",
+            "password: required.",
+            "Is a token: needed?",
+            "input_tokens=123456 output_tokens=2345",
+            "total_tokens: 1234567",
+            "max_tokens: 100000",
+            "tokenizer=gpt2-tiktoken",
         ):
             with self.subTest(text=text):
                 self.assertEqual(redact(text), text)
@@ -225,6 +259,9 @@ class TimingTest(unittest.TestCase):
             "quotes": '"' * n,
             "a long query": "https://x.example.com/p?" + "a=b&" * (n // 4),
             "many URLs": "https://x.example.com/p?a " * (n // 26),
+            "URLs with no space between them": "http://a/?x" * (n // 11),
+            "URLs with a user and no space between them": "http://u:" * (n // 9),
+            "queries with no space between them": "https://h/p?a=b&" * (n // 16),
             "a long local part": "a" * n + "@",
             "dots before an @": "a." * (n // 2) + "@",
             "many @": "a@" * (n // 2),

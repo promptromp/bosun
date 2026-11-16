@@ -4,8 +4,9 @@ digest, and what I type in a repo window (the ledger's user-said entries).
 Redact a text whole, before cutting it short: a cut can drop a private key's END marker or shorten a
 token below its rule's length. A BEGIN marker with no END is still redacted, with the key body after it.
 
-Every rule is bounded (no unbounded run on both sides of a fixed part, no unbounded lazy scan), so
-text of any length takes time in proportion to its length: callers redact what they are given whole."""
+No rule scans the same text more than a bounded number of times (no unbounded run on both sides of a
+fixed part, no unbounded scan that can fail and start again further on), so text of any length takes
+time in proportion to its length: callers redact what they are given whole."""
 
 from __future__ import annotations
 
@@ -13,22 +14,45 @@ import re
 from collections.abc import Callable
 
 
-# A word that makes a name secret, anywhere in the name (AWS_SECRET_ACCESS_KEY, db_password, apiKey).
-# The console's Config view masks config keys by these words too, and by any KEY (console_library).
+# A word that may make a name secret: it does when it is a whole part of the name (secret_name:
+# AWS_SECRET_ACCESS_KEY, access_token, apiKey; not input_tokens or tokenizer). The console's Config
+# view masks config keys by these words anywhere in them, and by any KEY (console_library).
 CREDENTIAL_WORD = (
     r"(?:password|passwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|credential|cookie)"
 )
+# The same words as a name's parts, in order.
+SECRET_PARTS = (
+    ("password",),
+    ("passwd",),
+    ("secret",),
+    ("token",),
+    ("api", "key"),
+    ("apikey",),
+    ("access", "key"),
+    ("accesskey",),
+    ("private", "key"),
+    ("privatekey",),
+    ("credential",),
+    ("credentials",),
+    ("cookie",),
+)
+NAME_SEPARATORS = re.compile(r"[_.-]+")
+CAMEL_PARTS = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+")  # APIKey: API, Key; accessToken
+# Where a name starts: after no word character or backslash, or after an escaped line break or tab
+# (the "n" of \npassword in a JSON-serialized text is no part of the name).
+NAME_START = r"(?:(?<![\\\w])|(?<=\\[nrt]))"
 NAME_PART = r"[A-Za-z0-9_]{0,64}"  # bounded: unbounded on both sides of the word was quadratic
 # The name, its closing quote if it is a quoted key (JSON; escaped in JSON inside JSON), and the =
 # or : after it, on its line.
 CREDENTIAL_NAME = (
-    rf"\b(?P<name>{NAME_PART}{CREDENTIAL_WORD}{NAME_PART})(?P<sep>(?:\\?[\"'])?[ \t]*[=:][ \t]*)"
+    rf"{NAME_START}(?P<name>{NAME_PART}{CREDENTIAL_WORD}{NAME_PART})(?P<sep>(?:\\?[\"'])?[ \t]*[=:][ \t]*)"
 )
 # A character of a bare value: not space, a quote or what closes the value in code or markup, nor
 # an escaped line break or quote (\n, \" in a JSON-serialized text).
 BARE = r"""(?:[^\s'"`,;})\]\\]|\\(?![nrt"]))"""
-# ... and one that makes it look like a secret: anything but a letter or _.
-SYMBOL = r"""(?:[^A-Za-z_\s'"`,;})\]\\]|\\(?![nrt"]))"""
+# ... and one that makes it look like a secret: anything but a letter or _, and a sentence's . ! or ?
+# only inside the value, not at its end ("Password: required." stays).
+SYMBOL = r"""(?:[^A-Za-z_.!?\s'"`,;})\]\\]|[.!?](?=BARE)|\\(?![nrt"]))""".replace("BARE", BARE)
 # The value: quoted (escaped quotes too, as in a JSON-serialized tool call), up to its closing quote
 # or the end of its line or text (a value cut short); or bare, when it looks like a secret: 16
 # characters or more, or 6 or more with something other than a letter or _ (prose such as
@@ -47,12 +71,34 @@ KEY_HEADERS = rf"(?:(?:{LINE_GAP}(?:Proc-Type|DEK-Info):[^\n]{{0,200}})+[ \t]*(?
 KEY_LENGTH = 20_000  # characters a whole key may span between its markers (a PGP key block too)
 
 
+def secret_name(name: str) -> bool:
+    """Whether a secret word is a whole part of <name>, split at _ - . and camelCase."""
+    parts = [part.lower() for chunk in NAME_SEPARATORS.split(name) for part in CAMEL_PARTS.findall(chunk)]
+    return any(
+        tuple(parts[start : start + len(words)]) == words
+        for words in SECRET_PARTS
+        for start in range(len(parts))
+    )
+
+
 def credential(match: re.Match[str]) -> str:
-    """A secret-named value as <redacted>, kept in the quotes it had."""
+    """A secret-named value as <redacted>, kept in the quotes it had; a name that only holds a
+    secret word inside a part of it (input_tokens, tokenizer) is left as it was."""
     groups = match.groupdict()
+    if not secret_name(groups["name"]):
+        return match.group(0)
     opened = groups["eq"] or groups["dq"] or groups["sq"] or ""
     closed = groups["eqc"] or groups["dqc"] or groups["sqc"] or ""
     return f"{groups['name']}{groups['sep']}{opened}<redacted>{closed}"
+
+
+SECRET_QUERY = re.compile(r"(?:code|token|state|secret|key|sig|password|auth)=")
+
+
+def signed_url(match: re.Match[str]) -> str:
+    """A URL with its query as <redacted> when a parameter in it is secret, else as it was."""
+    query = match.group(2)
+    return f"{match.group(1)}?<redacted>" if query and SECRET_QUERY.search(query) else match.group(0)
 
 
 Replacement = str | Callable[[re.Match[str]], str]
@@ -78,12 +124,10 @@ REDACTIONS: tuple[tuple[re.Pattern[str], Replacement], ...] = (
     (re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"), "<aws-key>"),
     (re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"), "<jwt>"),
     (re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{16,}"), r"\1 <token>"),
-    (
-        re.compile(
-            r"(https?://[^\s?#\"'<>]+)\?[^\s\"'<>]*(?:code|token|state|secret|key|sig|password|auth)=[^\s\"'<>]*"
-        ),
-        r"\1?<redacted>",
-    ),
+    # A signed URL's query: the whole URL is taken once, possessively (searching inside it for the
+    # secret parameter was quadratic on URLs with no space between them), and its query replaced
+    # when a parameter is secret.
+    (re.compile(r"(https?://[^\s?#\"'<>]*+)(?:\?([^\s\"'<>]*+))?"), signed_url),
     # A password in a connection URL, between the user's colon and the @ of the host: the scheme,
     # user and host stay.
     (re.compile(r"(?i)\b([a-z][a-z0-9+.-]{1,20}://[^\s:/@]{0,64}:)[^\s/@]{1,256}@"), r"\1<redacted>@"),
