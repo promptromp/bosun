@@ -4020,6 +4020,7 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   check "an install that stops at the launchd jobs fails" fails_with "could not load the launchd jobs" env BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" --example generic
   check "... and leaves ~/.local/bin/bosun unlinked, so the install line takes the install for unfinished and runs init again" test ! -e "$HOME/.local/bin/bosun"
   rm -f "$WORK/launchctl-fails" "$HOME"/Library/LaunchAgents/"$BOSUN_LAUNCHD_LABEL"*.plist
+  check "install checks Claude Code as BOSUN_CLAUDE_BIN names it" fails_with "missing: $WORK/no-claude/claude" env BOSUN_CONFIG_DIR="$INSTALL_CFG" BOSUN_CLAUDE_BIN="$WORK/no-claude/claude" "$ROOT/install.sh" --example generic
   BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" --example generic >/dev/null 2>&1
   check "install copies the example config" bash -c '[ -f "$1/bosun.env" ] && [ -f "$1/sessions.yml" ] && [ -f "$1/setup.sh" ]' _ "$INSTALL_CFG"
   check "install links bosun into ~/.local/bin" test "$(readlink "$HOME/.local/bin/bosun")" = "$BOSUN"
@@ -4083,8 +4084,9 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   check "a damaged knowledge journal fails doctor" contains "$doctor_said" "FAIL  the knowledge base's journal refuses writes or a rebuild would lose data"
   check "... saying what validate found" contains "$doctor_said" "journal: the journal is damaged: "
   check "... with the reader's warning kept out of the counts' ok line" bash -c '! grep -q "ok    knowledge: .*damaged" <<<"$1"' _ "$doctor_said"
-  BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" >/dev/null 2>&1
+  out="$(BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" 2>&1)"
   check "... and removes it again once disabled" test ! -e "$LEARN_PLIST"
+  check "... saying the setting that is off" contains "$out" "removed launchd job $BOSUN_LAUNCHD_LABEL.learn (no longer wanted: BOSUN_LEARN_ENABLED is not 1)"
   CONSOLE_PLIST="$HOME/Library/LaunchAgents/$BOSUN_LAUNCHD_LABEL.console.plist"
   check "install writes no console job by default" test ! -e "$CONSOLE_PLIST"
   BOSUN_CONSOLE_ALWAYS=1 BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" >/dev/null 2>&1
@@ -4686,6 +4688,13 @@ for line in sys.stdin:
   kill "$init_holder"
   wait "$init_holder" 2>/dev/null
   BOSUN_CONFIG_DIR="$INIT_CFG" "$BOSUN" init --answers "$INIT_ANSWERS" >"$WORK/init.out" 2>&1
+  init_rc=$?
+  init_said="$(cat "$WORK/init.out")"
+  # This made-up machine fails some of doctor's checks (gh is not logged in, ...): bosun is set up all the same.
+  check "init sets bosun up, and exits 3 for the problems doctor found here, which it says last" bash -c '[ "$1" -eq 3 ] && grep -q "bosun is set up\. " <<<"$2" && tail -n 1 <<<"$2" | grep -q "run bosun doctor again" && ! grep -q "install.sh stopped" <<<"$2"' _ "$init_rc" "$init_said"
+  check "... with no wake among them: the answers said no to it, which bosun.env records" bash -c '! sed -n "/found problems:/,\$p" <<<"$2" | grep -q "pmset" && grep -qx "BOSUN_WAKE=\"0\"" "$1/bosun.env"' _ "$INIT_CFG" "$init_said"
+  check "... install.sh prints no sudo pmset line against it" bash -c 'grep -q "not bosun'"'"'s to set (BOSUN_WAKE=0)" <<<"$1" && ! grep -q "run once:  sudo pmset" <<<"$1"' _ "$init_said"
+  check "... and doctor says the wake was declined, in a warning" contains "$init_said" "warn  no repeating pmset wake, and bosun sets none (BOSUN_WAKE=0)"
   check "init writes the config" bash -c 'grep -q "BOSUN_DAYS=\"MWF\"" "$1/bosun.env" && grep -q "name: init-api" "$1/sessions.yml" && [ -f "$1/setup.sh" ]' _ "$INIT_CFG"
   check "what it writes loads as config" env BOSUN_CONFIG_DIR="$INIT_CFG" bash -c 'source "$1/lib/common.sh"; load_config; [ "$BOSUN_START_TIME" = 09:00 ] && [ "$BOSUN_EVENTS_ENABLED" = 1 ] && [ "$BOSUN_REPOS_DIR" = "$HOME/Development" ]' _ "$ROOT"
   check "... and as windows" env BOSUN_CONFIG_DIR="$INIT_CFG" bash -c 'source "$1/lib/common.sh"; load_config; window_specs | grep -q "^init-api	$HOME/Development/init-api	session"' _ "$ROOT"

@@ -54,6 +54,17 @@ set_update_defaults() {
   BOSUN_ACTIVE_CLIENT_MINUTES="10"
 }
 
+set_schedule_defaults() {
+  BOSUN_DAYS="MTWRF"
+  BOSUN_START_TIME="08:00"
+  BOSUN_WAKE_DELAY_MINUTES="1"
+  # 1: the Mac's repeating wake (pmset) is bosun's to set, and `bosun doctor` fails while it is not; 0: bosun sets
+  # none (said no to in `bosun init`, or another app's repeating wake stays: pmset keeps one), and doctor says so.
+  BOSUN_WAKE="1"
+  BOSUN_AWAKE_UNTIL="20:00"
+  BOSUN_LAUNCHD_LABEL="com.bosun.morning"
+}
+
 set_defaults() {
   BOSUN_CONFIG_DIR="${BOSUN_CONFIG_DIR:-$HOME/.config/bosun}"
   BOSUN_SESSION_NAME="bosun"
@@ -66,11 +77,7 @@ set_defaults() {
   # kill a shared server. Empty: the default server. Attach with `bosun attach`.
   BOSUN_TMUX_SOCKET="bosun"
 
-  BOSUN_DAYS="MTWRF"
-  BOSUN_START_TIME="08:00"
-  BOSUN_WAKE_DELAY_MINUTES="1"
-  BOSUN_AWAKE_UNTIL="20:00"
-  BOSUN_LAUNCHD_LABEL="com.bosun.morning"
+  set_schedule_defaults
 
   BOSUN_NETWORK_PROBE_URL="https://www.apple.com/library/test/success.html"
   BOSUN_NETWORK_TIMEOUT="120"
@@ -1553,18 +1560,35 @@ render_learn_plist() {
     <"$BOSUN_ROOT/templates/launchd-learn.plist"
 }
 
+# The setting that job <label> is there for, while it is 1 (render_job renders it only then); nothing for a job
+# that is always there, or the app's login job (there while `bosun app login on` keeps its plist).
+job_setting() { # <label>
+  case "$1" in
+    "$(learn_label)") echo BOSUN_LEARN_ENABLED ;;
+    "$(console_label)") echo BOSUN_CONSOLE_ALWAYS ;;
+    "$(login_label)") echo BOSUN_START_AT_LOGIN ;;
+  esac
+}
+
+# Whether job <label>'s setting wants it: 1, or it has none.
+job_wanted() { # <label>
+  local setting
+  setting="$(job_setting "$1")"
+  [ -z "$setting" ] || [ "${!setting}" = "1" ]
+}
+
 # The plist of the launchd job <label> as this version renders it from the config: the morning job,
 # the watchdog, learning with BOSUN_LEARN_ENABLED=1, the console with BOSUN_CONSOLE_ALWAYS=1, the job
-# that runs the morning run now, the login job with BOSUN_START_AT_LOGIN=1, and the app's login job while its
-# plist is there; nothing for a job not wanted.
+# that runs the morning run now, the login job with BOSUN_START_AT_LOGIN=1 (job_setting), and the app's login
+# job while its plist is there; nothing for a job not wanted.
 render_job() { # <label>
   case "$1" in
     "$BOSUN_LAUNCHD_LABEL") render_launchd_plist "$1" "$BOSUN_START_TIME" "$BOSUN_DAYS" "" BOSUN_TRIGGER=launchd ;;
     "$(watchdog_label)") render_watchdog_plist ;;
-    "$(learn_label)") if [ "$BOSUN_LEARN_ENABLED" = "1" ]; then render_learn_plist; fi ;;
-    "$(console_label)") if [ "$BOSUN_CONSOLE_ALWAYS" = "1" ]; then render_console_plist; fi ;;
+    "$(learn_label)") if job_wanted "$1"; then render_learn_plist; fi ;;
+    "$(console_label)") if job_wanted "$1"; then render_console_plist; fi ;;
     "$(now_label)") render_now_plist ;;
-    "$(login_label)") if [ "$BOSUN_START_AT_LOGIN" = "1" ]; then render_login_plist; fi ;;
+    "$(login_label)") if job_wanted "$1"; then render_login_plist; fi ;;
     "$(app_label)") if [ -e "$(app_plist)" ]; then render_app_plist; fi ;;
   esac
 }

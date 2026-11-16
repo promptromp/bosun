@@ -33,6 +33,7 @@ NOW = datetime(2026, 11, 2, 12, 0, tzinfo=UTC)
 REAL_APP_UNAVAILABLE = (
     init_detect.app_unavailable
 )  # WorldTest patches it: its own tests read a scratch folder
+REAL_RUN_SHOWN = init.run_shown  # CommandTest patches it: install.sh never runs in a unit test
 
 
 class FakeTerminal:
@@ -285,6 +286,28 @@ class DetectTest(WorldTest):
         self.assertEqual(facts.connectors, ("claude.ai Acme Mail", "acme-local"))
         self.assertEqual(self.mcp_calls, [("/opt/acme/claude", self.home)])
 
+    def test_claude_code_is_the_binary_the_config_names(self) -> None:
+        """BOSUN_CLAUDE_BIN, from the environment or else bosun.env (a $HOME in it expanded), is what the plan
+        needs on the PATH and what auth status and the listing ask, as preflight and doctor check it."""
+        self.config.mkdir(parents=True)
+        (self.config / "bosun.env").write_text('BOSUN_CLAUDE_BIN="$HOME/opt/claude"\n')
+        asked: list[str] = []
+
+        def which(name: str, *args: Any, **kwargs: Any) -> str | None:
+            asked.append(name)
+            return None if name.endswith("/claude") else f"/usr/bin/{name}"
+
+        configured = f"{self.home}/opt/claude"
+        with mock.patch.object(shutil, "which", which):
+            facts = init_detect.detect(self.config, NOW)
+        self.assertEqual(facts.missing_tools, (configured,))
+        self.assertNotIn("claude", asked)
+        self.assertEqual([call[0] for call in self.mcp_calls], [configured])
+        with mock.patch.dict(os.environ, {"BOSUN_CLAUDE_BIN": "/opt/acme/claude"}):
+            self.assertEqual(init_detect.configured_claude({"BOSUN_CLAUDE_BIN": "x"}), "/opt/acme/claude")
+        with mock.patch.dict(os.environ, {"BOSUN_CLAUDE_BIN": ""}):
+            self.assertEqual(init_detect.configured_claude({}), "claude")
+
     def test_a_failed_listing_is_no_connectors(self) -> None:
         self.assertEqual(init_detect.detect(self.config, NOW).connectors, ())
 
@@ -340,9 +363,9 @@ class CommandTest(WorldTest):
             """What bosun would run is recorded. Only git and ruby really run, on this scratch home:
             a test must never reach a real login or anything else that changes a machine."""
             name = Path(str(command[0])).name
-            if name in ("install.sh", "bosun"):
+            if name == "bosun":
                 self.calls.append([name, *command[1:]])
-                status = self.statuses.get(tuple(str(arg) for arg in command[1:3]), self.install_status)
+                status = self.statuses.get(tuple(str(arg) for arg in command[1:3]), 0)
                 return subprocess.CompletedProcess(command, status)
             if name == "bash" and command[2:3] and "reload_changed_jobs" in str(command[2]):
                 self.reloads.append(str(command[2]))  # the jobs made to follow the config again
@@ -351,13 +374,21 @@ class CommandTest(WorldTest):
                 return real_run(command, *args, **kwargs)
             raise AssertionError(f"a unit test tried to run {command}")
 
+        def shown(command: Any) -> tuple[int, list[str]]:
+            """install.sh, which init runs with what it prints shown and kept: recorded, its lines made up."""
+            self.assertEqual(Path(str(command[0])).name, "install.sh")
+            self.calls.append(["install.sh", *command[1:]])
+            return self.install_status, list(self.install_lines)
+
         self.install_status = 0
+        self.install_lines: list[str] = []
         self.reload_status = 0
         self.reloads: list[str] = []
         self.statuses: dict[tuple[str, ...], int] = {}  # what a command answers, by its first two words
-        patcher = mock.patch.object(subprocess, "run", run)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for target, name, fake in ((subprocess, "run", run), (init, "run_shown", shown)):
+            patcher = mock.patch.object(target, name, fake)
+            patcher.start()
+            self.addCleanup(patcher.stop)
         for name, value in (("can_ask_for_sudo", True),):
             sudo = mock.patch.object(init, name, return_value=value)
             sudo.start()
@@ -557,11 +588,69 @@ class CommandTest(WorldTest):
                 self.assertIn(text, err)
         self.assertFalse(self.config.exists())
 
-    def test_a_failed_doctor_is_reported(self) -> None:
+    DOCTOR_SAID = (
+        "Schedule",
+        "  ok    launchd job com.bosun.morning loaded",
+        "  FAIL  gh is not logged in: run 'gh auth login'",
+        "  warn  on battery",
+        "  FAIL  something is missing or not done yet:",
+        "    tmux: brew install tmux",
+        "    jq: brew install jq",
+        "",
+        "2 check(s) failed",
+    )
+
+    def test_problems_doctor_found_still_set_bosun_up_and_are_said_last(self) -> None:
+        """install.sh made every step and only doctor found problems (its exit 3): the app is added all the
+        same, and init ends with doctor's FAIL lines, with what is listed under them, said again."""
+        self.install_status, self.install_lines = init.EXIT_DOCTOR, list(self.DOCTOR_SAID)
+        status, out, err = self.bosun_init("--recommended")
+        self.assertEqual(status, init.EXIT_DOCTOR)
+        self.assertEqual(self.app_calls(), [["bosun", "app", "install"], ["bosun", "app", "login", "on"]])
+        self.assertIn("bosun is set up", out)
+        self.assertTrue(err.rstrip().endswith("Fix them, then run bosun doctor again to check."))
+        self.assertIn(
+            "`bosun doctor` found problems:\n"
+            "  FAIL  gh is not logged in: run 'gh auth login'\n"
+            "  FAIL  something is missing or not done yet:\n"
+            "    tmux: brew install tmux\n    jq: brew install jq\n",
+            err,
+        )
+        self.assertNotIn("on battery", err)
+        self.assertNotIn("install.sh stopped", err)
+
+    def test_an_install_sh_that_stopped_says_what_stopped_it(self) -> None:
         self.install_status = 1
+        self.install_lines = [
+            "2026-11-16 09:00:00 [install] keeping existing bosun.env",
+            "2026-11-16 09:00:01 [install] ERROR: could not load the launchd jobs; see above",
+        ]
         status, _, err = self.bosun_init("--recommended")
         self.assertEqual(status, init.EXIT_BLOCKED)
-        self.assertIn("bosun doctor", err)
+        self.assertIn(
+            "install.sh stopped before it was done: could not load the launchd jobs; see above.", err
+        )
+        self.assertNotIn("bosun doctor", err)
+        self.assertEqual(self.app_calls(), [])
+        self.install_lines = []
+        self.assertIn("it exited with 1, without saying why", self.bosun_init("--recommended")[2])
+
+    def test_doctor_problems_keep_the_lines_under_a_failure_only(self) -> None:
+        self.assertEqual(init.doctor_problems(["  warn  x", "    under a warning", "  ok    y"]), ())
+        self.assertEqual(
+            init.doctor_problems(["  FAIL  a", "    b", "  ok    c", "    d"]), ("  FAIL  a\n    b",)
+        )
+        self.assertEqual(init.last_error(["[x] ERROR: one", "[x] ERROR: two ", "fine"]), "two")
+        self.assertEqual(init.last_error(["fine"]), "")
+
+    def test_what_install_sh_prints_is_shown_as_it_comes_and_kept(self) -> None:
+        script = self.home / "says.sh"
+        script.write_text("#!/bin/sh\necho one\necho two >&2\nexit 3\n")
+        script.chmod(0o755)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), mock.patch.object(init, "run_shown", REAL_RUN_SHOWN):
+            self.assertEqual(init.run_shown([str(script)]), (3, ["one", "two"]))
+        self.assertEqual(out.getvalue(), "one\ntwo\n")
 
     def test_trusted_folders_are_not_trusted_again(self) -> None:
         with mock.patch.object(claude_state, "trusted", return_value=True):
@@ -623,6 +712,23 @@ class CommandTest(WorldTest):
         self.assertEqual(status, 0)
         self.assertIn("name: api", (self.config / "sessions.yml").read_text())
         self.assertEqual(self.calls[-1], ["bosun", "start"])
+
+    def test_the_wizard_offers_to_start_when_only_doctor_found_problems_and_says_them_last(self) -> None:
+        self.install_status, self.install_lines = init.EXIT_DOCTOR, list(self.DOCTOR_SAID)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            status, _ = self.wizard([*[init_wizard.ENTER] * 7, "y", "y"])
+        self.assertEqual(status, init.EXIT_DOCTOR)
+        self.assertEqual(self.calls[-1], ["bosun", "start"])
+        self.assertIn("gh is not logged in", err.getvalue())
+
+    def test_the_wizard_does_not_offer_to_start_when_install_sh_stopped(self) -> None:
+        self.install_status = 1
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            status, _ = self.wizard([*[init_wizard.ENTER] * 7, "y"])
+        self.assertEqual(status, init.EXIT_BLOCKED)
+        self.assertNotIn(["bosun", "start"], self.calls)
 
     def test_the_wizard_replaces_other_windows_once_you_saw_it_would(self) -> None:
         self.bosun_init("--recommended")

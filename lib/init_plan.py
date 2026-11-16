@@ -28,13 +28,15 @@ from awake import DAY_LETTERS
 
 ENV_FILE, SESSIONS_FILE, SETUP_FILE = "bosun.env", "sessions.yml", "setup.sh"
 CONFIG_FILES = (ENV_FILE, SESSIONS_FILE, SETUP_FILE)
-REQUIRED_TOOLS = ("tmux", "ruby", "python3", "jq", "claude")
+REQUIRED_TOOLS = ("tmux", "ruby", "python3", "jq")
+CLAUDE_TOOL = "claude"  # Claude Code, which the orchestrator runs on, unless BOSUN_CLAUDE_BIN names another
 RESERVED_WINDOWS = frozenset({"orchestrator", "checkin"})  # lib/common.sh's window_specs adds them
 
 DEFAULT_DAYS, DEFAULT_START, DEFAULT_UNTIL = "MTWRF", "08:00", "20:00"
 DEFAULT_MODEL, DEFAULT_REPOS_DIR = "opus", "~/Development"
 DEFAULT_CHANNEL = "releases"  # what bosun update follows: the dated releases (lib/update_check.py)
 UPDATE_CHANNEL = "BOSUN_UPDATE_CHANNEL"
+WAKE_KEY = "BOSUN_WAKE"  # whether the Mac's repeating wake is bosun's to set: the wake answer
 DEFAULT_WAKE_DELAY_MINUTES = 1
 MINUTES_PER_DAY = 24 * 60
 HALF_HOUR = 30
@@ -243,6 +245,12 @@ def checked_answer(key: str, value: object) -> object:
     if key in TEXT_ANSWERS and not isinstance(value, str):
         raise AnswersError(f"{key} must be text")
     return value
+
+
+def required_tools(claude_bin: str = "") -> tuple[str, ...]:
+    """What bosun needs on the PATH: Claude Code as <claude_bin> names it (BOSUN_CLAUDE_BIN), as preflight and
+    `bosun doctor` check it."""
+    return (*REQUIRED_TOOLS, claude_bin or CLAUDE_TOOL)
 
 
 def schedule_problems(answers: Answers) -> list[str]:
@@ -532,11 +540,19 @@ def recommend(facts: Facts) -> Answers:
         repos_dir=recommended_repos_dir(facts, uses),
         # With more than one profile, which one the mornings should log in to is your call.
         aws_sso_profiles=facts.aws_sso_profiles if len(facts.aws_sso_profiles) == 1 else (),
-        # pmset keeps only one repeating event: never replace someone else's by default.
-        wake=not facts.repeating_wake or bool(facts.env),
+        wake=recommended_wake(facts),
         menu_app=not facts.app_unavailable and on("BOSUN_MENU_APP", True),
         start_at_login=on("BOSUN_START_AT_LOGIN", True),
     )
+
+
+def recommended_wake(facts: Facts) -> bool:
+    """Whether the Mac's repeating wake should be bosun's: on a re-run what bosun.env says (BOSUN_WAKE, whose
+    default is yes); on a first run yes, unless pmset has a repeating event already, which it keeps only one
+    of: never replace someone else's by default."""
+    if facts.env:
+        return facts.env.get(WAKE_KEY, "1") == "1"
+    return not facts.repeating_wake
 
 
 def offered(facts: Facts, answers: Answers) -> Answers:
@@ -610,11 +626,12 @@ def env_groups(answers: Answers) -> list[tuple[str, list[tuple[str, str]]]]:
     flag = {True: "1", False: "0"}
     return [
         (
-            "Schedule",
+            "Schedule, and whether the Mac's repeating wake (pmset) is bosun's to set",
             [
                 ("BOSUN_DAYS", answers.days),
                 ("BOSUN_START_TIME", answers.start),
                 ("BOSUN_AWAKE_UNTIL", answers.until),
+                (WAKE_KEY, flag[answers.wake]),
             ],
         ),
         (

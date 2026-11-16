@@ -28,8 +28,10 @@ OWN_MODULES = {
 # Files that hold something only Claude Code has: how many places, and what they are. A new place in
 # one of them is a deliberate change here, so a choice between agents cannot slip in beside them.
 ALLOWED: dict[str, tuple[int, str]] = {
-    "init_detect.py": (1, "the claude executable that `claude auth status` asks, the orchestrator's login"),
-    "init_plan.py": (1, "REQUIRED_TOOLS: claude, which the orchestrator runs on"),
+    "init_plan.py": (
+        1,
+        "CLAUDE_TOOL: claude, which the orchestrator runs on (BOSUN_CLAUDE_BIN names another)",
+    ),
     "learn.py": (2, "claude_bin: the headless Claude Code call that does the analysis"),
     "login.py": (1, "the login checks of Claude Code, which the orchestrator and the check-in run on"),
     "slack_watch.py": (2, "claude_bin: the headless Claude Code call that reads Slack"),

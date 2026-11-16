@@ -141,6 +141,11 @@ sudo pmset repeat wakeorpoweron MTWRF 08:01:00   # install.sh prints the exact l
 bosun doctor
 ```
 
+The wake is bosun's to set while `BOSUN_WAKE=1` (the default), and `bosun doctor` fails while it is not set.
+`bosun init` writes `BOSUN_WAKE="0"` when you answer No to the wake (or keep another app's repeating wake,
+since pmset keeps only one): then `install.sh` prints no `sudo pmset` line, and doctor only says so, in a line
+that says how to turn bosun's wake on (`bosun init` again, answering yes).
+
 **Why the wake comes after the job time.** launchd runs a calendar job that fell due during sleep
 as soon as the Mac wakes. Waking a minute *after* the job time (`BOSUN_WAKE_DELAY_MINUTES`)
 means the job starts within seconds of the wake and takes its keep-awake assertion immediately.

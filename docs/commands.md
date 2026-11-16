@@ -69,7 +69,8 @@ bosun settings set BOSUN_UPDATE_CHANNEL=main --json
   it then runs it with `sudo -n`, which never asks. When sudo is cancelled or refuses, nothing is written. `sudo -l`
   needs no password as soon as one of your rules has `NOPASSWD` (sudoers' `listpw`), so it can say yes where the
   command itself still needs one: `sudo -n pmset` then fails, and the put-back below undoes the write. pmset keeps one
-  repeating event: another app's is left as it is, and said, unless `--replace-wake`. The wake is bosun's only when
+  repeating event: another app's is left as it is, and said, unless `--replace-wake`. A wake `set` sets is bosun's
+  to set from then on: `BOSUN_WAKE=1` is written with the change (`bosun doctor` then checks it). The wake is bosun's only when
   `pmset -g sched` shows exactly the one bosun sets: `wakepoweron`, at the start time plus
   `BOSUN_WAKE_DELAY_MINUTES`, on `BOSUN_DAYS`. pmset names every day, weekdays, weekends and a single day, and
   prints any other days only as "Some days": such a wake at bosun's minute counts as bosun's, since its days cannot

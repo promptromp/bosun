@@ -28,6 +28,7 @@ import init_plan
 from init_plan import Facts, RepoUse
 
 
+CLAUDE_BIN = "BOSUN_CLAUDE_BIN"  # the config key that names Claude Code's binary
 CHANNEL_VARIABLE = "BOSUN_INIT_CHANNEL"  # what get.sh sets to main for BOSUN_BRANCH; init only reads it
 HISTORY_DAYS = 30
 COMMAND_TIMEOUT_SECONDS = 15
@@ -223,15 +224,23 @@ def app_unavailable(root: Path) -> str:
     return ""
 
 
+def configured_claude(env: Mapping[str, str]) -> str:
+    """Claude Code as bosun runs it: BOSUN_CLAUDE_BIN from the environment, else from bosun.env (<env>, what
+    it assigns, a $HOME in it expanded as the shell does), as load_config reads it; else `claude`."""
+    configured = os.environ.get(CLAUDE_BIN) or env.get(CLAUDE_BIN, "")
+    return os.path.expandvars(configured) if configured else init_plan.CLAUDE_TOOL
+
+
 def detect(config_dir: Path, now: datetime | None = None) -> Facts:
     moment = now or datetime.now().astimezone()
     home = Path.home()
     since = moment - timedelta(days=HISTORY_DAYS)
     agent_uses = uses_per_agent(since)
     uses = list(chain.from_iterable(agent_uses.values()))
-    claude_bin = os.environ.get("BOSUN_CLAUDE_BIN") or "claude"
-    auth = claude_state.auth_status(claude_bin)
     files = config_files(config_dir)
+    env = init_plan.parse_env(files.get(init_plan.ENV_FILE, ""))
+    claude_bin = configured_claude(env)
+    auth = claude_state.auth_status(claude_bin)
     listed = sessions_listed(config_dir / init_plan.SESSIONS_FILE)
     return Facts(
         home=str(home),
@@ -239,7 +248,7 @@ def detect(config_dir: Path, now: datetime | None = None) -> Facts:
         history_days=HISTORY_DAYS,
         repos=repo_uses(repos_from_history((cwd for cwd, _ in uses), home), home),
         days=init_plan.working_days(at.astimezone() for _, at in uses),
-        missing_tools=tuple(tool for tool in init_plan.REQUIRED_TOOLS if not shutil.which(tool)),
+        missing_tools=tuple(tool for tool in init_plan.required_tools(claude_bin) if not shutil.which(tool)),
         has_launchd=shutil.which("launchctl") is not None,
         gh_logged_in=output_of("gh", "auth", "status") is not None,
         claude_logged_in=auth.logged_in is True,
@@ -257,7 +266,7 @@ def detect(config_dir: Path, now: datetime | None = None) -> Facts:
         app_unavailable=app_unavailable(ROOT),
         app_present=app_release.app_path(home).exists(),
         files=files,
-        env=init_plan.parse_env(files.get(init_plan.ENV_FILE, "")),
+        env=env,
         sessions=listed or (),
         sessions_unreadable=listed is None,
     )

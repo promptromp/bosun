@@ -3,16 +3,21 @@
 #
 # Idempotent. Safe to re-run after editing bosun.env.
 #   1. seed ~/.config/bosun from examples/<name> (default: generic); never overwrites
-#   2. link `bosun` into ~/.local/bin
-#   3. install and load the launchd jobs that run `bosun morning` on schedule (and, started only by a kickstart,
-#      `bosun morning --now`, which the menu bar app's Start runs through `--background`) and
-#      `bosun watchdog` every 5 minutes (and `bosun learn` daily, with
-#      BOSUN_LEARN_ENABLED=1), each only where its plist changed or it is not loaded
-#   4. print (or with --with-wake, run via sudo) the pmset repeating-wake command
+#   2. install and load bosun's launchd jobs, each only where its plist changed or it is not loaded: the morning
+#      job that runs `bosun morning` on schedule; the one that runs `bosun morning --now`, started only by a
+#      kickstart (which the menu bar app's Start makes through `--background`); `bosun watchdog` every 5 minutes;
+#      `bosun morning --at-login` at login, with BOSUN_START_AT_LOGIN=1; `bosun learn` daily, with
+#      BOSUN_LEARN_ENABLED=1; and the console, with BOSUN_CONSOLE_ALWAYS=1. One whose setting is off is removed
+#   3. print (or with --with-wake, run via sudo) the pmset repeating-wake command; with BOSUN_WAKE=0 (the wake is
+#      not bosun's to set) neither, unless --with-wake
+#   4. link `bosun` into ~/.local/bin
 #   5. run `bosun doctor`
+# Exit status: 0 done; 1 a step failed (its ERROR line says which), and the steps after it were not made; 2 bad
+# usage; 3 every step was made, and `bosun doctor` found problems (its FAIL lines).
 set -uo pipefail
 source "$(dirname "$0")/lib/common.sh"
 BOSUN_COMMAND=install
+DOCTOR_FOUND_PROBLEMS=3 # lib/init.py goes on to the app and the start on it, and lists doctor's problems last
 
 EXAMPLE=generic
 WITH_WAKE=0
@@ -32,8 +37,11 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+# The settings, read (creating nothing) for what to check: Claude Code is BOSUN_CLAUDE_BIN, as preflight and
+# doctor check it. A bosun.env that cannot be read is load_config's to refuse, below.
+read_config
 missing=()
-for tool in tmux ruby python3 jq claude; do
+for tool in tmux ruby python3 jq "$BOSUN_CLAUDE_BIN"; do
   command -v "$tool" >/dev/null || missing+=("$tool")
 done
 if [ ${#missing[@]} -gt 0 ]; then
@@ -63,22 +71,31 @@ if grep -q "bosun tmuxinator project" "$old_tmuxinator_file" 2>/dev/null; then
 fi
 
 # The morning job and the watchdog, which runs on its own, outside the tmux session, so it notices when
-# that is gone too, and the job that runs `morning --now` for `morning --now --background`; learning and the console
-# only when enabled (an earlier one is removed otherwise). Each is written
+# that is gone too, and the job that runs `morning --now` for `morning --now --background`; the login job,
+# learning and the console only when their setting is on (an earlier one is removed otherwise). Each is written
 # and reloaded only where its plist changed or it is not loaded.
 reloaded="$(reload_changed_jobs)" || die "could not load the launchd jobs; see above"
 for label in $reloaded; do
   if [ -e "$HOME/Library/LaunchAgents/$label.plist" ]; then
     log "loaded launchd job $label"
   else
-    log "removed launchd job $label (no longer wanted: its setting, BOSUN_LEARN_ENABLED or BOSUN_CONSOLE_ALWAYS, is not 1)"
+    setting="$(job_setting "$label")"
+    why="its setting is off"
+    [ -z "$setting" ] || why="$setting is not 1"
+    log "removed launchd job $label (no longer wanted: $why)"
   fi
 done
 [ -n "$reloaded" ] || log "the launchd jobs are loaded and up to date"
 log "the morning run at $BOSUN_START_TIME on $BOSUN_DAYS; bosun watchdog every $((WATCHDOG_INTERVAL_SECONDS / 60)) minutes"
 
-# Wake just after the job time (set_wake, lib/common.sh).
-if [ "$WITH_WAKE" = "1" ]; then set_wake; else set_wake print; fi
+# Wake just after the job time (set_wake, lib/common.sh), when the wake is bosun's to set.
+if [ "$WITH_WAKE" = "1" ]; then
+  set_wake
+elif [ "$BOSUN_WAKE" = "1" ]; then
+  set_wake print
+else
+  log "the Mac's repeating wake is not bosun's to set (BOSUN_WAKE=0): pmset is left as it is"
+fi
 
 # Last: get.sh takes this link for an install that is set up, and runs `bosun update` on it; made any
 # earlier, an install cut short after it (at the jobs, or at sudo for the wake) would never be finished.
@@ -87,4 +104,4 @@ ln -sfn "$BOSUN_CMD" "$HOME/.local/bin/bosun"
 log "linked ~/.local/bin/bosun"
 
 echo
-"$BOSUN" doctor
+"$BOSUN" doctor || exit "$DOCTOR_FOUND_PROBLEMS"

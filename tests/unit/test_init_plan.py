@@ -241,6 +241,18 @@ class RecommendTest(unittest.TestCase):
         answers = init_plan.recommend(facts(repeating_wake="wake at 8:01AM", env={"BOSUN_DAYS": "MTWRF"}))
         self.assertTrue(answers.wake)
 
+    def test_a_rerun_keeps_the_wake_answer_bosun_env_records(self) -> None:
+        """A wake said no to (or another app's left) is BOSUN_WAKE=0, which a re-run recommends again; a
+        bosun.env from before the key had the wake as bosun's, its default."""
+        for env, wake in (
+            ({"BOSUN_WAKE": "0"}, False),
+            ({"BOSUN_WAKE": "1"}, True),
+            ({"BOSUN_DAYS": "MWF"}, True),
+        ):
+            with self.subTest(env=env):
+                self.assertIs(init_plan.recommend(facts(env=env)).wake, wake)
+                self.assertIs(init_plan.recommend(facts(env=env, repeating_wake="wake at 6:00AM")).wake, wake)
+
     def test_a_rerun_keeps_the_listed_windows_and_their_options(self) -> None:
         listed = ({"name": "api", "dir": f"{HOME}/x/api", "model": "haiku"},)
         answers = init_plan.recommend(
@@ -347,6 +359,15 @@ class EnvFileTest(unittest.TestCase):
             init_plan.parse_env(text)["BOSUN_ORCHESTRATOR_CONNECTORS"], answers.orchestrator_connectors
         )
         self.assertIn('BOSUN_ORCHESTRATOR_CONNECTORS=""\n', init_plan.render_env(Answers()))
+
+    def test_the_wake_answer_is_written_as_whether_the_wake_is_bosun_s_to_set(self) -> None:
+        for wake, value in ((True, "1"), (False, "0")):
+            with self.subTest(wake=wake):
+                text = init_plan.render_env(Answers(wake=wake))
+                self.assertEqual(init_plan.parse_env(text)[init_plan.WAKE_KEY], value)
+                self.assertEqual(shell_value_of(text, "BOSUN_WAKE"), value)
+        merged = init_plan.merge_env('BOSUN_WAKE="1"\n# mine\n', Answers(wake=False))
+        self.assertIn('BOSUN_WAKE="0"\n# mine\n', merged)
 
     def test_every_setting_it_writes_is_a_known_one(self) -> None:
         example = (ROOT / "examples" / "generic" / "bosun.env").read_text()

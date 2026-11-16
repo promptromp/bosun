@@ -157,6 +157,23 @@ class TestChange(unittest.TestCase):
         with self.assertRaises(settings.SettingsError):
             settings.change(COMMENTED, [], DEFAULTS)
 
+    def test_a_change_that_sets_the_wake_records_it_as_bosun_s(self) -> None:
+        """A wake declined (BOSUN_WAKE=0) that `set` then sets (it was bosun's after all, or --replace-wake)
+        is bosun's to set from then on, written with the change; without the wake, or with nothing changed,
+        BOSUN_WAKE is left as it is."""
+        declined = COMMENTED + 'BOSUN_WAKE="0"\n'
+        done = settings.change(declined, ["BOSUN_START_TIME=09:00"], DEFAULTS, wake=True)
+        self.assertEqual(done.changed[settings.WAKE_OURS], ("0", "1"))
+        self.assertEqual(init_plan.parse_env(done.text)["BOSUN_WAKE"], "1")
+        self.assertNotIn(
+            settings.WAKE_OURS, settings.change(declined, ["BOSUN_START_TIME=09:00"], DEFAULTS).changed
+        )
+        self.assertEqual(
+            settings.change(declined, ["BOSUN_START_TIME=08:00"], DEFAULTS, wake=True).changed, {}
+        )
+        already = settings.change(COMMENTED, ["BOSUN_START_TIME=09:00"], DEFAULTS, wake=True)
+        self.assertEqual(set(already.changed), {"BOSUN_START_TIME"})  # the default is bosun's already
+
     def test_same_value_changes_nothing(self) -> None:
         for assignment in ("BOSUN_START_TIME=08:00", "BOSUN_UPDATE_CHANNEL=releases"):
             with self.subTest(assignment):
@@ -312,6 +329,12 @@ class TestCommandLine(unittest.TestCase):
         backup = self.dir / "bosun.env.pre-init-20261114-090000"
         self.assertEqual(backup.read_text(), COMMENTED)
         self.assertEqual((written["backup"], written["created"]), (str(backup), False))
+
+    def test_write_with_the_wake_records_it(self) -> None:
+        self.env.write_text(COMMENTED + 'BOSUN_WAKE="0"\n')
+        out = run("write", *self.common, "--stamp", "s0", "--wake", "BOSUN_START_TIME=09:00")[1]
+        self.assertEqual(json.loads(out)["changed"]["BOSUN_WAKE"], ["0", "1"])
+        self.assertEqual(init_plan.parse_env(self.env.read_text())["BOSUN_WAKE"], "1")
 
     def put_back(self, written: str) -> tuple[int, str]:
         err = io.StringIO()
