@@ -365,6 +365,9 @@ watchdog_skipped() { grep -q "bosun is stopped (bosun quit at .*): skipping this
 a_next_release() {
   local tree="$OUT/next" git=(git -c user.name=sandbox -c user.email=sandbox@example.com) patch
   patch="${2:-$OUT/next/tests/sandbox/update_patch.sh}"
+  # git 2.54 starts `git maintenance` (and a bare repository a `gc` on receive) in the background after a commit or a push, and a
+  # local clone that hardlinks objects can then fail with "hardlink different from source": this machine has none of it.
+  git config --global maintenance.auto false && git config --global gc.auto 0 && git config --global receive.autogc false
   rm -rf "$tree"
   git clone -q --branch main "$HOME/origin.git" "$tree" &&
     "$patch" "$tree" &&

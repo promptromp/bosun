@@ -24,6 +24,11 @@ with a task cannot forward a mail or share a file it never had:
 | The orchestrator (and `bosun chores --dry-run`) | none by default: name the work ones it needs, such as Slack and a tracker | `BOSUN_ORCHESTRATOR_CONNECTORS` |
 | Every window | Chrome, as before, through `--chrome` in `BOSUN_CLAUDE_FLAGS` and `BOSUN_ORCHESTRATOR_FLAGS`; on the orchestrator, the gate above asks before it changes a page | the flags |
 
+A repo window may also read and write beside its repository: bosun gives Claude Code the repository's parent
+directory as an additional working directory (`permissions.additionalDirectories` in the launch settings; not
+when that is `/` or your home folder), so a worktree an agent makes next to the repo does not stop the window
+with a question about a read outside its working directories.
+
 bosun passes the list as Claude Code's `allowedMcpServers` in the window's launch settings, in place of
 any a site settings file names. A name bosun cannot find is left out, so a window starts with less than
 its list, never with more, and the orchestrator's launch alerts you. `all` lifts the limit for that list.

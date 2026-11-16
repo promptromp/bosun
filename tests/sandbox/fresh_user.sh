@@ -65,6 +65,9 @@ windows() { tmux -L bosun list-windows -t "=bosun" -F '#{window_name}' 2>/dev/nu
 # app: the wizard's answer is No, and `init --recommended`, which says yes, ends in a refused install.
 sandbox_publisher() {
   local file="$ROOT/app/publisher.json"
+  # git 2.54 starts `git maintenance` (and a bare repository a `gc` on receive) in the background after a commit or a push, and a
+  # local clone that hardlinks objects can then fail with "hardlink different from source": this machine has none of it.
+  git config --global maintenance.auto false && git config --global gc.auto 0 && git config --global receive.autogc false
   echo '{"bundle_id": "com.example.bosun", "team_id": "ABCDE12345", "releases": "acme/bosun"}' >"$file"
   git -C "$ROOT" add app/publisher.json
   git -C "$ROOT" -c user.name=sandbox -c user.email=sandbox@example.com commit -q -m "the sandbox's publisher"

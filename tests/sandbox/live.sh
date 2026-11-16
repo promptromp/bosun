@@ -103,6 +103,9 @@ the_repo() {
   git config --global user.name "A Sandbox"
   git config --global user.email sandbox@example.com
   git config --global init.defaultBranch main
+  # git 2.54 starts `git maintenance` (and a bare repository a `gc` on receive) in the background after a commit or a push, and a
+  # local clone that hardlinks objects can then fail with "hardlink different from source": this machine has none of it.
+  git config --global maintenance.auto false && git config --global gc.auto 0 && git config --global receive.autogc false
   # Looks like GitHub to bosun; every fetch and push lands in a local bare repo instead.
   git config --global url."$HOME/remotes/".insteadOf "https://github.com/acme/"
   mkdir -p "$HOME/remotes" "$HOME/Development" "$HOME/.local/bin"
