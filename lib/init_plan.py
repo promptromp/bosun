@@ -681,6 +681,11 @@ def env_groups(answers: Answers) -> list[tuple[str, list[tuple[str, str]]]]:
     ]
 
 
+def answer_keys() -> frozenset[str]:
+    """The settings the answers write into bosun.env (env_groups' keys)."""
+    return frozenset(key for _, settings in env_groups(Answers()) for key, _ in settings)
+
+
 ENV_HEADER = """\
 # bosun configuration: only what differs from the defaults (every setting and what it means:
 # examples/generic/bosun.env). Written by `bosun init`. Edit it freely: a re-run updates these

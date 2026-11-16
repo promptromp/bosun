@@ -69,7 +69,10 @@ without `bosun.git`):
   starts never inherit the config key, which would beat `bosun.env`), which writes `BOSUN_UPDATE_CHANNEL` into
   `bosun.env`: the install follows the branch, with no question asked about it. The line `get.sh` prints for
   after what bosun needs is there keeps `BOSUN_BRANCH` (as it keeps `BOSUN_HARNESS`), so the install that
-  stopped there goes on following the branch.
+  stopped there goes on following the branch. When `init` starts the windows (the wizard's last question), it starts
+  them without what `get.sh` handed it and without the settings it wrote into `bosun.env` from the answers
+  (`curl ... | BOSUN_HARNESS=codex sh`'s among them), which the tmux server would otherwise keep, beating
+  `bosun.env`, until it ends.
 - **An install `init` has set up** (its `install.sh` linked `~/.local/bin/bosun` to it, as its last step,
   after the launchd jobs and the wake, so an install cut short is not taken for one set up):
   - a link to a version: it fetches nothing, and runs the install's own `bosun update`, with `--yes` when

@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -365,6 +366,7 @@ class CommandTest(WorldTest):
             name = Path(str(command[0])).name
             if name == "bosun":
                 self.calls.append([name, *command[1:]])
+                self.environments.append(kwargs.get("env"))
                 status = self.statuses.get(tuple(str(arg) for arg in command[1:3]), 0)
                 return subprocess.CompletedProcess(command, status)
             if name == "bash" and command[2:3] and "reload_changed_jobs" in str(command[2]):
@@ -382,6 +384,7 @@ class CommandTest(WorldTest):
 
         self.install_status = 0
         self.install_lines: list[str] = []
+        self.environments: list[Mapping[str, str] | None] = []  # what each bosun command was given
         self.reload_status = 0
         self.reloads: list[str] = []
         self.statuses: dict[tuple[str, ...], int] = {}  # what a command answers, by its first two words
@@ -712,6 +715,28 @@ class CommandTest(WorldTest):
         self.assertEqual(status, 0)
         self.assertIn("name: api", (self.config / "sessions.yml").read_text())
         self.assertEqual(self.calls[-1], ["bosun", "start"])
+
+    def test_the_windows_start_without_get_sh_s_variables_or_what_bosun_env_now_holds(self) -> None:
+        """`curl ... | BOSUN_HARNESS=codex sh`: init writes BOSUN_HARNESS into bosun.env, and the tmux server
+        `bosun start` starts must not carry it (nor get.sh's own variables), which would beat bosun.env in
+        every window until the server ends; a setting init does not write stays, as a real override."""
+        handed = {
+            "BOSUN_HARNESS": "codex",
+            "BOSUN_RERUN": "curl ... | sh",
+            "BOSUN_USER_PATH": "/usr/bin",
+            "BOSUN_INIT_CHANNEL": "main",
+            "BOSUN_INIT_UNATTENDED": "1",
+            "BOSUN_SKIP_PREFLIGHT": "1",
+        }
+        with mock.patch.dict(os.environ, handed):
+            self.wizard([*[init_wizard.ENTER] * 7, "y", "y"])
+        self.assertEqual(self.calls[-1], ["bosun", "start"])
+        started = self.environments[-1]
+        assert started is not None
+        self.assertEqual({key for key in handed if key in started}, {"BOSUN_SKIP_PREFLIGHT"})
+        self.assertEqual(started["BOSUN_CONFIG_DIR"], os.environ["BOSUN_CONFIG_DIR"])
+        self.assertEqual(started["PATH"], os.environ["PATH"])
+        self.assertIn("BOSUN_HARNESS", init_plan.answer_keys())
 
     def test_the_wizard_offers_to_start_when_only_doctor_found_problems_and_says_them_last(self) -> None:
         self.install_status, self.install_lines = init.EXIT_DOCTOR, list(self.DOCTOR_SAID)

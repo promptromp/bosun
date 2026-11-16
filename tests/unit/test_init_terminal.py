@@ -74,6 +74,17 @@ class PtyTest(unittest.TestCase):
         self.ui.key()
         self.assertEqual(termios.tcgetattr(self.slave)[3] & line_mode, line_mode)
 
+    def test_the_terminal_is_put_back_after_ctrl_c_too(self) -> None:
+        """Ctrl-C at a screen: SIGINT raises KeyboardInterrupt out of the read, and the shell after init must
+        not be left without echo."""
+        line_mode = termios.ECHO | termios.ICANON
+        with (
+            mock.patch.object(self.ui, "read_key_bytes", side_effect=KeyboardInterrupt),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            self.ui.key()
+        self.assertEqual(termios.tcgetattr(self.slave)[3] & line_mode, line_mode)
+
     def test_ctrl_c_is_an_interrupt(self) -> None:
         with (
             mock.patch.object(self.ui, "read_byte", return_value=b"\x03"),

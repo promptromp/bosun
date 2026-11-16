@@ -19,7 +19,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -41,6 +41,8 @@ FAIL_LINE = "  FAIL  "  # how `bosun doctor` begins a check that failed
 UNDER_A_LINE = "    "  # how it indents what it lists under one (the missing tools, a store's findings)
 ERROR_MARK = "ERROR: "  # how lib/common.sh's die says what stopped a script
 UNATTENDED_VARIABLE = "BOSUN_INIT_UNATTENDED"  # what get.sh --unattended sets: --unattended
+# What get.sh hands init for this run only (init_detect's CHANNEL_VARIABLE among them): never for the windows
+HANDED_OVER = frozenset({"BOSUN_USER_PATH", "BOSUN_RERUN", UNATTENDED_VARIABLE, init_detect.CHANNEL_VARIABLE})
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -344,8 +346,18 @@ def wants_wizard(args: argparse.Namespace) -> bool:
     return not asked_for_something and sys.stdin.isatty() and sys.stdout.isatty()
 
 
+def windows_environment(environ: Mapping[str, str]) -> dict[str, str]:
+    """The environment the windows start with: init's, without what get.sh handed it for this run and without
+    the settings bosun.env now holds from the answers (`curl ... | BOSUN_HARNESS=codex sh` among them). `bosun
+    start` starts the tmux server with it, whose every window and command would keep them, beating bosun.env
+    (an exported BOSUN_* setting does) until the server ends. A setting init does not write (BOSUN_CONFIG_DIR,
+    say) passes, as a real override."""
+    answered = init_plan.answer_keys()
+    return {key: value for key, value in environ.items() if key not in HANDED_OVER and key not in answered}
+
+
 def start_windows() -> None:
-    subprocess.run([str(ROOT / "bin" / "bosun"), "start"], check=False)
+    subprocess.run([str(ROOT / "bin" / "bosun"), "start"], check=False, env=windows_environment(os.environ))
     print("\nThe windows are up. `bosun attach` opens them, and `bosun console` shows what they are doing.")
 
 
