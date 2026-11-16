@@ -80,7 +80,7 @@ files, as a new replica, so that no fact id is minted twice. The state folder's 
 stay: a journal that starts again (moved aside, emptied or removed) always gets a new id, made by
 that write in place of the old one. `replica.json` is this Mac's id in the ledger's journal too, so
 this gives the Mac a new id in both journals, which both carry on under; the ledger's old replica
-file stays in its journal ([Setup](setup.md#configuration)). A write cut short as it starts the new
+file stays in its journal ([Configuration](configuration.md#where-bosun-keeps-things)). A write cut short as it starts the new
 journal is finished by the next write, as any other.
 
 ```sh

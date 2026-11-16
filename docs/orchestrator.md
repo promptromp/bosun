@@ -2,7 +2,7 @@
 
 The `orchestrator` window runs an interactive Claude Code session with Remote Control, so you can
 answer it from your phone. It hands tasks to repo windows whichever agent runs in them, Claude Code or
-[Codex](setup.md#running-repo-sessions-on-codex). Unlike the repo windows it:
+[Codex](configuration.md#running-repo-sessions-on-codex). Unlike the repo windows it:
 
 - **starts a fresh conversation every day** (`orchestrator-YYYY-MM-DD`). `refresh` restarts it once
   it is idle the next morning. Continuity lives in the ledger, not the chat history.
@@ -17,7 +17,7 @@ answer it from your phone. It hands tasks to repo windows whichever agent runs i
   with the [ontology's rules](knowledge.md#in-the-agents-hands) (`orchestrator/knowledge.md`): look before
   asking, record what you state as standing. `bosun chores --dry-run` gets them too.
 - reaches only the **connectors `BOSUN_ORCHESTRATOR_CONNECTORS` names** (empty: none), such as
-  `claude.ai Slack` and a tracker: see [Connectors](setup.md#connectors-what-each-window-may-reach). A
+  `claude.ai Slack` and a tracker: see [Connectors](configuration.md#connectors-what-each-window-may-reach). A
   name it cannot find at launch is left out, and `bosun alert` tells you which.
 - must run in a folder Claude Code **already trusts** (`BOSUN_ORCHESTRATOR_DIR`, default your
   repos dir). A trust prompt would block an unattended start; `bosun doctor` checks this.

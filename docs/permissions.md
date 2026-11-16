@@ -43,8 +43,8 @@ Claude Code adds the `allowedMcpServers` of your `~/.claude/settings.json` and o
 `.claude/settings.json` and `.claude/settings.local.json` to the window's, so a window with a list does
 not start while one of those allows more than its list names. On Codex, bosun switches off the servers the
 list does not name, every plugin when it leaves out a plugin's server, and ChatGPT's connectors
-([Codex](setup.md#connectors-what-each-window-may-reach)). How to write a list:
-[Connectors](setup.md#connectors-what-each-window-may-reach). Within the connectors the orchestrator may
+([Codex](configuration.md#connectors-what-each-window-may-reach)). How to write a list:
+[Connectors](configuration.md#connectors-what-each-window-may-reach). Within the connectors the orchestrator may
 reach, the tiers above still decide what it may do.
 
 ## Approvals: approve once, in chat

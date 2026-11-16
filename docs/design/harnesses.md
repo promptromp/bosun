@@ -165,5 +165,5 @@ with the facts and their reasons in [the design note](antigravity.md#part-2-agy-
    starts with its own auto-update off declares `Profile.update_args`, the arguments of its command that update
    it, which `bosun morning` runs once, before the windows start (`update_agents`); a failure is a problem in
    the notification and stops nothing.
-6. The docs: this note, [Setup](../setup.md#running-repo-sessions-on-codex), the README's Status section,
+6. The docs: this note, [Configuration](../configuration.md#running-repo-sessions-on-codex), the README's Status section,
    [Known limits](../limits.md) and `ROADMAP.md`.

@@ -34,7 +34,7 @@ from update_state import UpdateState
 
 COLUMN = 12  # the narrowest column of names (stores, files, windows), as the design's example has it
 GAP = 2  # the least space between a name and its line
-GOING_BACK = "docs/setup.md#going-back"
+GOING_BACK = "docs/updating.md#going-back"
 PROMPTS = "orchestrator/"  # what a prompt's path starts with, left out of its name
 LEFT_ALONE = "kept running (nothing it was started with changed)"
 NOT_BOSUNS = "left as it is (bosun did not start it)"

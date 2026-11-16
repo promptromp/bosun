@@ -1,7 +1,7 @@
 # How a day runs
 
 [A day with bosun](../README.md#a-day-with-bosun) is the short version. This is what runs, and when.
-The times are the defaults; [Setup](setup.md#configuration) says how to change them.
+The times are the defaults; [Configuration](configuration.md) says how to change them.
 
 ## Morning
 
@@ -25,7 +25,7 @@ Every morning bosun:
 
 If bosun is not running when you log in (after a restart, say), it starts then, on one of
 your days and inside your hours, unless you stopped it earlier that day (`BOSUN_START_AT_LOGIN`, on for new installs; see
-[Starting at login](setup.md#starting-at-login)). With the [menu bar app](setup.md#the-menu-bar-app), its icon
+[Starting at login](menu-bar-app.md#starting-at-login)). With the [menu bar app](menu-bar-app.md), its icon
 says all along whether bosun is well, and Start bosun runs the morning at any hour.
 
 ```
@@ -80,7 +80,7 @@ pmset wake 08:01 ─> launchd runs the 08:00 job it missed during sleep ──> 
   session and the start at login does not start it again, but tomorrow's morning run does. In the menu bar app,
   **Stop bosun...** is the quit, with boxes for pausing the morning start and letting the Mac sleep; **Quit
   bosun.app** only closes the icon and leaves bosun running, unless you choose to stop it too (see
-  [Stop, Quit and Start](setup.md#stop-quit-and-start)).
+  [Stop, Quit and Start](menu-bar-app.md#stop-quit-and-start)).
 - **`bosun start`** brings the windows back and ends a quit, and so does **`bosun morning --now`**, the morning
   run at any hour (`--background` has launchd start it: what the menu bar app's Start runs). `bosun status
   --json` says in one object how bosun is, including whether it is stopped. See [Commands](commands.md) for each
@@ -96,7 +96,7 @@ already open in another terminal (per `~/.claude/sessions/<pid>.json`), it refus
 running two copies on one transcript.
 
 Every repo window on Claude Code gets `--name <name> --remote-control <name>` plus `BOSUN_CLAUDE_FLAGS`.
-Codex has no session names, so a [Codex window](setup.md#running-repo-sessions-on-codex) resumes from bosun's own
+Codex has no session names, so a [Codex window](configuration.md#running-repo-sessions-on-codex) resumes from bosun's own
 table, `codex-sessions.json`.
 
 ## Steady state: the session already exists

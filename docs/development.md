@@ -399,7 +399,7 @@ the version before's `ledger validate --journal`, that each hook command of that
 runs on the next, that the Slack watcher's next run catches up, and that a temporary link a switch cut
 short is swept. It measures the freeze (`freeze_ms` in the update's record, under 10 s) and what restoring
 the backup costs on that data (a recovering approval hook has 8 s). Then it goes back by hand, exactly as
-[Going back](setup.md#going-back) says, forward again with `bosun update`, and a person forgotten after
+[Going back](updating.md#going-back) says, forward again with `bosun update`, and a person forgotten after
 that must leave nothing in any backup or rehearsal copy (`grep -r`).
 
 Then writers at once (twenty in the ledger, ten in the knowledge base, then ten in each, under one replica

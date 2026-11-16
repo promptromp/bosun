@@ -94,6 +94,9 @@ nav:
   - Home: index.md
   - Guides:
       - Setup: setup.md
+      - The menu bar app: menu-bar-app.md
+      - Updating and uninstalling: updating.md
+      - Configuration: configuration.md
       - How a day runs: day.md
       - Commands: commands.md
       - Orchestrator: orchestrator.md

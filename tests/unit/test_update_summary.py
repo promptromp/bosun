@@ -244,7 +244,7 @@ class TextTest(unittest.TestCase):
             "\nBackup: deleted by a kg forget since; going back past it is no longer possible\n", text
         )
         self.assertNotIn("backups/", text)
-        self.assertTrue(text.endswith("Going back: docs/setup.md#going-back\n"))
+        self.assertTrue(text.endswith("Going back: docs/updating.md#going-back\n"))
 
     def test_handed_items_and_my_files_are_named(self) -> None:
         record = a_record(user_changes=("sessions.yml: rename `model:` to `agent_model:`",))
@@ -561,7 +561,7 @@ class RecordTest(unittest.TestCase):
             text,
             "bosun updated: 95545b0 -> c41b186 in 2m 41s\n"
             "Backup: ~/.local/state/bosun/backups/20261104-153207-95545b0-c41b186 (3.1 MB)\n"
-            "Going back: docs/setup.md#going-back\n",
+            "Going back: docs/updating.md#going-back\n",
         )
 
     def test_an_update_that_took_no_backup_names_none(self) -> None:

@@ -5224,7 +5224,7 @@ FAKE
   check "... and a versions folder that is someone else's" fails_with "$G_VERSIONS is there, without bosun.git" get_dry
   check "everything in it is in functions, so a download cut short does nothing" bash -c '[ "$(tail -1 "$1/get.sh")" = "main \"\$@\"" ]' _ "$ROOT"
 
-  section update "bosun update (two local commits, fake launchctl)" covers 'install.sh,templates/launchd.plist,docs/setup.md,tests/sandbox/update_patch.sh,tests/sandbox/acme_year.py,lib/update*.py,lib/versions.py,lib/migrations.py,lib/launch_record.py,libexec/bosun-update,libexec/bosun-checkin,libexec/bosun-doctor,libexec/bosun-guard,libexec/bosun-hook,libexec/bosun-kg,libexec/bosun-launch,libexec/bosun-ledger,libexec/bosun-start'
+  section update "bosun update (two local commits, fake launchctl)" covers 'install.sh,templates/launchd.plist,docs/updating.md,tests/sandbox/update_patch.sh,tests/sandbox/acme_year.py,lib/update*.py,lib/versions.py,lib/migrations.py,lib/launch_record.py,libexec/bosun-update,libexec/bosun-checkin,libexec/bosun-doctor,libexec/bosun-guard,libexec/bosun-hook,libexec/bosun-kg,libexec/bosun-launch,libexec/bosun-ledger,libexec/bosun-start'
   # An install of its own, with its own state and config. Upstream holds v1 (this working tree) and
   # v2 (tests/sandbox/update_patch.sh: the ledger's format 2, with a migration that sleeps
   # UPDATE_PATCH_SLEEP seconds while writes are paused, and a changed line of policy.md); the
@@ -5435,7 +5435,7 @@ PY
       grep -qx "Prompts changed: 1 (policy.md)" "$1" && grep -qx "Jobs reloaded: morning, watchdog, now, login" "$1" &&
       ! grep -q "^  FAIL: " "$1" && grep -qE "^  [0-9]+ already failing before the update$" "$1" &&
       grep -qE "^  [0-9]+ warnings?: run bosun doctor$" "$1" &&
-      grep -qxE "Backup: $2 \([0-9.]+ (bytes|KB|MB|GB)\)" "$1" && [ "$(tail -1 "$1")" = "Going back: docs/setup.md#going-back" ] || {
+      grep -qxE "Backup: $2 \([0-9.]+ (bytes|KB|MB|GB)\)" "$1" && [ "$(tail -1 "$1")" = "Going back: docs/updating.md#going-back" ] || {
       cat "$1"
       return 1
     }
@@ -5544,7 +5544,7 @@ migrations.run(migrations.Context(pathlib.Path(sys.argv[2]), pathlib.Path(sys.ar
   out="$(cat "$U/carried.err")"
   check "an update that stopped after its checks passed: the next bosun update carries it on" contains "$out" "carried on to the end"
   check "... says its summary, from a record laid out as an earlier bosun kept it (no plan: no Data), and in --json's object the backup's path whole" bash -c '
-    grep -qx "Going back: docs/setup.md#going-back" <<<"$1" &&
+    grep -qx "Going back: docs/updating.md#going-back" <<<"$1" &&
       jq -e --arg to "$3" --arg backup "$(jq -r .backup "$4/update.json")" ".summary.to_commit == \$to and .summary.backup == \$backup and .summary.data == {} and (\$backup | startswith(\"/\"))" <<<"$2" >/dev/null' \
     _ "$out" "$json" "$U_V2_COMMIT" "$U_STATE"
   check "... then says bosun is up to date" contains "$out" "bosun is up to date (${U_V2_COMMIT:0:7})"
@@ -5698,7 +5698,7 @@ HAND
       jq -e ".step == \"agents\" and .pending == [\"u-busy\"]" "$3/update.json" >/dev/null' _ "$rc" "$U/agents.out" "$U_STATE"
   check "... then the summary, the busy window still waited for, the shell one's restart after taking stock" bash -c '
     grep -qE "^  u-busy +nothing yet; still waited for$" "$1" && grep -qE "^  u-shell +asked to take stock, restarted; resumed after the update$" "$1" &&
-      [ "$(tail -1 "$1")" = "Going back: docs/setup.md#going-back" ] && [ ! -e "$(jq -r .backup "$2/update.json")/summary.md" ]' _ "$U/agents.out" "$U_STATE"
+      [ "$(tail -1 "$1")" = "Going back: docs/updating.md#going-back" ] && [ ! -e "$(jq -r .backup "$2/update.json")/summary.md" ]' _ "$U/agents.out" "$U_STATE"
   check "... with the link at v2" u_at "$U_V2"
   check "the windows bosun did not start were left as they are: their panes, the Claude in one, nothing pasted, no bosun launch" bash -c '
     [ "$1" = "$2" ] && kill -0 "$3" && [ ! -e "$4/pasted.u-hand" ] &&
@@ -5747,7 +5747,7 @@ HAND
     [ "$1" = 1 ] && cmp -s "$2.plist" "$3/morning.plist" && cmp -s "$2.watchdog.plist" "$3/watchdog.plist" && [ "$4" = "$5" ]' \
     _ "$rc" "$u_jobs" "$U" "$bootouts" "$(u_bootouts)"
 
-  section update-convert "the first update converts a checkout from before versions (fake launchctl)" needs update covers 'get.sh,docs/setup.md,lib/update*.py,libexec/bosun-update,libexec/bosun-ledger'
+  section update-convert "the first update converts a checkout from before versions (fake launchctl)" needs update covers 'get.sh,docs/updating.md,lib/update*.py,libexec/bosun-update,libexec/bosun-ledger'
   # An install an earlier get.sh made: a checkout of upstream at v1 in the install path, with a ledger
   # v1 wrote. get.sh adds bosun.git beside it and v2's folder, then runs v2's bosun update --from the
   # checkout, as here. No tmux session runs, so it is a quiet moment at once.
@@ -5793,7 +5793,7 @@ HAND
   check "... its jobs loaded on the link" bash -c 'grep -qF "exec \"$2/bin/bosun\" " "$1/Library/LaunchAgents/com.bosun.convert-test.watchdog.plist"' _ "$HOME" "$C_LINK"
   check "... and it ends with where the checkout is, and the summary" bash -c '
     grep -qF "The checkout is kept as $2 until the next update" "$1" && grep -q "^bosun updated: ${3:0:7} -> ${4:0:7}" "$1" &&
-      [ "$(tail -1 "$1")" = "Going back: docs/setup.md#going-back" ]' _ "$C/convert.out" "$C_LEGACY" "$U_V1_COMMIT" "$U_V2_COMMIT"
+      [ "$(tail -1 "$1")" = "Going back: docs/updating.md#going-back" ]' _ "$C/convert.out" "$C_LEGACY" "$U_V1_COMMIT" "$U_V2_COMMIT"
   check "an update after it is one between versions: from v2, up to date" contains "$("${C_ENV[@]}" "$C_V2/bin/bosun" update --from "$C_V2" --dry-run 2>&1)" "bosun is up to date (${U_V2_COMMIT:0:7})"
   always_run
 else

@@ -43,7 +43,7 @@ It checks what's missing, asks a few questions, and shows you its plan before it
 It can add bosun to your menu bar and start it when you log in.
 
 <p class="bx-fine" markdown>Want to read it first? [The script](../get.sh) is short. Already running bosun?
-[Update it](setup.md#updating) or [take it off again](setup.md#uninstall).</p>
+[Update it](updating.md) or [take it off again](updating.md#uninstall).</p>
 
 </div>
 </section>
@@ -282,12 +282,12 @@ while bosun updates.</li>
 
 </div>
 <div class="bx-demo" data-example="menubar">
-<p class="bx-demo__fallback">This example needs JavaScript. <a href="setup.md#the-menu-bar-app">The menu bar app</a> shows every state of its menu.</p>
+<p class="bx-demo__fallback">This example needs JavaScript. <a href="menu-bar-app.md">The menu bar app</a> shows every state of its menu.</p>
 </div>
 </div>
 
 <p class="bx-fine" markdown>Pick a state to see its menu, drawn from what bosun reports. [The menu bar
-app](setup.md#the-menu-bar-app) has every state and what each item does.</p>
+app](menu-bar-app.md) has every state and what each item does.</p>
 
 </section>
 

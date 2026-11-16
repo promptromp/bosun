@@ -58,7 +58,7 @@ flowchart LR
 
 The orchestrator and one agent session per repository run in tmux on your Mac. Claude Code sessions
 can be resumed from your phone with Remote Control. A watchdog checks every five minutes that all of
-it is alive, and a local console shows the ledger, the sessions, the knowledge base and what
+it is alive, and a local console shows the ledger, the sessions, the ontology and what
 bosun did for you.
 
 ## A day with bosun
@@ -86,22 +86,22 @@ You need macOS, [Homebrew](https://brew.sh) and [Claude Code](https://claude.com
 anything is missing, it says what, gives you the lines to run, and stops; run the same line again once
 they are done. Then it asks a few questions, one key each. Bosun works out your repos and hours from how
 you already use your agents and recommends a setup; nothing changes until you have seen the plan, and it
-asks for `sudo` once, for the wake schedule. Its last question offers to start bosun now; after that it starts on its own, on
-your schedule.
+asks for `sudo` once, for the wake schedule. Its last question offers to start bosun now; after that it starts
+on its own, on your schedule.
 
 To run the repo sessions on [Codex](https://developers.openai.com/codex/cli), with the orchestrator on
 Claude Code, end the line with `| BOSUN_HARNESS=codex sh`, or pick it in the questions if Codex is already
-installed and logged in. See [Running repo sessions on Codex](docs/setup.md#running-repo-sessions-on-codex).
+installed and logged in. See [Running repo sessions on Codex](docs/configuration.md#running-repo-sessions-on-codex).
 
 Prefer to look first? [`get.sh`](get.sh) is short, and `sh -s -- --dry-run` after the pipe says what it
 would do. A new install takes the newest dated release. To update later, run `bosun update` (`bosun update
 --check` says whether there is one), or the same line again: it shows its plan and asks first,
-and brings the running agents along ([Updating](docs/setup.md#updating)). [Setup](docs/setup.md) covers
-the details: other ways to install, configuration and logins.
-[`bosun uninstall`](docs/setup.md#uninstall) takes it all off again: it says what goes and what stays, and
+and brings the running agents along ([Updating](docs/updating.md)). [Setup](docs/setup.md) has the details
+and other ways to install, and [Configuration](docs/configuration.md) the settings and logins.
+[`bosun uninstall`](docs/updating.md#uninstall) takes it all off again: it says what goes and what stays, and
 asks first.
 
-On a Mac, an optional [menu bar app](docs/setup.md#the-menu-bar-app) shows at a glance whether bosun is well, from
+On a Mac, an optional [menu bar app](docs/menu-bar-app.md) shows at a glance whether bosun is well, from
 login whatever the hour, and has Start and Stop, updates, the console and a Settings window (the schedule, starting
 at login) in its menu.
 
@@ -114,13 +114,13 @@ at login) in its menu.
   [what they lack](docs/design/harnesses.md#what-windows-do-not-have-yet).
 - **Antigravity (`agy`) windows are a preview.** They are built and tested against a stand-in, in the smoke
   and Docker suites, but the live run on the real `agy` (`tests/sandbox.sh mac live agy`) has not passed yet.
-  See [Running repo sessions on Antigravity](docs/setup.md#running-repo-sessions-on-antigravity-a-preview),
+  See [Running repo sessions on Antigravity](docs/configuration.md#running-repo-sessions-on-antigravity-a-preview),
   which also says what Google has not said about driving `agy` unattended.
-- **One engineer, one Mac** today. A ledger and knowledge base shared across a team is next.
+- **One engineer, one Mac** today. A ledger and ontology shared across a team is next.
 - **The proactive parts are off in bosun's own defaults** while they mature: events, approvals,
   learning and the Slack watcher. `bosun init` recommends turning them on (the Slack watcher only
   with Slack's plugin installed); you choose in its questions, or later in `bosun.env`
-  ([Setup](docs/setup.md#configuration)).
+  ([Configuration](docs/configuration.md)).
 
 ## Documentation
 
@@ -129,7 +129,10 @@ The guides, design notes and roadmap are also a website, with search:
 
 | Guide | What it covers |
 |---|---|
-| [Setup](docs/setup.md) | Requirements, install, the menu bar app, updating and going back, uninstall, configuration, Codex and Antigravity, logins |
+| [Setup](docs/setup.md) | What you need, the install, the first start, and what to do when stuck |
+| [The menu bar app](docs/menu-bar-app.md) | The icon, its menu, stopping and starting, starting at login, its Settings window |
+| [Updating and uninstalling](docs/updating.md) | Updating, update channels, going back, and taking bosun off |
+| [Configuration](docs/configuration.md) | Config files, model and effort, connectors, Codex and Antigravity windows, logins, where bosun keeps things |
 | [How a day runs](docs/day.md) | What runs when: the morning, check-ins, the watchdog, the evening, and how windows are resumed and refreshed |
 | [Commands](docs/commands.md) | Every `bosun` command |
 | [Orchestrator](docs/orchestrator.md) | Chores, delegated tasks, the ledger, outreach, tasks, tickets, workstreams |
