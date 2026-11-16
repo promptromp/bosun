@@ -178,9 +178,11 @@ def repo_command(
     """The repo session's command (without its output format or prompt), its folder, and the turns:
     the first carries the task text."""
     _, ask = orchestrator_settings(world)
+    # The worktrees folder bosun launch grants a repo window (worktrees_folder_settings, lib/launch/claude.sh)
+    settings = {"effortLevel": EFFORT, "permissions": {"additionalDirectories": [str(world.worktrees)]}}
     command = [
         "claude", "-p", "--permission-mode", "default", "--model", MODEL,
-        "--settings", json.dumps({"effortLevel": EFFORT}),
+        "--settings", json.dumps(settings),
         "--no-session-persistence", "--max-budget-usd", str(max_cost),
         "--allowedTools", *REPO_ALLOWED,
         "--disallowedTools", *ask, *OUTWARD_TOOLS, *mcp_flags(with_mcp),

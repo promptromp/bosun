@@ -64,6 +64,8 @@ auto mode. On top of that, `lib/launch/codex.sh` adds what a task always needs:
 
 - the repo's `.git` as a writable root, since Codex keeps it read-only and nothing could be committed
 - bosun's state and log folders as writable roots, for `bosun ledger report`
+- the window's worktrees folder beside its repository (`<repo>.worktrees`, which the launch makes before Codex
+  starts) as a writable root, for the worktree a new-work task makes there
 - network access, for `git` and `gh`
 
 **What a window reaches.** A Codex window starts with the MCP servers its connectors list names, as a

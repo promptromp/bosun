@@ -490,6 +490,7 @@ as it was.
 | Folder trust | Taken back for the folders bosun marked, in Claude Code and Codex (`agy` windows pass their folder at each start and mark nothing). A folder you had accepted yourself stays trusted. It goes by bosun's record of what it changed (`agent-changes.json`), kept since `bosun uninstall` was added; trust or notes from an install before that are not on it and stay |
 | The plugin bosun installed into `agy`, if an `agy` window ever started | Uninstalled with `agy plugin uninstall`, with what that leaves behind (`plugin_data/bosun/`), by bosun's record of having installed it. Your own `agy` setup is not touched |
 | Memory notes from [`bosun learn`](learning.md#learning) | Deleted, with their line in `MEMORY.md`. Your own notes stay |
+| The worktrees folders beside your repositories (`exporter.worktrees` beside `exporter`), which a repo window's start makes for its worktrees | Removed while empty, by bosun's record of having made them. One with a worktree in it stays, and it says where: a worktree may hold work that is not committed or pushed. A folder of that name that was there before bosun stays |
 | `~/.local/bin/bosun` and bosun's working files | Deleted |
 | What `get.sh` installed: `~/.local/share/bosun-versions` (its `bosun.git` and every version), the checkout from before versions kept there, and the link `~/.local/share/bosun` | Deleted, last. Each folder is checked as a checkout is, and anything of yours in any of them keeps them all, link included: changes, a stash, commits not pushed, a worktree elsewhere, a file git ignores. Versions you made yourself, without the installer's mark on `bosun.git`, stay |
 | A checkout of your own you run bosun from | Stays. One `get.sh` made before versions side by side is deleted, last, unless it has anything of yours in it |
@@ -568,7 +569,10 @@ State and logs go to `~/.local/state/bosun/`:
   that only that listing resolves (a claude.ai connector, a plugin's server the installed plugins do not
   give), for a launch whose lookup fails (see [Connectors](#connectors-what-each-window-may-reach))
 - `agent-changes.json`: what bosun changed in the agents' own files (folder trust, memory notes, an agent's
-  one-time setup), so that `bosun uninstall` takes back only that
+  one-time setup) and the worktrees folders it made beside your repositories, so that `bosun uninstall` takes
+  back only that
+- `agent-changes.lock`: held while that record is written, so windows starting together keep each other's
+  entries
 - `agent-setup.lock`: held while an agent's one-time setup is made, so two windows starting together make it once
 - `signals/`: what Claude Code's hooks reported per window ([Signals](design/signals.md))
 - `conversations/`: a repo window's current conversation, once refresh started a fresh one
@@ -798,7 +802,8 @@ Then run `bosun trust <dir>` for any folder Codex has not seen, and `bosun docto
 **What it may do.** Windows start with `BOSUN_CODEX_FLAGS`, by default `--no-daemon --approve-for-me`: Codex's
 sandbox, and an automatic reviewer that decides when a command may go past it, with no prompts. bosun also
 gives the sandbox the repo's `.git`, its own state folder and the network, or nothing could be committed,
-reported or pushed. Keep `--no-daemon`: bosun needs each session in its own process. Each window reaches
+reported or pushed, and the folder beside the repo its worktrees go in (`<repo>.worktrees`,
+[Permissions](permissions.md#what-each-window-can-reach)). Keep `--no-daemon`: bosun needs each session in its own process. Each window reaches
 only the MCP servers its list names ([Connectors](#connectors-what-each-window-may-reach)), but servers
 these flags add (a `--profile`, a `-c mcp_servers...`) stay on: add servers in `config.toml` instead.
 

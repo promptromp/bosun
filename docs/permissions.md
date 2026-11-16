@@ -24,10 +24,15 @@ with a task cannot forward a mail or share a file it never had:
 | The orchestrator (and `bosun chores --dry-run`) | none by default: name the work ones it needs, such as Slack and a tracker | `BOSUN_ORCHESTRATOR_CONNECTORS` |
 | Every window | Chrome, as before, through `--chrome` in `BOSUN_CLAUDE_FLAGS` and `BOSUN_ORCHESTRATOR_FLAGS`; on the orchestrator, the gate above asks before it changes a page | the flags |
 
-A repo window may also read and write beside its repository: bosun gives Claude Code the repository's parent
-directory as an additional working directory (`permissions.additionalDirectories` in the launch settings; not
-when that is `/` or your home folder), so a worktree an agent makes next to the repo does not stop the window
-with a question about a read outside its working directories.
+A repo window may also read and write in one folder beside its repository, the one its worktrees go in:
+`<repository>.worktrees` (`~/Development/exporter.worktrees` for `~/Development/exporter`; none for a folder
+directly in `/`). bosun gives Claude Code that folder as an additional working directory
+(`permissions.additionalDirectories` in the launch settings) and Codex as a writable root, so a worktree the
+agent makes there, as the new-work task says to, does not stop the window with a question about a read outside
+its working directories. Only that folder: not the repository's parent, which would reach every repository
+beside it. Claude Code drops a working directory that is not there when the session starts, so `bosun launch`
+makes the folder before the agent starts; `bosun uninstall` removes one it made while it is empty, and leaves
+one with a worktree in it.
 
 bosun passes the list as Claude Code's `allowedMcpServers` in the window's launch settings, in place of
 any a site settings file names. A name bosun cannot find is left out, so a window starts with less than

@@ -35,7 +35,7 @@ requester, a one-line ask, and your instructions in `--details`), so the rules c
 |---|---|---|
 | Address review comments on my PR | push new commits to the PR branch; reply in the review threads it addressed (every thread awaiting the author in a fresh `bosun pr-threads --awaiting-author`, any round) | resolve threads, re-request review, merge, post in Slack, reuse an earlier draft or file for a "review addressed" message |
 | Investigate or answer a question | write findings to a local markdown file | post anything |
-| New work for me | work in a git worktree, push a new branch, open a draft PR | request reviewers, mark the PR ready, merge, post in Slack |
+| New work for me | work in a git worktree in `../<repository folder name>.worktrees/`, push a new branch, open a draft PR | request reviewers, mark the PR ready, merge, post in Slack |
 | Review someone else's PR | post one review with inline comments; APPROVE if nothing blocks merging, otherwise COMMENT; skip a PR that is merged, closed or already approved by someone else, unless the ask names something specific | request changes, push to the PR branch, merge, post in Slack |
 
 Asking for review stays with you: the orchestrator proposes marking the PR ready (a draft does not
