@@ -51,6 +51,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import activity
 import agent_state
+import approvals
 import event_lanes
 import event_summary
 import signals
@@ -225,6 +226,18 @@ def _pasted_since(line: str, now: datetime) -> dict[str, Any] | None:
         if isinstance(entry, dict) and not before(entry["at"], cutoff):
             return entry
     return None
+
+
+def speaker(
+    state_dir: str | os.PathLike[str] | None, window: str, drain_prompt: str, now: datetime | None = None
+) -> approvals.Speaker:
+    """How to tell my prompts in <window> from what bosun put there: the hashes of what it pasted
+    (pasted_hashes; none without a state folder or a window) and its drain prompt. What the guard, `ledger
+    approve` and kg check a quote of my words with."""
+    known = (
+        pasted_hashes(Path(state_dir), window, now or datetime.now(UTC)) if state_dir and window else set()
+    )
+    return approvals.Speaker(frozenset(known), drain_prompt)
 
 
 def pasted_hashes(state_dir: Path, window: str, now: datetime) -> set[str]:

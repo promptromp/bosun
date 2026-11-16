@@ -927,10 +927,7 @@ def opened(write: bool, message: str = "", dry_run: bool = False) -> Iterator[KB
 
 
 def speaker() -> approvals.Speaker:
-    pasted: set[str] = set()
-    if SETTINGS.state_dir and SETTINGS.caller_window:
-        pasted = events.pasted_hashes(Path(SETTINGS.state_dir), SETTINGS.caller_window, CLOCK())
-    return approvals.Speaker(frozenset(pasted), SETTINGS.drain_prompt)
+    return events.speaker(SETTINGS.state_dir, SETTINGS.caller_window, SETTINGS.drain_prompt, CLOCK())
 
 
 def quote_verified(quote: str, transcript: Path, after: datetime | None = None) -> bool:

@@ -818,17 +818,13 @@ class ApprovalSettings:
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> ApprovalSettings:
         state_dir = env.get("BOSUN_STATE_DIR", "")
-        window = env.get("BOSUN_ORCHESTRATOR", "")
-        pasted = (
-            events.pasted_hashes(Path(state_dir), window, datetime.now(UTC))
-            if state_dir and window
-            else set()
-        )
         return cls(
             enabled=env.get("BOSUN_APPROVALS_ENABLED") == "1" and bool(state_dir),
             deny_unapproved=env.get("BOSUN_APPROVALS_DENY_UNAPPROVED", "1") != "0",
             state_dir=state_dir,
-            speaker=approvals.Speaker(frozenset(pasted), env.get("BOSUN_DRAIN_PROMPT", "")),
+            speaker=events.speaker(
+                state_dir, env.get("BOSUN_ORCHESTRATOR", ""), env.get("BOSUN_DRAIN_PROMPT", "")
+            ),
             standing=approvals.Standing.from_settings(
                 env.get("BOSUN_STANDING_CLASSES", ""),
                 env.get("BOSUN_STANDING_SLACK_CHANNELS", ""),

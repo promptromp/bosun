@@ -2037,9 +2037,7 @@ def approving_session() -> SessionPrompts | None:
         raise LedgerError(
             "this session's transcript is not there to check the quote in, so nothing was recorded"
         )
-    window = STORE.orchestrator
-    pasted = events.pasted_hashes(STORE.state_dir, window, datetime.now(UTC)) if window else set()
-    speaker = approvals.Speaker(frozenset(pasted), STORE.drain_prompt)
+    speaker = events.speaker(STORE.state_dir, STORE.orchestrator, STORE.drain_prompt)
     return SessionPrompts(approvals.transcript_prompts(str(session.transcript)), speaker)
 
 
