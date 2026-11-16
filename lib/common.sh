@@ -1712,10 +1712,16 @@ shift_time() {
   printf '%02d:%02d' $((total / 60)) $((total % 60))
 }
 
-# Print "<pane_pid> <window_id>" for the window named exactly $1 in the bosun session.
+# Print "<pane_pid> <window_id>" for the window named exactly <name> in the bosun session; with --pane,
+# "<pane_pid> <window_id> <pane_id>": the pid and the id of the same pane, its active one, read together.
 # (tmux target lookups fall back to the current window for unknown names, so match by hand.)
-find_window() {
-  tmux_cmd list-windows -t "=$BOSUN_SESSION_NAME" -F '#{window_name}	#{pane_pid} #{window_id}' 2>/dev/null |
+find_window() { # [--pane] <name>
+  local format='#{pane_pid} #{window_id}'
+  if [ "$1" = --pane ]; then
+    format="$format #{pane_id}"
+    shift
+  fi
+  tmux_cmd list-windows -t "=$BOSUN_SESSION_NAME" -F "#{window_name}	$format" 2>/dev/null |
     awk -F'\t' -v name="$1" '$1 == name && !found { print $2; found = 1 } END { exit !found }'
 }
 
@@ -1762,21 +1768,22 @@ recorded_restart() { # <name> <listed: 1 or 0>
 
 INPUT_TYPED=3 # lib/pane_input.py typed: the input line holds text
 
-# The text in the agent's input line in window <id> (lib/pane_input.py); exit 0 empty, 3 text, 4 no
+# The text in the agent's input line in window or pane <id> (lib/pane_input.py); exit 0 empty, 3 text, 4 no
 # input line found (not a screen we can read: the checks are skipped).
 input_line() { tmux_cmd capture-pane -e -p -t "$1" 2>/dev/null | python3 "$BOSUN_ROOT/lib/pane_input.py" typed; }
 
-# Prints why nothing should be pasted into window <id> now, or fails if it may be: someone typed
+# Prints why nothing should be pasted into window <window_id> now, or fails if it may be: someone typed
 # there within BOSUN_SEND_TYPING_MINUTES (their text and our Enter would merge into one prompt), or
-# its input line holds unsent text. `send` waits on it; an update's restart leaves the window be.
-paste_blocker() { # <window_id>
+# the input line of its pane <pane_id> (by default the active one) holds unsent text. `send` waits on
+# it; an update's restart leaves the window be.
+paste_blocker() { # <window_id> [pane_id]
   local minutes typed
   if [ "$BOSUN_SEND_TYPING_MINUTES" -gt 0 ] && minutes="$(minutes_since_client_input "$1")" &&
     [ "$minutes" -lt "$BOSUN_SEND_TYPING_MINUTES" ]; then
     echo "someone typed in it $minutes minute(s) ago"
     return 0
   fi
-  typed="$(input_line "$1")"
+  typed="$(input_line "${2:-$1}")"
   if [ $? -eq "$INPUT_TYPED" ]; then
     echo "its input line holds unsent text ($(printf '%s' "$typed" | head -c 80 | tr '\n' ' '))"
     return 0

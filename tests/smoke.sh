@@ -2622,8 +2622,12 @@ check "--start waits for a briefly busy shell to settle" contains "$(live --star
 kill "$alpha_pid"
 wait_for 30 bash -c '! pgrep -P "$(tmux -L "$1" display -p -t =smoke:alpha "#{pane_pid}")" >/dev/null' _ "$SOCKET"
 drain_prompt="$(bash -c 'source "$1/lib/common.sh"; load_config; printf %s "$BOSUN_DRAIN_PROMPT"' _ "$ROOT")"
+tmux -L "$SOCKET" send-keys -t "=smoke:alpha" "cd /" Enter # the pane's shell moved elsewhere
+wait_for 30 bash -c '[ "$(tmux -L "$1" display -p -t =smoke:alpha "#{pane_current_path}")" = / ]' _ "$SOCKET"
 out="$(live --start alpha 2>&1)"
 check "--start without a message resumes with the drain prompt" test "$(cat "$WORK/live-claude.$(claude_in alpha).prompt")" = "$drain_prompt"
+check "... in the window's folder from the window list, not where its pane's shell was" \
+  test "$(jq -r .dir "$BOSUN_STATE_DIR/launches/smoke/alpha.json")" = "$REPO_A"
 cat >"$WORK/echo-claude" <<FAKE
 #!/bin/bash
 printf '{"pid":%d,"status":"idle"}' \$\$ >"\$HOME/.claude/sessions/\$\$.json"
@@ -2666,7 +2670,53 @@ check "send pastes into an empty input line" contains "$("$BOSUN" send --no-item
 box_window clearing "" reject
 check "send fails when the paste ran as an unknown command" fails_with "ran the paste as an unknown command" \
   env BOSUN_SEND_CONFIRM_SECONDS=2 "$BOSUN" send --no-item clearing "/clearLedger item x"
-for w in halftyped emptybox clearing; do tmux -L "$SOCKET" kill-window -t "=smoke:$w"; done
+# A fake Claude at an input box holding unsent text, so send waits; once $WORK/flip.$1 exists, with $1=waiting
+# its status turns to waiting (a permission prompt opened meanwhile), with $1=clear its box empties and it takes
+# the next line.
+cat >"$WORK/flip-claude" <<FAKE
+#!/bin/bash
+record() {
+  printf '{"pid":%d,"status":"%s"}' \$\$ "\$1" >"\$HOME/.claude/sessions/\$\$.tmp"
+  mv "\$HOME/.claude/sessions/\$\$.tmp" "\$HOME/.claude/sessions/\$\$.json"
+}
+box() { rule="\$(printf '%.0s─' {1..40})"; printf '%s\n❯ %s\n%s\n' "\$rule" "\$1" "\$rule"; }
+record idle
+box "half typed"
+until [ -e "$WORK/flip.\$1" ]; do sleep 0.2; done
+if [ "\$1" = waiting ]; then record waiting; exec sleep 600; fi
+clear
+box ""
+read -r line
+printf '%s\n' "\$line" >"$WORK/flip.received"
+exec sleep 600
+FAKE
+chmod +x "$WORK/flip-claude"
+send_waiting() { # <window> <out file>: a send that waits, in the background, once it says it waits
+  env BOSUN_SEND_WAIT_SECONDS=30 BOSUN_SEND_RETRY_SECONDS=1 "$BOSUN" send --no-item "$1" hello >"$2" 2>&1 &
+  waiting_send=$!
+  wait_for 30 grep -q "waiting to paste into smoke:$1" "$2"
+}
+tmux -L "$SOCKET" new-window -d -t "=smoke:" -n flipping "$WORK/flip-claude waiting; sleep 1"
+wait_for 30 claude_in flipping
+send_waiting flipping "$WORK/flipping.out"
+touch "$WORK/flip.waiting"
+wait "$waiting_send"
+waiting_rc=$?
+check "send refuses a window that began waiting at a prompt while send waited" bash -c '
+  [ "$1" -ne 0 ] && grep -q "is waiting (a permission prompt or question waits for you there); not pasting" "$2"' _ "$waiting_rc" "$WORK/flipping.out"
+check "... and pasted nothing there" bash -c '! tmux -L "$1" capture-pane -p -t =smoke:flipping | grep -q hello' _ "$SOCKET"
+tmux -L "$SOCKET" new-window -d -t "=smoke:" -n paned "$WORK/flip-claude clear; sleep 1"
+wait_for 30 claude_in paned
+send_waiting paned "$WORK/paned.out"
+: >"$WORK/paned.shell"
+tmux -L "$SOCKET" split-window -t "=smoke:paned" "cat >'$WORK/paned.shell'" # the new pane is the active one
+touch "$WORK/flip.clear"
+wait "$waiting_send"
+waiting_rc=$?
+check "send that waited delivers into the pane whose agent it checked" test "$waiting_rc" -eq 0
+check "... (its agent got the message)" wait_for 30 grep -qx hello "$WORK/flip.received"
+check "... never into the pane you moved to meanwhile" test ! -s "$WORK/paned.shell"
+for w in halftyped emptybox clearing flipping paned; do tmux -L "$SOCKET" kill-window -t "=smoke:$w"; done
 message="$(printf 'first line\nsecond line')"
 "$BOSUN" send echo "$message" >/dev/null 2>&1
 check "send delivers the whole multi-line message" wait_for 30 bash -c '[ "$(cat "$1")" = "$2" ]' _ "$WORK/received.txt" "$message"
