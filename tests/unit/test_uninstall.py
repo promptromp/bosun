@@ -1389,6 +1389,40 @@ class WorktreeFolders(World):
         self.assertTrue(target.is_dir())
         self.assertNotIn("exporter.worktrees", output)
 
+    def test_a_trailing_slash_entry_for_a_link_to_an_empty_folder_is_no_entry(self) -> None:
+        target = self.home / "Development" / "an-empty-folder"
+        target.mkdir()
+        link = self.home / "Development" / "linked.worktrees"
+        link.symlink_to(target)
+        record = json.loads((self.state / agent_changes.FILE).read_text())
+        record["folders"].append(f"{link}/")
+        (self.state / agent_changes.FILE).write_text(json.dumps(record))
+        status, output = self.run_it("--yes")
+        self.assertEqual(status, 0)
+        self.assertTrue(target.is_dir())
+        self.assertTrue(link.is_symlink())
+        self.assertNotIn("linked.worktrees", output)
+
+    def test_one_that_became_a_link_since_the_plan_is_left_and_so_is_what_it_leads_to(self) -> None:
+        facts = uninstall_detect.detect(os.environ, self.root)
+        target = self.home / "Development" / "an-empty-folder"
+        target.mkdir()
+        self.empty.rmdir()
+        self.empty.symlink_to(target)
+        carrying = uninstall.Carrying(facts, can_ask=False)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            carrying.run(
+                tuple(step for step in up.build_plan(facts, up.Choices()).steps if step.kind == up.WORKTREES)
+            )
+        self.assertEqual(carrying.failed, [])
+        self.assertTrue(target.is_dir())
+        self.assertTrue(self.empty.is_symlink())
+        self.assertIn(
+            "left ~/Development/exporter.worktrees: it is not the folder bosun made now", output.getvalue()
+        )
+        self.assertNotIn(str(self.empty), agent_changes.folders_made(self.state))
+
     def test_a_dry_run_lists_them_and_removes_nothing(self) -> None:
         status, output = self.run_it("--dry-run")
         self.assertEqual(status, 0)

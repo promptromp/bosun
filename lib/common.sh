@@ -1044,16 +1044,26 @@ repo_session_settings() { # <window>
   } | merge_settings
 }
 
-# The folder a repo window's worktrees go in, beside the current directory (the window's, where launch runs):
-# <parent>/<its name>.worktrees, so ~/Development/exporter.worktrees for ~/Development/exporter. Nothing when
-# that parent is / (or there is no directory). Only the path: building a launch's arguments never touches
-# the disk (launch --fingerprint and a dry run build them too). A real launch makes the folder before its
-# agent starts (make_worktrees_folder, libexec/bosun-launch), and each agent's module grants it its way.
+# The folder a repo window's worktrees go in, beside its repository's main working tree: <parent>/<its
+# name>.worktrees, so ~/Development/exporter.worktrees for a window in ~/Development/exporter, in a folder
+# under it, or in one of its linked worktrees (no nesting). The main tree is the folder that holds the
+# repository's common git folder when that is a .git; anything else (a bare repository's worktree, a
+# submodule) goes by its own top folder. Nothing outside a git repository, for a top folder that is your home
+# folder, or one whose parent is /. Read-only git and the path only: building a launch's arguments never
+# writes to the disk (launch --fingerprint and a dry run build them too). A real launch makes the folder
+# before its agent starts (make_worktrees_folder, libexec/bosun-launch), and each agent's module grants it its
+# way.
 worktrees_folder() {
-  local dir="${PWD:-/}" parent
-  parent="$(dirname "$dir")"
+  local common top parent
+  common="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null </dev/null)" || return 0
+  case "$common" in
+    */.git) top="${common%/.git}" ;;
+    *) top="$(git rev-parse --show-toplevel 2>/dev/null </dev/null)" || return 0 ;;
+  esac
+  [ -n "$top" ] && [ "$top" != "$HOME" ] && [ "$top" != "$(cd "$HOME" 2>/dev/null && pwd -P)" ] || return 0
+  parent="$(dirname "$top")"
   case "$parent" in "" | / | .) return 0 ;; esac
-  printf '%s/%s.worktrees\n' "$parent" "$(basename "$dir")"
+  printf '%s/%s.worktrees\n' "$parent" "$(basename "$top")"
 }
 
 # With BOSUN_HOOK_SIGNALS=1, async hooks that record Claude Code's own signals for <window>

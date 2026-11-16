@@ -16,6 +16,7 @@ import dataclasses
 import errno
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -250,10 +251,15 @@ class Carrying:
         agent_changes.forget_note(self.state_dir, step.target)
 
     def remove_worktrees_folder(self, step: Step) -> None:
-        """Only while it is empty (os.rmdir, never more): one a worktree went into since the plan stays, and
-        that is no error. Forgotten once it is gone."""
+        """Only while it is a folder (not a link to one: os.lstat, right before) and empty (os.rmdir, never
+        more): one a worktree went into since the plan stays, and that is no error. Forgotten once it is gone,
+        or is no folder bosun made any more."""
+        path = os.path.normpath(step.target)
         try:
-            os.rmdir(step.target)
+            if not stat.S_ISDIR(os.lstat(path).st_mode):
+                agent_changes.forget_folder(self.state_dir, step.target)
+                raise StepKept("it is not the folder bosun made now, but a link or a file")
+            os.rmdir(path)
         except FileNotFoundError:
             pass
         except OSError as error:

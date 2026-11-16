@@ -17,10 +17,10 @@
 # What differs per agent (BOSUN_HARNESS, or a window's `harness:` in sessions.yml) is in lib/launch/<harness>.sh:
 # build_agent_args, first_prompt, run_new and run_resumed.
 #
-# A repo window's agent may read and write in the folder its worktrees go in, beside its own:
-# <parent>/<name>.worktrees (Claude Code: an additional working directory; Codex: a writable root). Launch
-# makes that folder before the agent starts (never in a dry run or for --fingerprint), and puts one it made
-# on record for `bosun uninstall`, which removes it while it is empty.
+# A repo window's agent may read and write in the folder its worktrees go in, beside its repository's main
+# working tree: <parent>/<repository>.worktrees (Claude Code: an additional working directory; Codex: a
+# writable root). Launch makes that folder before the agent starts (never in a dry run or for --fingerprint),
+# and puts one it made on record for `bosun uninstall`, which removes it while it is empty.
 #
 # The orchestrator window is special: it runs a fresh conversation named <name>-YYYY-MM-DD each
 # day (the ledger carries state across days), uses BOSUN_ORCHESTRATOR_FLAGS instead of
@@ -209,8 +209,10 @@ make_worktrees_folder() {
   is_orchestrator "$name" && return 0
   folder="$(worktrees_folder)"
   [ -n "$folder" ] && [ ! -d "$folder" ] || return 0
-  why="$(python3 "$BOSUN_ROOT/lib/agent_changes.py" make-folder "$BOSUN_STATE_DIR" "$folder" 2>&1)" ||
-    log "warning: '$name': ${why:-could not make $folder}; it starts without it"
+  # Bosun's own folders, which it never makes one in.
+  why="$(env BOSUN_CONFIG_DIR="$BOSUN_CONFIG_DIR" BOSUN_LOG_DIR="$BOSUN_LOG_DIR" BOSUN_INSTALL="$BOSUN_INSTALL" \
+    python3 "$BOSUN_ROOT/lib/agent_changes.py" make-folder "$BOSUN_STATE_DIR" "$folder" 2>&1)" ||
+    log "warning: '$name': ${why:-could not make $folder, so the window starts without it}"
 }
 
 run_agent() {

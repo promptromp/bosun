@@ -43,12 +43,17 @@ this note is why.
   the worktrees folder a repo window's launch makes beside its repository (`<repo>.worktrees`, the one folder
   outside it the window's agent may write in), only when the launch made it: one that was there is yours.
   Losing the record only means that those changes stay. Writers take a lock (`agent-changes.lock`), since
-  windows starting together each add their folder at once.
+  windows starting together each add their folder at once, for ten seconds at the most: past that the change
+  is one line and not on record, and the window starts anyway. A key a writer does not know, a newer bosun's,
+  is written back as it was.
 - **A folder bosun made is removed only while it is empty.** The worktrees folder goes with `rmdir`, never
-  more: one with a worktree in it stays, and the plan says why, since a worktree may hold work that is not
-  committed or pushed anywhere. One that a worktree went into between the plan and its step stays too, with
-  a line and no error. Its record goes with the state folder, so the end names the folders left from what
-  it saw before then.
+  more, and only while `lstat` right before it shows a folder, not a link to one: one with a worktree in it
+  stays, and the plan says why, since a worktree may hold work that is not committed or pushed anywhere. One
+  that a worktree went into between the plan and its step stays too, with a line and no error. A folder entry
+  counts only as a full path named `<something>.worktrees`, written one way only (no trailing slash, which
+  would reach through a link), and neither your home folder, `/`, nor at or under bosun's state, config, log or
+  install folders; bosun never makes or records one of those. Its record goes with the state folder, so the
+  end names the folders left from what it saw before then.
 - **Your work is not bosun's to delete.** The checkout goes only if `get.sh` made it (it sets `bosun.managed` in
   the checkout's git config) and git shows nothing in it of yours: no uncommitted changes, no stash, no commit
   that is not on a remote (on any branch, or none), no other worktree, and nothing git ignores but the caches

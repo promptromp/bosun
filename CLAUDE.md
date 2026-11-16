@@ -134,7 +134,8 @@ of truth, so don't copy rules into this file.
   `lib/uninstall_detect.py` (read-only: what of bosun is here), `lib/uninstall_plan.py` (pure: the
   tables of what bosun's files are, what goes, what stays, how it reads), `lib/uninstall_macos.py` (launchd
   and `pmset`) and `lib/uninstall.py` (the CLI) take it off again; `lib/agent_changes.py` records what bosun
-  changed in the agents' own files, so that only that is undone. Design: `docs/design/uninstall.md`.
+  changed in the agents' own files and the worktrees folders it made beside repo windows (`worktrees_folder` in
+  `lib/common.sh`, made by `bosun launch`), so that only that is undone. Design: `docs/design/uninstall.md`.
 - Events (design: `docs/design/events.md`, behind `BOSUN_EVENTS_ENABLED`): `lib/activity.py`
   (pure: what I said in a window and its attribution, a window's active item, `working`, which
   prompts are mine), `lib/hook.py` + `libexec/bosun-hook` (the repo sessions'
@@ -369,8 +370,8 @@ of truth, so don't copy rules into this file.
   screens and listings) and `docs/design/antigravity.md`.
 - **A file bosun writes in its state or config folder, or anything it leaves elsewhere:** a row in `STATE_FILES`
   or `CONFIG_FILES` (`lib/uninstall_plan.py`), or a step there, or uninstall leaves it behind. The smoke suite
-  fails on a file in the state folder that the table does not list. A change in an agent's own files goes on
-  record in `lib/agent_changes.py`.
+  fails on a file in the state folder that the table does not list. A change in an agent's own files, or a folder
+  bosun makes outside its own, goes on record in `lib/agent_changes.py`.
 - **An answer `bosun init` offers:** a field of `Answers` (`lib/init_plan.py`) with its check, what
   it recommends, the key in `env_groups` if it sets one, the table in `docs/design/init.md` and a
   test in `tests/unit/test_init_plan.py`.

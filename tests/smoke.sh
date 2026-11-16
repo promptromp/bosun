@@ -791,29 +791,38 @@ printf '#!/bin/sh\ntouch "%s"\n' "$WORK/fingerprint-started-claude" >"$WORK/mark
 chmod +x "$WORK/marker-claude"
 out="$(BOSUN_LAUNCH_DRY_RUN=0 BOSUN_CLAUDE_BIN="$WORK/marker-claude" BOSUN_STATE_DIR="$WORK/fingerprint-state" "$BOSUN" launch --fingerprint alpha 2>&1)"
 check "... and starts nothing, records nothing" bash -c '[ ! -e "$1/fingerprint-started-claude" ] && [ ! -e "$1/fingerprint-state/launches" ] && jq -e .args <<<"$2"' _ "$WORK" "$out"
-check "... and makes no worktrees folder beside the window's repository, nor does a dry run" test ! -e "$REPO_A.worktrees"
-# A real launch, of an agent that says whether the window's worktrees folder was there when it started.
+# A repo window's worktrees folder, beside its git repository: made by a real launch only, of an agent that says
+# whether the folder was there when it started.
 WT_STATE="$WORK/worktrees-state"
 WT_REPO="$WORK/worktrees/exporter"
 WT_THERE="$WORK/worktrees/billing"
-mkdir -p "$WT_REPO" "$WT_THERE" "$WT_THERE.worktrees"
+for repo in "$WT_REPO" "$WT_THERE"; do git init -q "$repo"; done
+mkdir -p "$WT_THERE.worktrees"
 WT_REPO="$(cd "$WT_REPO" && pwd -P)"
 WT_THERE="$(cd "$WT_THERE" && pwd -P)"
 printf '#!/bin/sh\ntouch "%s"\n[ -d "$PWD.worktrees" ] && touch "%s"\nexit 0\n' "$WORK/worktrees-agent-ran" "$WORK/worktrees-agent-saw-it" >"$WORK/worktrees-claude"
 chmod +x "$WORK/worktrees-claude"
-wt_launch() { (cd "$1" && BOSUN_LAUNCH_DRY_RUN=0 BOSUN_CLAUDE_BIN="$WORK/worktrees-claude" BOSUN_STATE_DIR="$WT_STATE" BOSUN_LOG_DIR="$WT_STATE/logs" "$BOSUN" launch alpha 2>&1); }
-wt_launch "$WT_REPO" >/dev/null
+wt_launch() { # <folder> <launch's arguments...>
+  local dir="$1"
+  shift
+  (cd "$dir" && BOSUN_LAUNCH_DRY_RUN=0 BOSUN_CLAUDE_BIN="$WORK/worktrees-claude" BOSUN_STATE_DIR="$WT_STATE" BOSUN_LOG_DIR="$WT_STATE/logs" "$BOSUN" launch "$@" 2>&1)
+}
+printf 'sessions:\n  - name: wt\n    dir: %s\n' "$WT_REPO" >"$WORK/worktrees-sessions.yml"
+(cd "$WT_REPO" && BOSUN_STATE_DIR="$WT_STATE" BOSUN_LOG_DIR="$WT_STATE/logs" "$BOSUN" launch alpha >/dev/null 2>&1)
+BOSUN_SESSIONS_FILE="$WORK/worktrees-sessions.yml" wt_launch "$WORK" --fingerprint wt >/dev/null
+check "neither a dry run nor launch --fingerprint makes a repo window's worktrees folder" bash -c '[ ! -e "$1.worktrees" ] && [ ! -e "$2" ]' _ "$WT_REPO" "$WORK/worktrees-agent-ran"
+wt_launch "$WT_REPO" alpha >/dev/null
 check "a real launch of a repo window makes its worktrees folder before the agent starts" bash -c '[ -d "$1.worktrees" ] && [ -e "$2" ]' _ "$WT_REPO" "$WORK/worktrees-agent-saw-it"
 check "... and puts it on record for uninstall" jq -e --arg d "$WT_REPO.worktrees" '.folders == [$d]' "$WT_STATE/agent-changes.json"
-wt_launch "$WT_REPO" >/dev/null
-wt_launch "$WT_THERE" >/dev/null
+wt_launch "$WT_REPO" alpha >/dev/null
+wt_launch "$WT_THERE" alpha >/dev/null
 check "... once, and never one that was there before" jq -e --arg d "$WT_REPO.worktrees" '.folders == [$d]' "$WT_STATE/agent-changes.json"
 rm -f "$WORK/worktrees-agent-ran"
 rmdir "$WT_THERE.worktrees"
 printf 'mine\n' >"$WT_THERE.worktrees"
-out="$(wt_launch "$WT_THERE")"
+out="$(wt_launch "$WT_THERE" alpha)"
 check "one that cannot be made is a line, and the window starts anyway" bash -c '
-  grep -q "warning: .alpha.: $2.worktrees is there, but is not a folder; it starts without it" <<<"$1" && [ -e "$3" ]' _ "$out" "$WT_THERE" "$WORK/worktrees-agent-ran"
+  grep -q "warning: .alpha.: $2.worktrees is there, but is not a folder, so the window starts without it" <<<"$1" && [ -e "$3" ]' _ "$out" "$WT_THERE" "$WORK/worktrees-agent-ran"
 out="$(cd "$REPO_B" && "$BOSUN" launch gamma 2>&1)"
 check "a sessions.yml entry overrides model and effort" bash -c 'grep -q -- "--model sonnet" <<<"$1" && grep -q "effortLevel\\\\\":\\\\\"high" <<<"$1"' _ "$out"
 out="$(cd "$REPO_B" && "$BOSUN" launch --model haiku --effort low gamma 2>&1)"
@@ -1504,12 +1513,24 @@ grants() {
     return 1
   }
 }
-check "a repo window's settings grant it the worktrees folder beside its repository, and nothing more" \
-  grants "$(cd "$REPO_A" && "$BOSUN" launch alpha 2>&1)" "\$d == [\"$REPO_A.worktrees\"]"
+# A git repository with a folder in it and a linked worktree in its worktrees folder.
+GRANT_REPO="$WORK/grants/exporter"
+git init -q "$GRANT_REPO"
+GRANT_REPO="$(cd "$GRANT_REPO" && pwd -P)"
+mkdir "$GRANT_REPO/src"
+git -C "$GRANT_REPO" -c user.name=smoke -c user.email=smoke@example.com -c commit.gpgsign=false commit -q --allow-empty -m init
+git -C "$GRANT_REPO" worktree add -q "$GRANT_REPO.worktrees/fix-qty" -b fix-qty
+for dir in "$GRANT_REPO" "$GRANT_REPO/src" "$GRANT_REPO.worktrees/fix-qty"; do
+  check "a repo window's settings grant it its repository's worktrees folder, and nothing more (${dir#"$(dirname "$GRANT_REPO")/"})" \
+    grants "$(cd "$dir" && "$BOSUN" launch alpha 2>&1)" "\$d == [\"$GRANT_REPO.worktrees\"]"
+done
 mkdir -p "$HOME/directly-in-home"
-check "... in the home folder too: the grant is that folder, not the home folder" \
-  grants "$(cd "$HOME/directly-in-home" && "$BOSUN" launch alpha 2>&1)" "\$d == [\"$HOME/directly-in-home.worktrees\"]"
-check "... and none for a window whose folder is in / itself" grants "$(cd /usr && "$BOSUN" launch alpha 2>&1)" '$d == "no key"'
+check "... and none for a window outside a git repository" grants "$(cd "$HOME/directly-in-home" && "$BOSUN" launch alpha 2>&1)" '$d == "no key"'
+check "... or in a folder directly in /" grants "$(cd /usr && "$BOSUN" launch alpha 2>&1)" '$d == "no key"'
+git init -q "$WORK/grants/a-home"
+check "... or for a repository that is the home folder (which elsewhere gets one)" bash -c '
+  cd "$2" && [ -z "$(HOME="$PWD" bash -c "source \"\$1/lib/common.sh\" && worktrees_folder" _ "$1")" ] &&
+    [ "$(bash -c "source \"\$1/lib/common.sh\" && worktrees_folder" _ "$1")" = "$(pwd -P).worktrees" ]' _ "$ROOT" "$WORK/grants/a-home"
 check "a repo window reaches no connector by default" allows "$(cd "$REPO_A" && "${CN[@]}" "$BOSUN" launch alpha 2>&1)" '$a == []'
 check "... and every one with BOSUN_CONNECTORS=all" allows "$(cd "$REPO_A" && "${CN[@]}" BOSUN_CONNECTORS=all "$BOSUN" launch alpha 2>&1)" '$a == "no key"'
 check "... and looked up none of them" test ! -e "$WORK/mcp-claude.calls"
@@ -4689,7 +4710,7 @@ for line in sys.stdin:
   out="$(CX launch cx)"
   check "a new Codex session starts with what keeps it unattended" contains "$out" "--no-daemon --approve-for-me"
   check "... can reach git and bosun's state" contains "$out" "sandbox_workspace_write.writable_roots"
-  check "... and the worktrees folder beside its repository" contains "$out" "\\\"$CX_REPO.worktrees\\\""
+  check "... and the worktrees folder beside its repository" contains "$out" "\\\"$(cd "$CX_REPO" && pwd -P).worktrees\\\""
   check "... reports when a turn ends, by the agent's own name" contains "$out" "turn-end"
   check "... not by the name only Codex had" not_contains "$out" "codex-turn-end"
   check "... and always has a first prompt" contains "$out" 'nothing\ to\ do\ yet'

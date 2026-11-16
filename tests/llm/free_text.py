@@ -89,6 +89,11 @@ REPO_ALLOWED = [
     "Bash(git status:*)",
     "Bash(git log:*)",
     "Bash(git diff:*)",
+    # New work's local git steps, which a window bosun launched may take (its worktree goes in the worktrees
+    # folder its launch grants); the world's repo has no reachable remote, and gh and pushes stay denied.
+    "Bash(git worktree add:*)",
+    "Bash(git add:*)",
+    "Bash(git commit:*)",
     "Bash(ls:*)",
     "Read",
     "Grep",
