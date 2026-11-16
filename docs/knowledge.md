@@ -156,7 +156,8 @@ bosun kg context --for releases         # a small cited pack of confirmed facts
   section per target and one budget for all. A repo can be named as the ledger does
   (`acme/invoice-exporter`), by id, name or alias. A pack names who reviews or owns the work and
   leaves a person's own profile (timezone, hours, preferences, title) out unless the person is the
-  target; identifiers and unconfirmed facts never appear. With `BOSUN_KNOWLEDGE_ENABLED=1` in
+  target, which only naming them makes them: a topic's search leaves people out, even one whose fact
+  matches it; identifiers and unconfirmed facts never appear. With `BOSUN_KNOWLEDGE_ENABLED=1` in
   `bosun.env` (default `0`), `bosun delegate` adds the pack for the task's repos, its area and
   its workstream's area to the brief, after the task's rules, under "What bosun knows about this
   work", and adds nothing when the knowledge base holds no confirmed fact about them. A task moved

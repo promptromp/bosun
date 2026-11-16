@@ -1174,6 +1174,27 @@ class ContextTest(KnowledgeTestCase):
         self.assertIn("No knowledge recorded", self.run_kg("context", "--for", "pdf renderer review"))
         self.assertEqual(kq.pack_targets(kb, "retired environment"), ["lesson/retired-env"])
 
+    def test_a_topic_never_makes_a_person_the_target(self) -> None:
+        said = "wants invoice exports reviewed before noon"
+        self.run_kg(
+            "propose", "person/dana", "stated_preference", "--value", said,
+            "--authority", "stakeholder_said", "--source", "slack:D0000000003/1700000004.000004",
+        )  # fmt: skip
+        self.confirm_people()
+        kb = self.kb()
+        self.assertIn("person/dana", [e for _, e, _ in kq.search(kb, "invoice exports", words=False)])
+        self.assertEqual(kq.pack_targets(kb, "invoice exports"), [])  # found by search only: not a target
+        self.assertIn("No knowledge recorded", self.run_kg("context", "--for", "invoice exports"))
+        hits = [e for _, e, _ in kq.search(kb, "invoice", kq.PACK_TOPIC_ENTITIES, words=False)]
+        self.assertEqual(hits, ["repo/invoice-exporter", "person/dana"])
+        self.assertEqual(kq.pack_targets(kb, "invoice"), ["repo/invoice-exporter"])  # the person left out
+        pack = self.run_kg("context", "--for", "invoice")
+        self.assertIn("Dana Example reviews invoice exporter", pack)  # who reviews the topic stays
+        for profile in ("(person/dana)", "before noon", "Lisbon"):
+            self.assertNotIn(profile, pack)
+        for named in ("person/dana", "Dana Example"):  # naming her makes her the target: her own facts
+            self.assertIn("before noon", self.run_kg("context", "--for", named))
+
     def test_a_repo_is_found_by_its_last_path_segment(self) -> None:
         kb = self.kb()
         for target in (

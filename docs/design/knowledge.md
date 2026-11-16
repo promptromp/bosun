@@ -333,7 +333,9 @@ Where the design was silent (plan: [ontology-mvp3](../plans/ontology-mvp3.md)):
    `reviewed_by`, which keep that record in the local journal (`knowledge_changes.quotes_me`). A supersede given
    `--from-user` in any form checks it the same way; a correction with only a `--source` needs no words.
 4. **A pack leaves out people's own profile facts** (timezone, hours, preferences, title) and keeps facts that link
-   a person to the target ("Dana reviews the invoice exporter"). Identifiers and unconfirmed facts stay out.
+   a person to the target ("Dana reviews the invoice exporter"). Identifiers and unconfirmed facts stay out. A
+   person is the target only when `--for` names them: a topic's search leaves people out (2026-11-16, a review
+   finding: a person's fact that matched the topic made them the target, their profile with them).
 5. **The rules reach agents whose transcripts bosun can check** (`Profile.verifies_quotes`: Claude). Codex and
    Antigravity windows get packs in their briefs only.
 6. **Bounded output:** a pack is 1500 tokens at most, first line included; `kg lookup` 800, `kg search` 10 hits;

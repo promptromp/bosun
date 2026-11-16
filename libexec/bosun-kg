@@ -84,7 +84,8 @@
 #   context --for <entity|repo|topic> [--for ...] [--max-tokens N]
 #                                      a small pack of confirmed, cited facts (about 1.5k tokens,
 #                                      shared by the targets; a person's own profile facts are left
-#                                      out unless the person is the target; owner/repo finds repo/repo)
+#                                      out unless the person is the target, which only naming them
+#                                      makes them, never a topic; owner/repo finds repo/repo)
 #   lint [--stale-days N] [--json] [--strict]
 #                                      contradictions, expired proposals, retention, stale facts, alias
 #                                      collisions, merge suggestions, orphans (--strict: exit 1 if any)

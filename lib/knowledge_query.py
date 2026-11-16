@@ -343,7 +343,8 @@ def named_entity(kb: KB, target: str) -> str:
 def pack_targets(kb: KB, target: str, *, topics: bool = True) -> list[str]:
     """The entities a pack is for: the one <target> names (or <type>/<target> for the usual types;
     for owner/repo, repo/<repo>), else, with <topics>, the best search matches for it as a topic
-    (by phrase only: no word search).
+    (by phrase only: no word search), never a person: a person is the target only when <target>
+    names them, so a fact of theirs that matches a topic never puts their own profile in the pack.
     Without <topics> (a brief's repo or area), a target that names a person is none: a person's own
     profile is nothing to put in a brief."""
     named = named_entity(kb, target)
@@ -357,9 +358,13 @@ def pack_targets(kb: KB, target: str, *, topics: bool = True) -> list[str]:
     repo = repo_by_last_segment(kb, slug)
     if repo:
         return [repo]
-    if not topics:
-        return []
-    return [entity_id for _, entity_id, _ in search(kb, target, PACK_TOPIC_ENTITIES, words=False)]
+    return topic_targets(kb, target) if topics else []
+
+
+def topic_targets(kb: KB, topic: str) -> list[str]:
+    """The best PACK_TOPIC_ENTITIES search matches for <topic>, by phrase only, leaving out people."""
+    found = [entity_id for _, entity_id, _ in search(kb, topic, len(kb.entities), words=False)]
+    return [entity_id for entity_id in found if not ks.is_person(entity_id)][:PACK_TOPIC_ENTITIES]
 
 
 def cite(fact: Record) -> str:
