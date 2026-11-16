@@ -437,6 +437,30 @@ class LogErrorsTest(WatchdogCase):
         self.morning_run(TUESDAY)
         self.assertIn("at night", self.watch(at(TUESDAY, "08:00"))[0])
 
+    def test_lines_held_for_a_finding_being_confirmed_go_out_with_it(self) -> None:
+        # The session dies as the ERROR line is written: the run that sees both holds the log error until
+        # session-missing is confirmed, and the next run reads the same lines again and sends both at once.
+        gone = Facts(morning_job_state="not running", morning_job_exit="0")
+        self.assertEqual(self.watch(at(MONDAY, "10:00")), [])
+        self.append(self.checkin, self.error("something broke"))
+        self.assertEqual(self.watch(at(MONDAY, "10:05"), facts=gone), [])
+        sent = self.watch(at(MONDAY, "10:10"), facts=gone)
+        self.assertEqual(len(sent), 1)
+        self.assertIn("tmux session 'main' is not running", sent[0])
+        self.assertIn("ERROR: something broke", sent[0])
+        self.assertEqual(self.runs(at(MONDAY, "10:15"), 3, facts=gone), [])  # each once
+
+    def test_a_new_line_while_held_goes_out_with_the_held_ones(self) -> None:
+        gone = Facts(morning_job_state="not running", morning_job_exit="0")
+        self.watch(at(MONDAY, "10:00"))
+        self.append(self.checkin, self.error("first"))
+        self.assertEqual(self.watch(at(MONDAY, "10:05"), facts=gone), [])
+        self.append(self.checkin, self.error("second"))
+        sent = self.runs(at(MONDAY, "10:10"), 4, facts=gone)
+        self.assertEqual(len(sent), 1)
+        self.assertIn("tmux session 'main' is not running", sent[0])
+        self.assertIn("2 new ERROR line(s)", sent[0])
+
 
 class SessionTest(WatchdogCase):
     def setUp(self) -> None:
