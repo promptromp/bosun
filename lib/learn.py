@@ -36,7 +36,8 @@ A ledger write the update gate refuses (lib/update_gate.py: bosun was updated si
 or an update was cut short or is pausing writes) fails the run or the command in one line, and is
 not run again: a run is the next scheduled one's to do. A run checks the gate before it proposes
 anything, and apply before it changes anything, so a refusal normally changes nothing; a freeze
-that starts in between can still refuse a later write, and the next run picks it up.
+that starts in between can still refuse a later write: the items recorded before it stay in learn's
+state (each is saved as it is recorded), and the next run proposes the rest.
 """
 
 from __future__ import annotations
@@ -851,6 +852,8 @@ def make_run_dir(config: Config, options: RunOptions, started: datetime) -> Path
 
 
 def prune_runs(config: Config) -> None:
+    """Delete run folders (they hold excerpts) older than RUN_RETENTION_DAYS, real and dry runs'; a
+    folder named with --out is the caller's."""
     cutoff = datetime.now() - timedelta(days=RUN_RETENTION_DAYS)
     for base in (config.learn_dir / "runs", config.learn_dir / "dry-runs"):
         for run_dir in base.glob("*"):
@@ -918,8 +921,9 @@ def propose(
 ) -> dict[str, str]:
     """Record each finding's proposal, and in learn's state its item and digests; a finding whose
     id names another finding's item is dropped (with why), and the run goes on. Returns finding
-    key -> learn id. The update gate is checked first, so a refusal leaves no item behind that
-    learn's state does not know."""
+    key -> learn id. The update gate is checked first, so a refusal normally leaves no item behind;
+    each finding is saved in learn's state as soon as its item is recorded, so an item stays known
+    to learn when a later write fails the run."""
     if findings:
         ledger.check_writable()
     proposed: dict[str, str] = {}
@@ -931,7 +935,18 @@ def propose(
             continue
         state.findings[finding.key].update(status="proposed", item=learn_id, **digests)
         proposed[finding.key] = learn_id
+        keep_finding(config.learn_dir, finding.key, state.findings[finding.key])
     return proposed
+
+
+def keep_finding(learn_dir: Path, key: str, info: dict[str, Any]) -> None:
+    """<key>'s entry saved in learn's state at once: a run that fails later saves nothing else of
+    what it found (finish reloads the state), and an item learn does not know it cannot apply."""
+
+    def change(state: State) -> None:
+        state.findings[key] = dict(info)
+
+    update_state(learn_dir, change)
 
 
 def finish(config: Config, outcome: str, run: dict[str, Any], error: str = "") -> None:
@@ -947,6 +962,7 @@ def run_tracked(config: Config, options: RunOptions, windows: list[Window]) -> O
     """A real run: locked, marked as running for the watchdog, recorded however it ends."""
     with state_lock(config.learn_dir):
         move_legacy_proposals(config.learn_dir)
+        prune_runs(config)  # also when the scheduled run is not due: dry runs' folders go too
         state = State.load(config.learn_dir)
         if options.scheduled and not (config.enabled and due_today(config, state, now())):
             return Outcome({"outcome": "skipped"})
@@ -955,7 +971,6 @@ def run_tracked(config: Config, options: RunOptions, windows: list[Window]) -> O
         update_state(
             config.learn_dir, lambda s: setattr(s, "running", {"pid": os.getpid(), "started": run["started"]})
         )
-        prune_runs(config)
         try:
             result = collect_and_analyze(
                 config, options, windows, run, make_run_dir(config, options, started)
@@ -969,7 +984,9 @@ def run_tracked(config: Config, options: RunOptions, windows: list[Window]) -> O
 
 
 def run_untracked(config: Config, options: RunOptions, windows: list[Window]) -> Outcome:
-    """A dry run or a digest only: no lock, no state, no ledger, no log file."""
+    """A dry run or a digest only: no lock, no state, no ledger, no log file. Old run folders are
+    pruned as by a real run, which may not happen for weeks."""
+    prune_runs(config)
     started = now()
     run: dict[str, Any] = {"started": iso(started)}
     return collect_and_analyze(config, options, windows, run, make_run_dir(config, options, started))

@@ -39,8 +39,10 @@ mishaps do not happen twice. Design and phasing: [docs/design/learning.md](desig
    orchestrator), then `learn done <id>`; `learn reject <id>` declines one for good. Findings are remembered by key, so a
    later run counts a known problem again instead of proposing it twice.
 
-It runs by hand any time (`--dry-run` writes nothing but its report; `--collect-only` only the
-digest). With `BOSUN_LEARN_ENABLED=1`, `install.sh` loads a launchd agent that runs it daily at
+It runs by hand any time (`--dry-run` writes only its run folder: digest, prompt, raw result and
+report, but no ledger items, state or log; `--collect-only` only the digest). Run folders, dry runs'
+too, are deleted after 14 days by the next run of any kind. With `BOSUN_LEARN_ENABLED=1`,
+`install.sh` loads a launchd agent that runs it daily at
 `BOSUN_LEARN_AT` on `BOSUN_DAYS` (window: since the last run, at most `BOSUN_LEARN_HOURS`),
 and the watchdog's `learn` check alerts when that run is missing, failed, crashed or runs past
 `BOSUN_LEARN_TIMEOUT_MINUTES`. Model, effort and a per-run budget: `BOSUN_LEARN_MODEL`,

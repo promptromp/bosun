@@ -7,11 +7,12 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -122,6 +123,19 @@ class LearnCase(unittest.TestCase):
     def state(self) -> learn.State:
         return learn.State.load(self.config.learn_dir)
 
+    def old_and_new_run_folders(self) -> tuple[list[Path], list[Path]]:
+        """A run folder past the retention and one from yesterday, in runs/ and in dry-runs/."""
+        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d-120000")
+        old: list[Path] = []
+        new: list[Path] = []
+        for base in ("runs", "dry-runs"):
+            for name, kept in (("20250101-000000", old), (yesterday, new)):
+                folder = self.config.learn_dir / base / name
+                folder.mkdir(parents=True)
+                (folder / "digest.md").write_text("excerpts")
+                kept.append(folder)
+        return old, new
+
 
 class CheckOutputTest(unittest.TestCase):
     DIGEST = "line one: the gh api prompt waited 15h\nline two: you said open normal PRs"
@@ -202,6 +216,16 @@ class RunTest(LearnCase):
         self.assertFalse(any(i.startswith("learn:") for i in self.items()))
         self.assertEqual(len(list(out_dir.glob("*/digest.md"))), 2)
         self.assertEqual(len(list(out_dir.glob("*/report.md"))), 1)
+
+    def test_dry_runs_and_digests_prune_old_run_folders_too(self) -> None:
+        self.analysis_returns(STALL)
+        for option in ("--dry-run", "--collect-only"):
+            with self.subTest(option=option):
+                old, new = self.old_and_new_run_folders()
+                self.assertEqual(self.run_learn(option)[0], 0)
+                self.assertEqual([p.exists() for p in old + new], [False, False, True, True])
+                for folder in new:
+                    shutil.rmtree(folder)
 
     def test_a_failed_analysis_is_recorded_for_the_watchdog(self) -> None:
         self.result_file.write_text("not json")
@@ -285,6 +309,28 @@ class UpdateGateTest(LearnCase):
 
     def apply(self, learn_id: str) -> tuple[int, str]:
         return self.main("apply", learn_id, "--sessions", str(self.world.sessions_file))
+
+    def test_an_item_recorded_before_a_later_write_fails_stays_known_to_learn(self) -> None:
+        self.analysis_returns(STALL, DRAFTS)
+        record = learn.record_proposal
+
+        def refuse_the_second(finding: learn.Finding, *args: Any) -> tuple[str, dict[str, str]]:
+            if finding.key == DRAFTS["key"]:
+                raise update_gate.WriteRefused("an update started")
+            return record(finding, *args)
+
+        with mock.patch.object(learn, "record_proposal", side_effect=refuse_the_second):
+            code, out = self.run_learn()
+        self.assertEqual(code, 1, out)
+        self.assertEqual(self.state().runs[-1]["outcome"], "failed")
+        [learn_id] = [i for i in self.items() if i.startswith("learn:")]
+        self.assertEqual(learn.finding_of(self.state(), learn_id), STALL["key"])
+        # the next run proposes only the rest, and the first item applies
+        code, out = self.run_learn()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(len([i for i in self.items() if i.startswith("learn:")]), 2)
+        self.assertEqual(self.state().findings[DRAFTS["key"]]["status"], "proposed")
+        self.assertEqual(self.apply(learn_id)[0], 0)
 
     def test_a_refused_apply_changes_nothing_and_a_later_one_applies_once(self) -> None:
         self.analysis_returns(STALL, DRAFTS)
@@ -630,6 +676,12 @@ class ScheduleStatusTest(LearnCase):
         self.assertEqual(code, 0)
         self.assertIn("nothing to do", out)
         self.assertEqual(self.state().runs, [])
+
+    def test_a_scheduled_run_that_is_not_due_still_prunes_old_run_folders(self) -> None:
+        os.environ["BOSUN_LEARN_ENABLED"] = "0"
+        old, new = self.old_and_new_run_folders()
+        self.assertEqual(self.main("run", "--scheduled", "--sessions", str(self.world.sessions_file))[0], 0)
+        self.assertEqual([p.exists() for p in old + new], [False, False, True, True])
 
     def test_status(self) -> None:
         self.analysis_returns(STALL)
