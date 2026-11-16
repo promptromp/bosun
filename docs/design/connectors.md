@@ -175,7 +175,11 @@ a row in `STATE_FILES`); a lookup that fails uses what was kept, and a name with
 logged, and raised with `bosun alert` for the orchestrator. A server's target rarely changes, so what was
 kept is almost always right. A lookup that works is the truth for the names it was asked about: it
 replaces what was kept of them, so a name it no longer shows is dropped from `connectors.json`, and a
-fingerprint (below) agrees with that launch.
+fingerprint (below) agrees with that launch. One exception: a listing that shows none of claude.ai's
+connectors (`claude.ai ...`) did not reach claude.ai, though it may list the local and plugin servers (the
+network coming up, an API hiccup), so for the `claude.ai` names it counts as a failed lookup: they keep
+and use what was kept, and the log says so. A `claude.ai` name that a listing showing claude.ai's
+connectors does not show is dropped as before.
 
 **The fingerprint.** `refresh` and `bosun update` compare a window's launch fingerprint, a digest of its
 arguments, with the one recorded at its launch. The resolved `allowedMcpServers` is part of the arguments,
