@@ -75,7 +75,7 @@ STATE_FILES = (
     ("quit.json", WORKING),  # bosun is stopped until started (lib/quit_state.py)
     (".quit.json.*", WORKING),  # what writing it left, cut short
     ("login-reload", WORKING),  # a reload of the jobs, so the login job's run is not taken for a login
-    ("installed", WORKING),  # when install.sh last set bosun up, which the watchdog's day checks go by
+    ("loaded-*", WORKING),  # when its morning, learning and watchdog jobs were last loaded (reload_job)
     ("update", WORKING),
     (".*.restoring", WORKING),  # what an update's restore was writing, cut short (lib/update_backups.py)
     ("agent-changes.json", WORKING),

@@ -249,7 +249,7 @@ class MorningMissingTest(WatchdogCase):
         self.assertEqual(len(self.runs(at(MONDAY, "08:20"), 2)), 1)
 
     def installed(self, moment: datetime) -> None:
-        (self.state_dir / watchdog.INSTALLED).write_text(f"{moment:%Y-%m-%d %H:%M:%S}\n")
+        (self.state_dir / watchdog.LOADED.format(role="morning")).write_text(f"{moment:%Y-%m-%d %H:%M:%S}\n")
 
     def test_set_up_after_the_start_time_owes_no_run_today(self) -> None:
         """Installed on a scheduled day after the start time: the morning job was not loaded at 08:00, so
@@ -257,10 +257,13 @@ class MorningMissingTest(WatchdogCase):
         self.installed(at(MONDAY, "14:00:30"))
         self.assertEqual(self.runs(at(MONDAY, "14:05"), 6), [])
         ctx = self.inputs(at(MONDAY, "14:10")).context(watchdog.State())
-        self.assertIn("set up at 14:00", watchdog.check_morning_missing(ctx).note)
+        self.assertIn("loaded at 14:00", watchdog.check_morning_missing(ctx).note)
         self.assertEqual(
             watchdog.session_gate_kind(ctx),
-            (watchdog.GATE_NO_MORNING, "no morning run today: bosun was set up at 14:00, after its time"),
+            (
+                watchdog.GATE_NO_MORNING,
+                "no morning run today: its launchd job was loaded at 14:00, after its time",
+            ),
         )
         self.assertEqual(len(self.runs(at(TUESDAY, "08:20"), 2)), 1)
 

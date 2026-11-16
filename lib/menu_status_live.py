@@ -49,6 +49,7 @@ from menu_status import SessionGate, StatusFacts, WatchdogJob
 
 
 LOG_WINDOW = timedelta(hours=1)
+WATCHDOG_ROLE = "watchdog"  # its job's load stamp (watchdog.job_loaded_at)
 SCAN_LINES = 5000  # the most lines read back from the end of one log
 
 
@@ -229,6 +230,7 @@ def watchdog_job_of(
     launched: datetime | None = None,
     woke: datetime | None = None,
     booted: datetime | None = None,
+    loaded: datetime | None = None,
 ) -> WatchdogJob | None:
     """The watchdog's own job: what `watchdog --facts` says of it (loaded, plist installed) and when it last
     ran: its last full run (its saved state) or <launched>, whichever is later (a run that skipped is a run),
@@ -237,7 +239,7 @@ def watchdog_job_of(
     if not isinstance(job, dict):
         return None
     ran = last_ran((checks or {}).get("last_run"), launched)
-    return WatchdogJob(bool(job.get("installed")), bool(job.get("state")), ran, woke, booted)
+    return WatchdogJob(bool(job.get("installed")), bool(job.get("state")), ran, woke, booted, loaded)
 
 
 def last_ran(last: object, launched: datetime | None) -> datetime | None:
@@ -265,7 +267,8 @@ def doctor_watchdog(
         )
     state, _note = load_state(state_dir)
     ran = last_ran(state.last_run, launched_at(log_dir))
-    job = WatchdogJob(True, True, ran, kernel_time(WAKETIME), kernel_time(BOOTTIME))
+    loaded = watchdog.job_loaded_at(state_dir, WATCHDOG_ROLE)
+    job = WatchdogJob(True, True, ran, kernel_time(WAKETIME), kernel_time(BOOTTIME), loaded)
     updating = update_state.running(state_dir)
     facts = StatusFacts(
         None, None, None, None, update_running=updating, log_dir=str(log_dir), watchdog_job=job
@@ -275,7 +278,10 @@ def doctor_watchdog(
         return "warn", problem
     if updating:
         return "ok", "an update runs, and it skips its runs until the update ends"
-    return "ok", f"last ran at {menu_status.when(ran, now)}" if ran else "it has not run yet"
+    if ran:
+        return "ok", f"last ran at {menu_status.when(ran, now)}"
+    since = f" (its job was loaded at {menu_status.when(loaded, now)})" if loaded else ""
+    return "ok", f"it has not run yet{since}"
 
 
 def watchdog_parts(
@@ -295,13 +301,14 @@ def watchdog_parts(
         return None, None, None
     has_job = isinstance(watchdog_facts.get("watchdog_job"), dict)
     woke, booted = (kernel_time(WAKETIME), kernel_time(BOOTTIME)) if has_job else (None, None)
+    loaded = watchdog.job_loaded_at(collector.settings.state_dir, WATCHDOG_ROLE)
     view = attempt("watchdog", lambda: watchdog_view(config, watchdog_facts, now)) if config else None
     if view is None:
-        return None, None, watchdog_job_of(watchdog_facts, None, launched_at(log_dir), woke, booted)
+        return None, None, watchdog_job_of(watchdog_facts, None, launched_at(log_dir), woke, booted, loaded)
     checks, gate, note = view
     if note:
         collector.errors["watchdog-state"] = note
-    return checks, gate, watchdog_job_of(watchdog_facts, checks, launched_at(log_dir), woke, booted)
+    return checks, gate, watchdog_job_of(watchdog_facts, checks, launched_at(log_dir), woke, booted, loaded)
 
 
 def gather(

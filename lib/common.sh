@@ -746,10 +746,6 @@ release_keep_awake() {
 # expect the session on a day you stopped it.
 stop_marker() { echo "$BOSUN_STATE_DIR/stopped-$BOSUN_SESSION_NAME"; }
 
-# When install.sh last set bosun up (`date '+%F %T'`): the watchdog's day checks owe no morning or learning run
-# that was due before it (lib/watchdog.py's set_up_after), since its launchd job was not loaded at its time.
-installed_marker() { echo "$BOSUN_STATE_DIR/installed"; }
-
 # Whether `bosun quit` left bosun stopped until it is started (lib/quit_state.py, quit.json in the state
 # folder): succeeds and prints the time of the quit (HH:MM). The watchdog's and learning's scheduled runs
 # skip while it does; quit_paused is the same for the morning run, when the quit also paused it.
@@ -1619,8 +1615,33 @@ job_fields() { # <label>
 # Whether job <label> is running now.
 job_running() { [ "$(job_fields "$1" | cut -f1)" = running ]; } # <label>
 
+# When reload_job last loaded bosun's launchd job for <role> (`date '+%F %T'`): the morning job, learning and the
+# watchdog. The watchdog owes no run due before its job was loaded, which launchd would not run (lib/watchdog.py's
+# loaded_after: a first install, or a start time moved to before now), and a watchdog job that has not run three
+# intervals after it was loaded is not working (lib/menu_status.py's watchdog_stale).
+job_loaded_stamp() { echo "$BOSUN_STATE_DIR/loaded-$1"; } # <role>
+
+# The role job_loaded_stamp knows job <label> by; nothing for a job it keeps no stamp of.
+job_role() { # <label>
+  case "$1" in
+    "$BOSUN_LAUNCHD_LABEL") echo morning ;;
+    "$(learn_label)") echo learn ;;
+    "$(watchdog_label)") echo watchdog ;;
+  esac
+}
+
+# The stamp of job <label>, which has just been loaded. One that cannot be written is a line, never a failed reload.
+stamp_job_loaded() { # <label>
+  local role
+  role="$(job_role "$1")"
+  [ -n "$role" ] || return 0
+  if ! { mkdir -p "$BOSUN_STATE_DIR" && date '+%F %T' >"$(job_loaded_stamp "$role")"; }; then
+    log "WARN: could not write $(job_loaded_stamp "$role")"
+  fi
+}
+
 # Job <label> unloaded, then, from the plist <rendered> (checked already; empty: the job is no longer
-# wanted), written as <installed> and loaded again; or its plist removed.
+# wanted), written as <installed> and loaded again (its stamp written: stamp_job_loaded); or its plist removed.
 reload_job() { # <label> <rendered> <installed>
   launchctl bootout "gui/$(id -u)/$1" 2>/dev/null
   if [ ! -s "$2" ]; then
@@ -1633,7 +1654,10 @@ reload_job() { # <label> <rendered> <installed>
     mkdir -p "$BOSUN_STATE_DIR"
     date '+%F %T' >"$(login_reload_marker)"
   fi
-  if cp "$2" "$3" && launchctl bootstrap "gui/$(id -u)" "$3"; then return 0; fi
+  if cp "$2" "$3" && launchctl bootstrap "gui/$(id -u)" "$3"; then
+    stamp_job_loaded "$1"
+    return 0
+  fi
   log "ERROR: launchctl bootstrap failed for $3" >&2
   return 1
 }

@@ -939,7 +939,7 @@ class GatherTestCase(unittest.TestCase):
         before = status()
         self.assertEqual((before["level"], before["sentence"]), ("error", "bosun is not running"))
         self.assertIn("No morning run today", " ".join(before["problems"]))
-        (self.state / watchdog.INSTALLED).write_text("2026-11-11 09:40:00\n")
+        (self.state / watchdog.LOADED.format(role="morning")).write_text("2026-11-11 09:40:00\n")
         after = status()
         self.assertEqual(
             (after["level"], after["sentence"], after["problems"]), ("ok", "bosun is not running", [])
@@ -947,7 +947,7 @@ class GatherTestCase(unittest.TestCase):
         self.assertIs(after["starting"], False)
         # installed at 08:03, between the start and when the run is due (08:16): no run is coming, so not
         # "starting", which would hide Start
-        (self.state / watchdog.INSTALLED).write_text("2026-11-11 08:03:00\n")
+        (self.state / watchdog.LOADED.format(role="morning")).write_text("2026-11-11 08:03:00\n")
         early = status(NOW.replace(hour=8, minute=5))
         self.assertEqual(
             (early["level"], early["sentence"], early["starting"]), ("ok", "bosun is not running", False)
@@ -1185,6 +1185,22 @@ class WatchdogJobTestCase(unittest.TestCase):
     def test_a_loaded_job_that_never_ran_is_a_new_one(self) -> None:
         self.assertEqual(snap(watchdog_job=WatchdogJob(True, True, None))["level"], "ok")
 
+    def test_a_job_that_never_ran_three_intervals_after_its_load_is_a_warning(self) -> None:
+        """A job that never ran is counted from its load stamp (reload_job's), not taken as new at any age."""
+        never = WatchdogJob(True, True, None, loaded_at=NOW - timedelta(minutes=20))
+        out = snap(watchdog_job=never)
+        self.assertEqual(out["level"], "warning")
+        self.assertIn("has not run since its job was loaded at 09:40", out["problems"][0])
+        self.assertIn("every 5 minutes", out["problems"][0])
+        fresh = WatchdogJob(True, True, None, loaded_at=NOW - timedelta(minutes=10))
+        self.assertEqual(snap(watchdog_job=fresh)["level"], "ok")
+        woke = WatchdogJob(
+            True, True, None, woke_at=NOW - timedelta(minutes=3), loaded_at=NOW - timedelta(days=1)
+        )
+        self.assertEqual(snap(watchdog_job=woke)["level"], "ok")  # the Mac just woke: its next run is near
+        reloaded = WatchdogJob(True, True, NOW - timedelta(hours=2), loaded_at=NOW - timedelta(minutes=4))
+        self.assertEqual(snap(watchdog_job=reloaded)["level"], "ok")  # loaded again since its last run
+
     def test_no_job_installed_is_no_problem_as_in_a_checkout(self) -> None:
         for job in (WatchdogJob(False, False), WatchdogJob(False, False, NOW - timedelta(days=9)), None):
             with self.subTest(job=job):
@@ -1358,6 +1374,16 @@ class DoctorWatchdogTestCase(unittest.TestCase):
     def test_a_job_that_never_ran_is_a_new_one(self) -> None:
         (self.state / "watchdog.json").unlink()
         self.assertEqual(self.said(), ("ok", "it has not run yet"))
+
+    def test_a_job_that_never_ran_long_after_its_load_warns(self) -> None:
+        (self.state / "watchdog.json").unlink()
+        stamp = self.state / watchdog.LOADED.format(role="watchdog")
+        stamp.write_text("2026-11-11 09:52:00\n")
+        self.assertEqual(self.said(), ("ok", "it has not run yet (its job was loaded at 09:52)"))
+        stamp.write_text("2026-11-11 09:00:00\n")
+        level, text = self.said()
+        self.assertEqual(level, "warn")
+        self.assertIn("has not run since its job was loaded at 09:00", text)
 
     def test_the_command_prints_the_line(self) -> None:
         self.ran(1)

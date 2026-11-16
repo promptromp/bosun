@@ -4043,10 +4043,23 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   check "install writes a valid launchd job" plutil -lint -s "$PLIST"
   check "install loads it with launchctl" grep -q "launchctl bootstrap gui/$(id -u) $PLIST" "$WORK/system.log"
   check "install never changes pmset without --with-wake" bash -c '! grep -q "pmset repeat" "$1"' _ "$WORK/system.log"
-  check "install stamps when it set bosun up, which the watchdog's day checks go by" python3 -I -c '
+  stamped_now() { # <stamp file>...: each holds a time of the last ten minutes, as reload_job writes it
+    python3 -I -c '
 import datetime, sys
-stamp = datetime.datetime.strptime(open(sys.argv[1]).read().strip(), "%Y-%m-%d %H:%M:%S")
-sys.exit(abs((datetime.datetime.now() - stamp).total_seconds()) > 600)' "$BOSUN_STATE_DIR/installed"
+for path in sys.argv[1:]:
+    stamp = datetime.datetime.strptime(open(path).read().strip(), "%Y-%m-%d %H:%M:%S")
+    assert abs((datetime.datetime.now() - stamp).total_seconds()) <= 600, path' "$@"
+  }
+  check "loading the morning job and the watchdog stamps when each was loaded, which the watchdog goes by" stamped_now "$BOSUN_STATE_DIR/loaded-morning" "$BOSUN_STATE_DIR/loaded-watchdog"
+  echo "2026-01-05 05:00:00" >"$BOSUN_STATE_DIR/loaded-morning"
+  BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" >/dev/null 2>&1
+  check "... a run that reloads nothing moves no stamp (a re-run on the day of a missed morning keeps its alarm)" grep -qx "2026-01-05 05:00:00" "$BOSUN_STATE_DIR/loaded-morning"
+  rm -f "$PLIST"
+  cp -p "$HOME/.local/bin/sudo" "$WORK/sudo.ok"
+  printf '#!/bin/sh\nexit 1\n' >"$HOME/.local/bin/sudo"
+  check "... a wake that sudo refuses fails the install" fails_with "pmset failed" env BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" --with-wake
+  check "... after the morning job was loaded again, and stamped" stamped_now "$BOSUN_STATE_DIR/loaded-morning"
+  mv "$WORK/sudo.ok" "$HOME/.local/bin/sudo"
   WATCHDOG_PLIST="$HOME/Library/LaunchAgents/$BOSUN_LAUNCHD_LABEL.watchdog.plist"
   check "install writes the watchdog agent" plutil -lint -s "$WATCHDOG_PLIST"
   check "... and loads it" grep -q "launchctl bootstrap gui/$(id -u) $WATCHDOG_PLIST" "$WORK/system.log"

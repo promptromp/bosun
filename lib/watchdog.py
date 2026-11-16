@@ -105,7 +105,7 @@ ERROR_LINE = re.compile(LOG_LINE + r"(?:ERROR|FAIL):")
 RUN_COMPLETE = "] morning run complete"
 RUN_PROBLEMS = "] morning run finished with problems"
 RUN_SKIPPED = "] morning run skipped"  # bosun was quit: paused, or quit while the run set up
-INSTALLED = "installed"  # install.sh's stamp in the state folder (installed_marker in lib/common.sh)
+LOADED = "loaded-{role}"  # reload_job's stamp: when a job (morning, learn, watchdog) was last loaded
 MORNING_PROBLEM = re.compile(
     r"\] (?:ERROR|FAIL):|finished with problems|could not open the window|skipping the window"
 )
@@ -508,16 +508,21 @@ def window_signals(ctx: Context, window: str, record: dict[str, Any] | None) -> 
     return signals.Signals.load(ctx.config.state_dir, window, record.get("sessionId"))
 
 
-def set_up_after(ctx: Context, due: datetime) -> datetime | None:
-    """When install.sh last set bosun up, if that was at or after <due> (and not later than now): a run due
-    then is not owed, its launchd job not having been loaded at its time. None otherwise."""
-    installed = stop_marker.read_stamp(ctx.config.state_dir / INSTALLED)
-    return installed if installed is not None and due <= installed <= ctx.now else None
+def job_loaded_at(state_dir: Path, role: str) -> datetime | None:
+    """When bosun's launchd job for <role> (morning, learn, watchdog) was last loaded, if its stamp says."""
+    return stop_marker.read_stamp(state_dir / LOADED.format(role=role))
 
 
-def morning_set_up_after(ctx: Context) -> datetime | None:
-    """set_up_after the workday's morning run: bosun was set up after its job's time (BOSUN_START_TIME)."""
-    return set_up_after(ctx, datetime.combine(ctx.workday, ctx.config.start))
+def loaded_after(ctx: Context, due: datetime, role: str) -> datetime | None:
+    """When the job for <role> was last loaded, if that was at or after <due> (and not later than now): a run
+    due then is not owed, since launchd runs no time that passed before a job was loaded. None otherwise."""
+    loaded = job_loaded_at(ctx.config.state_dir, role)
+    return loaded if loaded is not None and due <= loaded <= ctx.now else None
+
+
+def morning_loaded_after(ctx: Context) -> datetime | None:
+    """loaded_after the workday's morning run: its job was loaded after its time (BOSUN_START_TIME)."""
+    return loaded_after(ctx, datetime.combine(ctx.workday, ctx.config.start), "morning")
 
 
 def check_morning_missing(ctx: Context) -> Result:
@@ -529,10 +534,12 @@ def check_morning_missing(ctx: Context) -> Result:
         return Result(f"not due until {due:%H:%M}")
     if ctx.morning_run:
         return Result(f"ran at {ctx.morning_run.started:%H:%M} ({ctx.morning_run.trigger})")
-    installed = morning_set_up_after(ctx)
-    if installed:
+    loaded = morning_loaded_after(ctx)
+    if loaded:
         start = ctx.config.start
-        return Result(f"none today: bosun was set up at {installed:%H:%M}, after its {start:%H:%M} run")
+        return Result(
+            f"none today: its launchd job was loaded at {loaded:%H:%M}, after its {start:%H:%M} run"
+        )
     expected = datetime.combine(day, ctx.config.start) + timedelta(minutes=ctx.config.wake_delay_minutes)
     message = (
         f"No morning run today: it was due at {expected:%H:%M} and {ctx.morning_log.name} has none. "
@@ -742,9 +749,12 @@ def session_gate_kind(ctx: Context) -> tuple[str, str] | None:
 def morning_gate_kind(ctx: Context) -> tuple[str, str] | None:
     """day_gate_kind's part of the morning run, inside the awake window: none is coming today (bosun was set
     up after its time), it is not due yet, there was none, or it is still going; None once it ended."""
-    installed = morning_set_up_after(ctx) if ctx.morning_run is None else None
-    if installed:  # no run is coming today: not "not due yet", which the menu shows as starting
-        return GATE_NO_MORNING, f"no morning run today: bosun was set up at {installed:%H:%M}, after its time"
+    loaded = morning_loaded_after(ctx) if ctx.morning_run is None else None
+    if loaded:  # no run is coming today: not "not due yet", which the menu shows as starting
+        return (
+            GATE_NO_MORNING,
+            f"no morning run today: its launchd job was loaded at {loaded:%H:%M}, after its time",
+        )
     due = morning_due(ctx.config, ctx.workday)
     if ctx.now < due:
         return GATE_NOT_DUE, f"not expected before {due:%H:%M}"
@@ -981,9 +991,11 @@ def learn_missing(ctx: Context, runs: list[dict[str, Any]]) -> Result:
         return Result(f"next run due at {ctx.config.learn_at:%H:%M} on a scheduled day")
     if any(local_time(str(r["started"])) >= due for r in runs):
         return Result(f"ran today after {due:%H:%M}")
-    installed = set_up_after(ctx, due)
-    if installed:
-        return Result(f"none today: bosun was set up at {installed:%H:%M}, after it was due at {due:%H:%M}")
+    loaded = loaded_after(ctx, due, "learn")
+    if loaded:
+        return Result(
+            f"none today: its launchd job was loaded at {loaded:%H:%M}, after it was due at {due:%H:%M}"
+        )
     message = (
         f"No learning run today: it was due at {due:%H:%M}. Check its launchd agent (bosun doctor), "
         "or run bosun learn."
