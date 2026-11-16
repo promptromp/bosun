@@ -23,8 +23,8 @@
 # (the line emptied, no "Unknown command"), so the caller can send it again. It pastes into the
 # pane whose agent it checked, even if you moved to another pane of the window meanwhile.
 # --start starts the agent in the window's folder from the window list (the pane's current folder
-# for a window outside the list). --new and --start exit 0 only once the agent is running in the
-# window; otherwise they print the window's last output and exit 1.
+# for a window outside the list, or without a sessions.yml). --new and --start exit 0 only once the
+# agent is running in the window; otherwise they print the window's last output and exit 1.
 # With BOSUN_SEND_DRY_RUN=1 (set by `bosun chores --dry-run`), deliveries and new windows
 # are only logged.
 set -uo pipefail
@@ -191,10 +191,11 @@ new_window() { # <window> <workdir> <message> [model] [effort]
 }
 
 # The folder window <window> starts in: its own in the window list, as `refresh` starts it; the pane's
-# current one only for a window outside the list (your shell there may have moved anywhere since).
+# current one only for a window outside the list (your shell there may have moved anywhere since), or with no
+# window list at all (a list that cannot be read stops it).
 start_dir() { # <window> <window_id>
-  local specs dir
-  specs="$(window_specs)" || exit 1
+  local specs="" dir
+  if [ -f "$BOSUN_SESSIONS_FILE" ]; then specs="$(window_specs)" || exit 1; fi
   dir="$(awk -F'\t' -v name="$1" '$1 == name { print $2; exit }' <<<"$specs")"
   [ -n "$dir" ] || dir="$(tmux_cmd display-message -p -t "$2" '#{pane_current_path}')"
   [ -d "$dir" ] || die "window '$1''s folder $dir does not exist; not starting it there"

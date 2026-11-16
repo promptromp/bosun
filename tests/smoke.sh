@@ -2631,6 +2631,15 @@ out="$(live --start alpha 2>&1)"
 check "--start without a message resumes with the drain prompt" test "$(cat "$WORK/live-claude.$(claude_in alpha).prompt")" = "$drain_prompt"
 check "... in the window's folder from the window list, not where its pane's shell was" \
   test "$(jq -r .dir "$BOSUN_STATE_DIR/launches/smoke/alpha.json")" = "$REPO_A"
+tmux -L "$SOCKET" new-window -d -t "=smoke:" -n extra -c "$REPO_B" "exec /bin/sh" # a window outside the list
+printf 'sessions: [\n' >"$WORK/broken-sessions.yml"
+start_extra() { env BOSUN_SESSIONS_FILE="$1" BOSUN_LAUNCH_DRY_RUN=0 BOSUN_START_TIMEOUT=30 "$BOSUN" send --start extra; }
+check "--start of a window outside the list stops at a sessions.yml that cannot be read" \
+  fails_with "could not read $WORK/broken-sessions.yml" start_extra "$WORK/broken-sessions.yml"
+check "... and with no sessions.yml at all starts it in its pane's folder" \
+  contains "$(start_extra "$WORK/no-sessions.yml" 2>&1)" "Claude is running in smoke:extra"
+check "... (its launch ran there)" test "$(jq -r .dir "$BOSUN_STATE_DIR/launches/smoke/extra.json")" = "$REPO_B"
+tmux -L "$SOCKET" kill-window -t "=smoke:extra"
 cat >"$WORK/echo-claude" <<FAKE
 #!/bin/bash
 printf '{"pid":%d,"status":"idle"}' \$\$ >"\$HOME/.claude/sessions/\$\$.json"
