@@ -863,7 +863,10 @@ check "repo sessions get the async signal hooks" bash -c 'grep -qE "hook.{0,2} s
 check "BOSUN_HOOK_SIGNALS=0 leaves the signal hooks out" bash -c '! grep -q "StopFailure" <<<"$1"' _ "$(cd "$REPO_A" && BOSUN_HOOK_SIGNALS=0 "$BOSUN" launch alpha 2>&1)"
 printf '{"session_id":"s1","hook_event_name":"StopFailure","error":"rate_limit","last_assistant_message":"spend limit"}' | "$BOSUN" hook signal --window alpha
 check "the signal hook records the event for the window" bash -c 'jq -e "select(.event == \"StopFailure\" and .kind == \"rate_limit\" and .session == \"s1\")" "$1" >/dev/null' _ "$BOSUN_STATE_DIR/signals/alpha.jsonl"
-check "the signal hook never fails" bash -c 'echo "{broken" | BOSUN_STATE_DIR=/nonexistent/x "$1" hook signal --window alpha' _ "$BOSUN"
+# Its own log folder: the line it logs is an ERROR, which `bosun status --json` counts for an hour.
+check "the signal hook never fails" bash -c 'echo "{broken" | BOSUN_STATE_DIR=/nonexistent/x BOSUN_LOG_DIR="$2" "$1" hook signal --window alpha' _ "$BOSUN" "$WORK/signal-logs"
+check "... and says why in the hook log, as a stamped ERROR line that the watchdog's log-errors check alerts" \
+  grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} \[hook\] ERROR: signals: could not record' "$WORK/signal-logs/hook-$(date +%F).log"
 exits_0_saying_nothing() {
   local out status
   out="$("$@" 2>/dev/null </dev/null)"
