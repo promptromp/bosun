@@ -381,6 +381,21 @@ class SessionQuoteTest(KnowledgeTestCase):
         own = self.session(typed(QUOTE, START))
         self.assertIn("confirmed (your own words", self.propose_mine("--transcript", str(own)))
 
+    def test_from_a_session_a_fact_in_my_words_needs_eight_characters_of_whole_words(self) -> None:
+        """A one-word answer ("yes" to "should I record that ...?") says nothing about which fact, and a
+        verified quote confirms over a contradiction and revives a rejected fact; nor do letters picked
+        out of a prompt count."""
+        self.seed()
+        self.session(typed(f"yes, and {QUOTE}", START - timedelta(hours=1)))
+        argv = ["propose", "process/release", "gated_by", "gate/smoke-tests", "--from-user", "--quote"]
+        for quote in ("yes", "e", "  ok   th  "):
+            with self.subTest(quote=quote), self.assertRaisesRegex(KnowledgeError, "at least 8 characters"):
+                self.run_kg(*argv, quote)
+        self.assertEqual(self.kb().facts, {})
+        out = self.run_kg(*argv, "oke tests gate")  # cuts "smoke"
+        self.assertEqual(self.fact(self.f(1))["status"], km.PROPOSED)
+        self.assertIn("note: the quote is not in anything you typed", out)
+
     def test_a_quote_older_than_a_day_stays_proposed(self) -> None:
         self.seed()
         self.session(typed(QUOTE, START - timedelta(hours=25)))

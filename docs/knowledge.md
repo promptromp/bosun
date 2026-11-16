@@ -175,7 +175,8 @@ of it: it is always on.
 **Words that count** (always on, whatever the key says). Inside an agent session, `--from-user --quote` needs no
 `--transcript`: `kg` finds the session that ran it by walking up its process tree to an agent's session record. A
 quote is checked against that session only (another session's transcript is refused), and only genuine prompts of
-the last 24 hours count, from a terminal with `--transcript` too. Text bosun pasted into the window (a brief, a
+the last 24 hours count, from a terminal with `--transcript` too. It counts as whole words of a prompt (never a
+piece of a word), and from a session it holds at least 8 characters. Text bosun pasted into the window (a brief, a
 `bosun send`) is never your words. `kg confirm`, `reject`, `batch apply`, and `supersede --close` or `--by`, run
 from a session, need `--from-user --quote` that verifies, at least 8 characters, typed after the facts they decide
 on were proposed; for `batch apply` the quote holds each group number the decision names (or "all", when it says

@@ -148,14 +148,9 @@ def is_genuine(text: str, speaker: Speaker) -> bool:
     return activity.is_mine(text, speaker.pasted, speaker.drain_prompt)
 
 
-def quote_in(quote: str, texts: Iterable[str]) -> bool:
-    """Whether <quote> appears verbatim (whitespace-normalized, case-insensitive) in one of <texts>."""
-    wanted = normalize(quote).casefold()
-    return bool(wanted) and any(wanted in normalize(text).casefold() for text in texts)
-
-
 # A quote that is not a whole prompt counts for an approval only at this length, and only holding an
 # approving word or the proposal's id: "e" or "today" is in nearly every prompt and says nothing of it.
+# The ontology's quotes from a session need it too (lib/knowledge.py, MIN_DECISION_QUOTE).
 MIN_QUOTE_CHARS = 8
 APPROVING_WORDS = (
     "yes",
@@ -205,6 +200,14 @@ def whole_prompt(wanted: str, text: str) -> bool:
     """Whether <wanted> is all of <text> (both comparable), apart from punctuation at either end."""
     bare = EDGE_PUNCTUATION.sub("", wanted)
     return bool(bare) and bare == EDGE_PUNCTUATION.sub("", text)
+
+
+def words_in(quote: str, texts: Iterable[str]) -> bool:
+    """Whether <quote> is a run of whole words of one of <texts>, compared as typed (comparable): it
+    never begins or ends inside a word. A quote of my statement (lib/knowledge.py) counts so; an
+    approval also needs to say yes (approval_quote_in)."""
+    wanted = normalize(quote).casefold()
+    return any(at_word_edges(wanted, text) for text in map(comparable, texts))
 
 
 def approves(wanted: str, item_id: str) -> bool:

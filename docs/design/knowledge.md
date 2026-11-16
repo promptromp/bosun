@@ -330,6 +330,10 @@ Where the design was silent (plan: [ontology-mvp3](../plans/ontology-mvp3.md)):
    number the decision names, or "all" when it says all. The quote is kept in the decision's note and its
    `reviewed_by`, which keep that record in the local journal (`knowledge_changes.quotes_me`). A supersede given
    `--from-user` in any form checks it the same way; a correction with only a `--source` needs no words.
+   Since 2026-11-16 a fact proposed in my words from a session needs the same 8 characters (a verified one
+   confirms over a contradiction and revives a rejected fact, so "yes" said too little), and every quote of my
+   words counts only as whole words of the prompt (`approvals.words_in`: it never begins or ends inside a word),
+   the matching approvals use; before, any substring counted.
 4. **A pack leaves out people's own profile facts** (timezone, hours, preferences, title) and keeps facts that link
    a person to the target ("Dana reviews the invoice exporter"). Identifiers and unconfirmed facts stay out.
 5. **The rules reach agents whose transcripts bosun can check** (`Profile.verifies_quotes`: Claude). Codex and

@@ -229,6 +229,16 @@ class QuoteRuleTest(unittest.TestCase):
         self.assertTrue(self.counts(f"{OTHER_PR} looks good", prompt, item_id=OTHER_PR))
         self.assertFalse(self.counts(f"{OTHER_PR} looks good", prompt, item_id=PR))
 
+    def test_a_statement_needs_only_whole_words(self) -> None:
+        """approvals.words_in, which an ontology quote of my words uses: no approving word, no length."""
+        prompt = "Yes: smoke tests gate every release."
+        self.assertTrue(approvals.words_in("smoke  tests gate", [prompt]))
+        self.assertTrue(approvals.words_in("yes", ["other", prompt]))
+        self.assertTrue(approvals.words_in("every release.", [prompt]))
+        for quote in ("moke tests", "every relea", "e", ""):
+            with self.subTest(quote=quote):
+                self.assertFalse(approvals.words_in(quote, [prompt]))
+
     def test_text_bosun_pasted_is_compared_as_typed(self) -> None:
         self.assertTrue(self.counts("yes", "<pasted_content>yes</pasted_content>"))
         self.assertFalse(self.counts("", "anything"))

@@ -57,9 +57,10 @@ from validation import Finding
 
 MAX_QUOTE_LENGTH = 500
 QUOTE_MAX_AGE = timedelta(hours=24)  # a quote of my words counts from a prompt this recent
-# The fewest characters (whitespace-normalized) of my words a decision from an agent's session quotes:
-# "ok", "yes" or "k" is in nearly every prompt, so it says nothing about which fact.
-MIN_DECISION_QUOTE = 8
+# The fewest characters (whitespace-normalized) of my words a quote from an agent's session holds, for a
+# decision and for a fact in my words alike: "ok", "yes" or "k" is in nearly every prompt, so it says
+# nothing about which fact. The same floor as an approval's partial quote.
+MIN_DECISION_QUOTE = approvals.MIN_QUOTE_CHARS
 # The journal every write goes through (lib/journal.py, docs/design/sync.md), next to the files:
 # the knowledge base's stream; the version of the rules its changes are checked against when
 # rebuilt (knowledge_changes.APPLIED, SKIPPED and CHECKED), bumped by hand when a change to them
@@ -933,9 +934,10 @@ def speaker() -> approvals.Speaker:
 
 
 def quote_verified(quote: str, transcript: Path, after: datetime | None = None) -> bool:
-    """Whether <quote> is in a prompt I typed (or sent from my phone) in that session in the last
-    QUOTE_MAX_AGE, and after <after> when given (when what it decides on was proposed): the same
-    check as an approval's quote. Pasted and injected text and tool results never count."""
+    """Whether <quote> is a run of whole words (approvals.words_in) of a prompt I typed (or sent from my
+    phone) in that session in the last QUOTE_MAX_AGE, and after <after> when given (when what it decides
+    on was proposed): an approval's genuine-prompt test. Pasted and injected text and tool results never
+    count."""
     who = speaker()
     since = CLOCK() - QUOTE_MAX_AGE
     prompts = claude_state.delivered_prompts(transcript)
@@ -944,7 +946,7 @@ def quote_verified(quote: str, transcript: Path, after: datetime | None = None) 
         for p in prompts
         if p.at >= since and (after is None or p.at > after) and approvals.is_genuine(p.text, who)
     ]
-    return approvals.quote_in(quote, texts)
+    return approvals.words_in(quote, texts)
 
 
 def calling_session(args: argparse.Namespace) -> agent_state.CallingSession | None:
@@ -1009,10 +1011,18 @@ def session_or_refuse(args: argparse.Namespace, session: agent_state.CallingSess
 def user_source(
     args: argparse.Namespace, session: agent_state.CallingSession | None, after: datetime | None = None
 ) -> Record:
+    """My words (--quote) as a source, verified when they are whole words of a genuine prompt of the
+    transcript they are checked in (session_or_refuse): from an agent's session, at least
+    MIN_DECISION_QUOTE characters of them, as a decision's."""
     quote = approvals.normalize(args.quote or "")
     if not quote or len(quote) > MAX_QUOTE_LENGTH:
         raise KnowledgeError(
             f"--from-user needs --quote with my exact words (1 to {MAX_QUOTE_LENGTH} characters)"
+        )
+    if session is not None and len(quote) < MIN_DECISION_QUOTE:
+        raise KnowledgeError(
+            f"from a session, --from-user needs at least {MIN_DECISION_QUOTE} characters of your exact "
+            "words in --quote: a word or two of a prompt says nothing about which fact"
         )
     transcript = session_or_refuse(args, session)
     # the session's id; in an agent whose transcripts bosun cannot check (there is a session), its name
