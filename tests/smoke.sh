@@ -4091,7 +4091,8 @@ for path in sys.argv[1:]:
   # Whose the wake is, as bosun settings judges it (settings.py wake-owner), for the settings in force.
   printf 'Repeating power events:\n  wakepoweron at 8:01AM weekdays only\n' >"$WORK/pmset-sched"
   ours_env=(BOSUN_DAYS=MTWRF BOSUN_START_TIME=08:00 BOSUN_WAKE_DELAY_MINUTES=1)
-  out="$(env "${ours_env[@]}" BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" 2>&1)"
+  # (with learning on, as the install above loaded it: the check below removes it, and says why)
+  out="$(env "${ours_env[@]}" BOSUN_LEARN_ENABLED=1 BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" 2>&1)"
   check "install says the wake is bosun's already, and prints no sudo line to set it again" bash -c 'grep -q "repeating wake is bosun'"'"'s already" <<<"$1" && ! grep -q "run once:" <<<"$1"' _ "$out"
   check "doctor with BOSUN_WAKE=0 and bosun's own wake still set warns that it is left from before, and how to cancel it" contains "$(env "${ours_env[@]}" BOSUN_WAKE=0 "$BOSUN" doctor 2>&1)" "warn  pmset still has bosun's repeating wake:"
   check "... and with BOSUN_WAKE=1 it is bosun's" contains "$(env "${ours_env[@]}" BOSUN_WAKE=1 "$BOSUN" doctor 2>&1)" "ok    pmset repeating wake:"
