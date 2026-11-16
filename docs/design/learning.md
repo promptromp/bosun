@@ -177,7 +177,8 @@ Deferred (ROADMAP), each for a reason:
 - **Data minimisation.** Only sessions of bosun windows are read; other conversations in the
   same folders are skipped, and `BOSUN_LEARN_EXCLUDE_SESSIONS` excludes ids outright. The digest
   keeps short excerpts (prompts to 600 characters, other lines to 300) and redacts tokens, keys,
-  passwords, signed URL queries and email addresses. The analysis call sends it to the same model
+  passwords, signed URL queries and email addresses before it cuts an excerpt (a private key cut
+  short already is redacted from its BEGIN marker on). The analysis call sends it to the same model
   provider the sessions already use; no other service sees it.
 - **Retention.** Run folders (digest, prompt, raw result, report) are deleted after 14 days;
   `state.json` keeps keys, titles and counts, not excerpts.
