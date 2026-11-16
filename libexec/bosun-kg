@@ -77,9 +77,10 @@
 #   facts <entity> [--predicate P] [--as-of T] [--status confirmed|proposed|rejected|expired|all]
 #         [--closed] [--json]          facts about an entity, now or as they held at --as-of
 #   search <text> [--limit N]          entities (10 by default) by name, alias, related term, summary or
-#                                      fact text; a text of several words also by its words (of 3 or
-#                                      more characters, no "who", "the"...), each at the start of a
-#                                      word, more words first, all after what matches the whole text
+#                                      fact text: the whole text first, then its words (of 3 or more
+#                                      characters, no "who", "the"...), each at the start of a word,
+#                                      one in a name or alias counting most, more with the name's words
+#                                      in a row; never an id's type (person/)
 #   neighbors <entity> [--hops N]      linked entities within N hops (default 1, at most 3)
 #   context --for <entity|repo|topic> [--for ...] [--max-tokens N]
 #                                      a small pack of confirmed, cited facts (about 1.5k tokens,

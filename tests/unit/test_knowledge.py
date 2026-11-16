@@ -1401,10 +1401,48 @@ class QueryTest(KnowledgeTestCase):
         self.assertEqual(self.run_kg("search", "who should we ask about it"), "no matches")
 
     def test_a_single_word_is_matched_as_before(self) -> None:
-        for text in ("renderer", "follow-up", "release", "acme/pdf-renderer"):
+        for text in ("renderer", "release", "exporter", "smoke"):  # its phrase finds all its word finds
             with self.subTest(text=text):
-                self.assertEqual(kq.query_words(km.norm(text)), [])
                 self.assertEqual(kq.search(self.kb(), text), kq.search(self.kb(), text, words=False))
+        for text in ("follow-up", "acme/pdf-renderer"):  # the phrase's hits first, as they were
+            with self.subTest(text=text):
+                phrase = kq.search(self.kb(), text, words=False)
+                self.assertEqual(kq.search(self.kb(), text)[: len(phrase)], phrase)
+
+    def test_punctuation_never_hides_a_word(self) -> None:
+        for text in ("renderer?", "renderer's reviewer", '"pdf renderer"'):
+            with self.subTest(text=text):
+                self.assertEqual(kq.search(self.kb(), text, words=False), [])
+                self.assertEqual(kq.search(self.kb(), text)[0][1], "repo/pdf-renderer")
+
+    # Where a word hits counts: a word of the name over several elsewhere, the name's words in a row,
+    # never an id's type.
+
+    def test_a_question_finds_what_its_name_words_name_before_a_decoy(self) -> None:
+        question = "Who should review a change to the pdf renderer, and where do I ask them?"
+        self.run_kg("add-entity", "process/review", "--name", "Review process", "--alias", "code review")
+        rule = "A change to exporter/tax.py needs a second review."
+        self.run_kg(
+            "propose", "process/review", "rule", "--value", rule,
+            "--source", "memory:review.md", "--source", "report:task:2026-10-01/1",
+        )  # fmt: skip
+        self.run_kg("add-entity", "system/decoy", "--name", "decoy", "--summary", "reviews every pdf change")
+        hits = kq.search(self.kb(), question)
+        self.assertEqual(hits[0][1:], ("repo/pdf-renderer", "words: pdf, renderer"))
+        ranked = [entity for _, entity, _ in hits]
+        self.assertLess(ranked.index("process/review"), ranked.index("system/decoy"))  # a name word first
+        self.assertEqual({e: s for s, e, _ in hits}["system/decoy"], 3 * kq.SCORE_WORD_OTHER)
+
+    def test_the_name_s_words_in_a_row_count_more(self) -> None:
+        self.run_kg("add-entity", "system/pdf-tools", "--name", "pdf tools for the renderer")
+        scores = {entity: score for score, entity, _ in kq.search(self.kb(), "renderer pdf")}
+        apart = 2 * kq.SCORE_WORD_NAMED
+        self.assertEqual(scores, {"repo/pdf-renderer": apart + kq.SCORE_WORD_RUN, "system/pdf-tools": apart})
+
+    def test_a_word_never_matches_an_id_s_type(self) -> None:
+        hits = kq.search(self.kb(), "who is the person that reviews exporter")
+        self.assertEqual(hits[0][1], "repo/invoice-exporter")
+        self.assertFalse([entity for _, entity, _ in hits if entity.startswith("person/")])
 
     # Where to ask: a lookup of what someone reviews, owns or approves says where they prefer to be asked.
 
@@ -1449,9 +1487,27 @@ class QueryTest(KnowledgeTestCase):
             self.fact_of("team/billing", "approves"),
             self.fact_of("team/billing", "prefers_channel"),
         )
-        self.assertIn(f"\n  {approves} Billing team approves invoice exporter [", out)
+        # once a team, on its first line, since it reviews nothing
+        self.assertRegex(out, rf"\n  {approves} Billing team approves invoice exporter \[[^]]*\]; prefers")
         self.assertIn(f"; prefers to be asked in #acme-prs [{channel}]", out)
-        self.assertEqual(out.count("prefers to be asked"), 1)  # once a team, on its first line
+        self.assertEqual(out.count("prefers to be asked"), 1)
+
+    def test_where_to_ask_is_on_the_reviews_line_of_one_who_also_owns_it(self) -> None:
+        for predicate, target in (("owns", "repo/invoice-exporter"), ("prefers_channel", "channel/acme-prs")):
+            self.run_kg("propose", "person/lee", predicate, target, "--source", f"ledger:{predicate}")
+        self.run_kg(
+            "confirm", *[self.fact_of("person/lee", p) for p in ("owns", "reviews", "prefers_channel")]
+        )
+        lines = self.run_kg("lookup", "exporter").splitlines()
+        (owns,) = [line for line in lines if " Lee Sample owns invoice exporter " in line]
+        (reviews,) = [line for line in lines if " Lee Sample reviews invoice exporter " in line]
+        self.assertLess(lines.index(owns), lines.index(reviews))  # owns sorts first
+        self.assertNotIn("prefers", owns)
+        self.assertTrue(
+            reviews.endswith(
+                f"; prefers to be asked in #acme-prs [{self.fact_of('person/lee', 'prefers_channel')}]"
+            )
+        )
 
     def test_where_to_ask_counts_toward_the_lookup_s_budget(self) -> None:
         for n in range(40):

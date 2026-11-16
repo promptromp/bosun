@@ -1,8 +1,8 @@
 """Reading the knowledge base (design: docs/design/knowledge.md, "How it is used"): lookup (with
 where the people who answer for an entity prefer to be asked), facts with --as-of (valid time),
-search over names, aliases and text (by phrase, and by word for a text of several words),
-neighbours over entity links, and context packs: at most about 1.5k tokens of confirmed, current,
-cited facts for an entity, a repo or a topic. Identifiers (restricted) are never shown here.
+search over names, aliases and text (by phrase, then by word), neighbours over entity links, and
+context packs: at most about 1.5k tokens of confirmed, current, cited facts for an entity, a repo
+or a topic. Identifiers (restricted) are never shown here.
 
 Pure over a knowledge_model.KB.
 """
@@ -34,6 +34,9 @@ PACK_TYPES = ("repo", "service", "process", "feature", "system", "channel", "tea
 # Who answers for an entity (the subject of a link to it: a person or team, as the schema has it),
 # and where each prefers to be asked: a lookup of the entity says both.
 ANSWERS_FOR = frozenset({"reviews", "owns", "approves"})
+ASKED_ON = (
+    "reviews"  # the line that says where to ask them, when they have one: who reviews is the usual question
+)
 ASKED_IN = "prefers_channel"
 
 
@@ -99,20 +102,31 @@ def waiting_lines(kb: KB, entity_id: str) -> list[str]:
     return lines
 
 
+def asking_links(links: list[Record]) -> set[str]:
+    """The ids of the links that say where to ask their subject: for each person or team that answers
+    for the entity, its ASKED_ON link, else its first."""
+    chosen: dict[str, Record] = {}
+    for fact in links:
+        held = chosen.get(fact["subject"])
+        better = held is None or (fact["predicate"] == ASKED_ON and held["predicate"] != ASKED_ON)
+        if fact["predicate"] in ANSWERS_FOR and better:
+            chosen[fact["subject"]] = fact
+    return {fact["id"] for fact in chosen.values()}
+
+
 def link_lines(kb: KB, links: list[Record]) -> list[str]:
-    """The links to an entity, a line each; the first line of each person or team that reviews, owns
-    or approves it also says where they prefer to be asked: their own confirmed, current preferences
-    with their ids (never their team's)."""
+    """The links to an entity, a line each; for each person or team that reviews, owns or approves it,
+    one of its lines (asking_links) also says where they prefer to be asked: their own confirmed,
+    current preferences with their ids (never their team's)."""
     asked_in: dict[str, list[Record]] = {}
     for fact in by_order([f for f in km.confirmed_current(kb) if f["predicate"] == ASKED_IN]):
         asked_in.setdefault(fact["subject"], []).append(fact)
-    said: set[str] = set()
+    asking = asking_links(links)
     lines = []
     for fact in links:
-        line, subject = f"  {fact_line(kb, fact)}", fact["subject"]
-        if fact["predicate"] in ANSWERS_FOR and subject not in said:
-            said.add(subject)
-            line += "".join(f"; {kr.saying(kb, f)} [{f['id']}]" for f in asked_in.get(subject, []))
+        line = f"  {fact_line(kb, fact)}"
+        if fact["id"] in asking:
+            line += "".join(f"; {kr.saying(kb, f)} [{f['id']}]" for f in asked_in.get(fact["subject"], []))
         lines.append(line)
     return lines
 
@@ -169,10 +183,13 @@ SCORE_NAME = 60
 SCORE_RELATED = 50
 SCORE_SUMMARY = 30
 SCORE_FACT = 20
-# A text of several words also matches by its words, below every phrase match: SCORE_WORD for each
-# word an entity matches, and SCORE_WORD_NAMED once if one of them is in its name, alias or id.
-SCORE_WORD = 2
-SCORE_WORD_NAMED = 1
+# A text also matches by its words, below every phrase match (at most SCORE_FACT - 1): each word
+# counts by where it begins a word: in a name, a strong alias or the id's slug (never its type, such
+# as person/), or only in a related term, the summary or a fact's value; and the most matched words
+# in a row in one name or alias ("pdf renderer") add SCORE_WORD_RUN for each after the first.
+SCORE_WORD_NAMED = 4
+SCORE_WORD_OTHER = 1
+SCORE_WORD_RUN = 2
 WORD_MIN = 3  # shorter words never count on their own
 STOP_WORDS = frozenset(
     {"about", "and", "are", "ask", "can", "could", "does", "for", "from", "how", "should", "that", "the"}
@@ -226,32 +243,67 @@ def phrase_hits(kb: KB, wanted: str) -> dict[str, tuple[int, str]]:
 
 
 def query_words(wanted: str) -> list[str]:
-    """The words a text of several words is also searched by, each once: WORD_MIN characters or more,
-    no stop word. None for a single word, which only the phrase matches."""
-    if " " not in wanted:
-        return []
+    """The words a text is also searched by, each once: WORD_MIN characters or more, no stop word."""
     return list(dict.fromkeys(w for w in WORD.findall(wanted) if len(w) >= WORD_MIN and w not in STOP_WORDS))
 
 
-def word_starts(texts: Iterable[str]) -> set[str]:
-    return {word for text in texts for word in WORD.findall(km.norm(text))}
+def words_of(text: str) -> list[str]:
+    return WORD.findall(km.norm(text))
 
 
-def starts_a_word(word: str, words: set[str]) -> bool:
+def starts_a_word(word: str, words: Iterable[str]) -> bool:
     return any(other.startswith(word) for other in words)
 
 
+def longest_run(words: list[str], names: list[list[str]]) -> int:
+    """The most words in a row of one of <names> (each a list of words) that each begin with one of
+    <words>."""
+    best = 0
+    for name in names:
+        run = 0
+        for part in name:
+            run = run + 1 if any(part.startswith(word) for word in words) else 0
+            best = max(best, run)
+    return best
+
+
+@dataclass(frozen=True)
+class WordHits:
+    """Where the words of a text begin a word of an entity: in its names (a name, a strong alias, the
+    id's slug), or only elsewhere (a related term, the summary, a fact's value)."""
+
+    names: list[list[str]]  # the words of each name
+    named: list[str]
+    elsewhere: list[str]
+
+
+def other_words(entity: Record, values: list[str]) -> set[str]:
+    """The words of an entity's related terms, its summary and <values>, the facts about it."""
+    texts = [*entity["aliases"]["weak"], entity.get("summary") or "", *values]
+    return {part for text in texts for part in words_of(text)}
+
+
+def word_hits_in(entity: Record, words: list[str], values: list[str]) -> WordHits:
+    names = [words_of(name) for name in km.names_of(entity)[1:]]  # not the id, whose type is no word
+    named = [w for w in words if any(starts_a_word(w, name) for name in names)]
+    other = other_words(entity, values)
+    return WordHits(names, named, [w for w in words if w not in named and starts_a_word(w, other)])
+
+
 def word_score(entity: Record, words: list[str], values: list[str]) -> tuple[int, str]:
-    """An entity's score for the <words> that begin a word of its names, strong aliases or id (named),
-    related terms, summary or the <values> of the facts about it, and which ones; (0, "") for none.
-    One more word always ranks higher, and every score stays below SCORE_FACT."""
-    named = word_starts(km.names_of(entity))
-    other = word_starts([*entity["aliases"]["weak"], entity.get("summary") or "", *values])
-    matched = [w for w in words if starts_a_word(w, named) or starts_a_word(w, other)]
-    if not matched:
+    """An entity's score for the <words> that begin a word of it, and which ones; (0, "") for none.
+    A word in its names counts SCORE_WORD_NAMED, one only elsewhere (the <values> of the facts
+    about it included) SCORE_WORD_OTHER, and a run of matched words in one name adds SCORE_WORD_RUN
+    for each word after its first: so a word in the name outweighs several elsewhere, and "pdf
+    renderer" in a name outweighs "pdf" and "renderer" apart. Every score stays below SCORE_FACT,
+    a cap that a long text matching many words can reach, where they tie."""
+    hits = word_hits_in(entity, words, values)
+    if not hits.named and not hits.elsewhere:
         return 0, ""
-    bonus = SCORE_WORD_NAMED if any(starts_a_word(w, named) for w in matched) else 0
-    return min(SCORE_FACT - 1, SCORE_WORD * len(matched) + bonus), "words: " + ", ".join(matched)
+    score = SCORE_WORD_NAMED * len(hits.named) + SCORE_WORD_OTHER * len(hits.elsewhere)
+    score += SCORE_WORD_RUN * max(0, longest_run(hits.named, hits.names) - 1)
+    matched = [w for w in words if w in hits.named or w in hits.elsewhere]
+    return min(SCORE_FACT - 1, score), "words: " + ", ".join(matched)
 
 
 def word_hits(kb: KB, words: list[str]) -> dict[str, tuple[int, str]]:
@@ -273,9 +325,10 @@ def word_hits(kb: KB, words: list[str]) -> dict[str, tuple[int, str]]:
 def search(kb: KB, text: str, limit: int = SEARCH_HITS, *, words: bool = True) -> list[tuple[int, str, str]]:
     """(score, entity id, why) for entities matching <text> in a name, alias, summary or the value
     of a fact about them (current facts only; unconfirmed ones count too, marked as such). With
-    <words> (not for a pack's topic, which must not pull in what is only loosely related), a text of
-    several words also matches by its words (query_words), each at the start of a word, an entity
-    found by the phrase keeping that score: more words rank higher, every one below a phrase match."""
+    <words> (not for a pack's topic, which must not pull in what is only loosely related), the text
+    also matches by its words (query_words, word_score), each at the start of a word, an entity found
+    by the phrase keeping that score, every word match below a phrase match. For a single plain word
+    that adds nothing (its phrase finds all of it); it finds "renderer?" or "pdf renderer review"."""
     wanted = km.norm(text)
     if not wanted:
         return []

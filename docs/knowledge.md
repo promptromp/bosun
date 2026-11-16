@@ -135,18 +135,22 @@ bosun kg context --for releases         # a small cited pack of confirmed facts
   and the next write makes a new key. A `secret.key` that is not a key (empty, the wrong length, unreadable)
   while no such record needs it is moved aside by the next write, kept as
   `secret.key.aside-<time>` (not in the history), and made again, with a line on stderr.
-- **Who and where in one lookup:** `kg lookup "<name>"` lists what links to an entity, and on the
-  first line of each person or team that reviews, owns or approves it says where they prefer to be
-  asked: their own confirmed `prefers_channel` facts with their ids (`f-0ahnvb Marco Placeholder owns
-  pdf renderer [...]; prefers to be asked in #acme-prs [f-dm2y00]`), never their team's. A lookup of a
-  person lists their own preference among their facts, as before.
-- **Search by words:** `kg search` matches the whole text first, as one phrase. A text of several
-  words also matches by its words, each of three characters or more and not one of a few such as
-  "who", "should" or "the", at the start of a word (so "review" finds "reviews" and "reviewer"), in
-  the same names, aliases, related terms, summaries and fact values; an entity matching more of them
-  comes first, every one after the whole-text matches, and the reason says which words matched. So
-  "who reviews the pdf renderer" finds `repo/pdf-renderer`. A context pack's topic is still found by
-  the whole text only, so a pack never pulls in what is only loosely related.
+- **Who and where in one lookup:** `kg lookup "<name>"` lists what links to an entity, and says where
+  each person or team that reviews, owns or approves it prefers to be asked, on their `reviews` line
+  (else their first `owns` or `approves` line): their own confirmed `prefers_channel` facts with their
+  ids (`f-0ahnvb Marco Placeholder reviews pdf renderer [...]; prefers to be asked in #acme-prs
+  [f-dm2y00]`), never their team's. A lookup of a person lists their own preference among their facts,
+  as before.
+- **Search by words:** `kg search` matches the whole text first, as one phrase, then by its words:
+  each of three characters or more and not one of a few such as "who", "should" or "the", at the
+  start of a word (so "review" finds "reviews" and "reviewer", and "renderer?" finds the renderer), in
+  the same names, aliases, related terms, summaries and fact values, but never an id's type
+  (`person/`). A word in a name, a strong alias or the id counts most, and more when the name's words
+  come in a row ("pdf renderer"); a word only in a related term, the summary or a fact counts less. Every
+  word match comes after the whole-text matches, and the reason says which words matched. So "Who
+  should review a change to the pdf renderer, and where do I ask them?" finds `repo/pdf-renderer`
+  first. A context pack's topic, and the console's search, still match the whole text only, so a pack
+  never pulls in what is only loosely related.
 - **Bounded reads:** `kg lookup` prints at most 800 tokens (`--max-tokens N`; the rest is
   `(N more: kg lookup <entity> --max-tokens 3200)`), where to ask included, and five waiting facts,
   then a count; `kg search` shows 10 hits (`--limit`); `--json` is complete. `bosun delegate` logs
