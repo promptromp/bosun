@@ -3065,7 +3065,7 @@ check "--restart starts the session afresh" bash -c 'grep -q "restarting existin
 check "an unknown mode is an error" fails_with "must be refresh, drain or restart" env BOSUN_ON_EXISTING=bogus "$BOSUN" start
 "$BOSUN" stop >/dev/null 2>&1
 
-section stopped-until-started "stopped until started (what bosun quit leaves: quit.json)" covers 'libexec/bosun-learn,libexec/bosun-morning,libexec/bosun-quit,libexec/bosun-start,libexec/bosun-status,libexec/bosun-stop,libexec/bosun-watchdog,lib/quit_state.py'
+section stopped-until-started "stopped until started (what bosun quit leaves: quit.json)" covers 'libexec/bosun-learn,libexec/bosun-morning,libexec/bosun-quit,libexec/bosun-start,libexec/bosun-status,libexec/bosun-stop,libexec/bosun-watchdog,lib/quit_state.py,lib/watchdog.py'
 mkdir -p "$WORK/fake-caffeinate"
 printf '#!/bin/sh\nexit 0\n' >"$WORK/fake-caffeinate/caffeinate" # a real one would keep this Mac awake
 chmod +x "$WORK/fake-caffeinate/caffeinate"
@@ -3083,6 +3083,13 @@ check "... but a learn you type yourself still runs" contains "$(BOSUN_CLAUDE_BI
 out="$("$BOSUN" morning --skip-setup 2>&1)"
 check "a paused morning logs why and starts nothing" bash -c 'grep -qE "the morning start is paused \(bosun quit at [0-9]{2}:[0-9]{2}\); start bosun to resume" <<<"$1" && ! grep -qE "network is up|holding keep-awake|starting tmux session" <<<"$1"' _ "$out"
 check "... it exits 0" "$BOSUN" morning --skip-setup
+check "... and ends its log with a line the watchdog reads as the run's end, skipped: once bosun starts, not a run still going or failed" python3 -I -c '
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import watchdog
+run = watchdog.last_real_run(Path(sys.argv[2]))
+sys.exit(not (run is not None and run.outcome == "skipped"))' "$ROOT/lib" "$BOSUN_LOG_DIR/morning-$(date +%F).log"
 check "... with no session, no keep-awake and the file still there" bash -c '! tmux -L "$1" has-session -t =smoke && [ ! -e "$2/keep-awake-smoke.pid" ] && [ -f "$2/quit.json" ]' _ "$SOCKET" "$BOSUN_STATE_DIR"
 check "... also as a dry run" contains "$("$BOSUN" morning --dry-run 2>&1)" "the morning start is paused"
 write_quit running
@@ -3346,7 +3353,7 @@ printf 'setup_steps() { python3 -I -c "import sys; from pathlib import Path; sys
 quit_morning_out="$(PATH="$WORK/fake-caffeinate:$PATH" BOSUN_SETUP_FILE="$WORK/quit-during-setup.sh" BOSUN_NETWORK_PROBE_URL=file:///dev/null "$BOSUN" morning --awake-minutes 1 2>&1 </dev/null)"
 quit_morning_rc=$?
 check "a quit made while the morning sets up survives the morning's start, which logs that and starts nothing" bash -c 'grep -q "bosun was quit at [0-9:]*: not starting it" <<<"$1" && [ -f "$2/quit.json" ] && ! tmux -L "$3" has-session -t =smoke' _ "$quit_morning_out" "$BOSUN_STATE_DIR" "$SOCKET"
-check "... the morning then logs that a quit came during it, not that it completed, and exits 0" bash -c 'grep -q "bosun quit during the morning run; not starting" <<<"$1" && ! grep -q "morning run complete" <<<"$1" && [ "$2" -eq 0 ]' _ "$quit_morning_out" "$quit_morning_rc"
+check "... the morning then logs that a quit came during it, not that it completed, and exits 0" bash -c 'grep -q "morning run skipped: bosun quit during the run" <<<"$1" && ! grep -q "morning run complete" <<<"$1" && [ "$2" -eq 0 ]' _ "$quit_morning_out" "$quit_morning_rc"
 check "... and does not tell you the sessions are ready" bash -c '! grep -q "Sessions ready" "$1"' _ "$WORK/quit-notify.log"
 # The same, with a problem of the run's own (no network): its problems line names the quit too, so it is not read as a start that failed.
 rm -f "$BOSUN_STATE_DIR/quit.json"
@@ -3434,7 +3441,7 @@ check "... starting nothing" bash -c '! tmux -L "$1" has-session -t =smoke' _ "$
 # --now clears the quit at its top, but still passes --unless-quit to its start: a quit made while this Start sets up is kept.
 out="$(now_morning "${awake_outside[@]}" BOSUN_SETUP_FILE="$WORK/quit-during-setup.sh" "$BOSUN" morning --now)"
 now_rc=$?
-check "a quit made while --now sets up survives its start, which logs that, and the run says so and exits 0" bash -c 'grep -q "bosun was quit at [0-9:]*: not starting it" <<<"$1" && grep -q "bosun quit during the morning run; not starting" <<<"$1" && ! grep -q "morning run complete" <<<"$1" && [ "$2" -eq 0 ] && [ -f "$3/quit.json" ] && ! tmux -L "$4" has-session -t =smoke' _ "$out" "$now_rc" "$BOSUN_STATE_DIR" "$SOCKET"
+check "a quit made while --now sets up survives its start, which logs that, and the run says so and exits 0" bash -c 'grep -q "bosun was quit at [0-9:]*: not starting it" <<<"$1" && grep -q "morning run skipped: bosun quit during the run" <<<"$1" && ! grep -q "morning run complete" <<<"$1" && [ "$2" -eq 0 ] && [ -f "$3/quit.json" ] && ! tmux -L "$4" has-session -t =smoke' _ "$out" "$now_rc" "$BOSUN_STATE_DIR" "$SOCKET"
 now_clean
 
 # --at-login (lib/login_start.py): the decision comes before the run's header, so a skip leaves none.
@@ -4027,6 +4034,10 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   check "install writes a valid launchd job" plutil -lint -s "$PLIST"
   check "install loads it with launchctl" grep -q "launchctl bootstrap gui/$(id -u) $PLIST" "$WORK/system.log"
   check "install never changes pmset without --with-wake" bash -c '! grep -q "pmset repeat" "$1"' _ "$WORK/system.log"
+  check "install stamps when it set bosun up, which the watchdog's day checks go by" python3 -I -c '
+import datetime, sys
+stamp = datetime.datetime.strptime(open(sys.argv[1]).read().strip(), "%Y-%m-%d %H:%M:%S")
+sys.exit(abs((datetime.datetime.now() - stamp).total_seconds()) > 600)' "$BOSUN_STATE_DIR/installed"
   WATCHDOG_PLIST="$HOME/Library/LaunchAgents/$BOSUN_LAUNCHD_LABEL.watchdog.plist"
   check "install writes the watchdog agent" plutil -lint -s "$WATCHDOG_PLIST"
   check "... and loads it" grep -q "launchctl bootstrap gui/$(id -u) $WATCHDOG_PLIST" "$WORK/system.log"

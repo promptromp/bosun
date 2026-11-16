@@ -104,6 +104,8 @@ STAMPED = re.compile(LOG_LINE)
 ERROR_LINE = re.compile(LOG_LINE + r"(?:ERROR|FAIL):")
 RUN_COMPLETE = "] morning run complete"
 RUN_PROBLEMS = "] morning run finished with problems"
+RUN_SKIPPED = "] morning run skipped"  # bosun was quit: paused, or quit while the run set up
+INSTALLED = "installed"  # install.sh's stamp in the state folder (installed_marker in lib/common.sh)
 MORNING_PROBLEM = re.compile(
     r"\] (?:ERROR|FAIL):|finished with problems|could not open the window|skipping the window"
 )
@@ -329,7 +331,7 @@ def awake_seconds(config: Config, since: datetime, until: datetime) -> float:
 class MorningRun:
     started: datetime
     trigger: str
-    outcome: str = "running"  # complete, problems or running (no end line yet)
+    outcome: str = "running"  # complete, problems, skipped (bosun was quit: it started nothing) or running
     problems: list[str] = field(default_factory=list)
 
 
@@ -353,6 +355,8 @@ def parse_run(header: re.Match[str], body: list[str]) -> MorningRun:
             run.outcome = "complete"
         elif RUN_PROBLEMS in line:
             run.outcome = "problems"
+        elif RUN_SKIPPED in line:
+            run.outcome = "skipped"
         if MORNING_PROBLEM.search(line):
             run.problems.append(detail(line))
     return run
@@ -499,23 +503,38 @@ def window_signals(ctx: Context, window: str, record: dict[str, Any] | None) -> 
     return signals.Signals.load(ctx.config.state_dir, window, record.get("sessionId"))
 
 
+def set_up_after(ctx: Context, due: datetime) -> datetime | None:
+    """When install.sh last set bosun up, if that was at or after <due> (and not later than now): a run due
+    then is not owed, its launchd job not having been loaded at its time. None otherwise."""
+    installed = stop_marker.read_stamp(ctx.config.state_dir / INSTALLED)
+    return installed if installed is not None and due <= installed <= ctx.now else None
+
+
+def morning_set_up_after(ctx: Context) -> datetime | None:
+    """set_up_after today's morning run: bosun was set up after the morning job's time (BOSUN_START_TIME)."""
+    return set_up_after(ctx, datetime.combine(ctx.today, ctx.config.start))
+
+
 def check_morning_missing(ctx: Context) -> Result:
-    if not scheduled(ctx.config, ctx.today):
+    day = ctx.today
+    if not scheduled(ctx.config, day):
         return Result("not a scheduled day")
-    due = morning_due(ctx.config, ctx.today)
+    due = morning_due(ctx.config, day)
     if ctx.now < due:
         return Result(f"not due until {due:%H:%M}")
     if ctx.morning_run:
         return Result(f"ran at {ctx.morning_run.started:%H:%M} ({ctx.morning_run.trigger})")
-    expected = datetime.combine(ctx.today, ctx.config.start) + timedelta(
-        minutes=ctx.config.wake_delay_minutes
-    )
+    installed = morning_set_up_after(ctx)
+    if installed:
+        start = ctx.config.start
+        return Result(f"none today: bosun was set up at {installed:%H:%M}, after its {start:%H:%M} run")
+    expected = datetime.combine(day, ctx.config.start) + timedelta(minutes=ctx.config.wake_delay_minutes)
     message = (
         f"No morning run today: it was due at {expected:%H:%M} and {ctx.morning_log.name} has none. "
         "Check that the Mac woke and the launchd job is loaded (bosun doctor), "
         "then run bosun morning."
     )
-    return Result(findings=[Finding(f"morning-missing:{ctx.today}", message, confirm=True)])
+    return Result(findings=[Finding(f"morning-missing:{day}", message, confirm=True)])
 
 
 def unfinished_run(ctx: Context, run: MorningRun) -> Result:
@@ -543,6 +562,8 @@ def check_morning_failed(ctx: Context) -> Result:
         return Result("no morning run today")
     if run.outcome == "running":
         return unfinished_run(ctx, run)
+    if run.outcome == "skipped":
+        return Result(f"the {run.started:%H:%M} run was skipped: bosun was quit")
     if not run.problems:
         return Result(f"the {run.started:%H:%M} run completed")
     message = (
@@ -712,10 +733,12 @@ def session_gate_kind(ctx: Context) -> tuple[str, str] | None:
     return day_gate_kind(ctx)
 
 
-def day_gate_kind(ctx: Context) -> tuple[str, str] | None:
-    """session_gate_kind for a bosun that is not quit: the awake window, the morning run, `bosun stop`."""
-    if not in_awake_window(ctx.config, ctx.now):
-        return GATE_OUTSIDE, "outside the awake window"
+def morning_gate_kind(ctx: Context) -> tuple[str, str] | None:
+    """day_gate_kind's part of the morning run, inside the awake window: none is coming today (bosun was set
+    up after its time), it is not due yet, there was none, or it is still going; None once it ended."""
+    installed = morning_set_up_after(ctx) if ctx.morning_run is None else None
+    if installed:  # no run is coming today: not "not due yet", which the menu shows as starting
+        return GATE_NO_MORNING, f"no morning run today: bosun was set up at {installed:%H:%M}, after its time"
     due = morning_due(ctx.config, ctx.today)
     if ctx.now < due:
         return GATE_NOT_DUE, f"not expected before {due:%H:%M}"
@@ -723,6 +746,16 @@ def day_gate_kind(ctx: Context) -> tuple[str, str] | None:
         return GATE_NO_MORNING, "no morning run today (see morning-missing)"
     if ctx.morning_run.outcome == "running":
         return GATE_MORNING_RUNNING, "the morning run is still going"
+    return None
+
+
+def day_gate_kind(ctx: Context) -> tuple[str, str] | None:
+    """session_gate_kind for a bosun that is not quit: the awake window, the morning run, `bosun stop`."""
+    if not in_awake_window(ctx.config, ctx.now):
+        return GATE_OUTSIDE, "outside the awake window"
+    morning = morning_gate_kind(ctx)
+    if morning:
+        return morning
     stopped = stopped_today(ctx)
     if stopped:
         return GATE_STOPPED, f"you stopped it at {stopped:%H:%M} (bosun stop)"
@@ -942,6 +975,9 @@ def learn_missing(ctx: Context, runs: list[dict[str, Any]]) -> Result:
         return Result(f"next run due at {ctx.config.learn_at:%H:%M} on a scheduled day")
     if any(local_time(str(r["started"])) >= due for r in runs):
         return Result(f"ran today after {due:%H:%M}")
+    installed = set_up_after(ctx, due)
+    if installed:
+        return Result(f"none today: bosun was set up at {installed:%H:%M}, after it was due at {due:%H:%M}")
     message = (
         f"No learning run today: it was due at {due:%H:%M}. Check its launchd agent (bosun doctor), "
         "or run bosun learn."

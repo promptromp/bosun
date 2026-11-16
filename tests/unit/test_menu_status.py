@@ -925,6 +925,34 @@ class GatherTestCase(unittest.TestCase):
         found = menu_status_live.gather(self.env, evening, run, kernel_time=lambda _name: None)
         self.assertEqual(found.gate, SessionGate(menu_status.RESTING))
 
+    def test_not_now_after_an_install_inside_the_hours_is_no_error_and_no_start(self) -> None:
+        """Installed at 09:40 on a scheduled day (after the 08:00 start, so no morning run today), and "Not
+        now" to starting the windows: before install.sh's stamp, morning-missing made this a red "bosun is not
+        running"; with it, all well, not starting (Start shown), and no problem."""
+        facts_json = {**WATCHDOG_FACTS, "session_exists": False, "windows": []}
+        run = FakeCommands({"sessions --json": json.dumps(GONE), "watchdog --facts": json.dumps(facts_json)})
+
+        def status(moment: datetime = NOW) -> dict[str, Any]:
+            found = menu_status_live.gather(self.env, moment, run, kernel_time=lambda _name: None)
+            return menu_status.snapshot(found, moment)
+
+        before = status()
+        self.assertEqual((before["level"], before["sentence"]), ("error", "bosun is not running"))
+        self.assertIn("No morning run today", " ".join(before["problems"]))
+        (self.state / watchdog.INSTALLED).write_text("2026-11-11 09:40:00\n")
+        after = status()
+        self.assertEqual(
+            (after["level"], after["sentence"], after["problems"]), ("ok", "bosun is not running", [])
+        )
+        self.assertIs(after["starting"], False)
+        # installed at 08:03, between the start and when the run is due (08:16): no run is coming, so not
+        # "starting", which would hide Start
+        (self.state / watchdog.INSTALLED).write_text("2026-11-11 08:03:00\n")
+        early = status(NOW.replace(hour=8, minute=5))
+        self.assertEqual(
+            (early["level"], early["sentence"], early["starting"]), ("ok", "bosun is not running", False)
+        )
+
     def test_a_morning_that_crashed_is_not_called_starting(self) -> None:
         # No end line, the launchd job not running with exit 1: outcome stays "running"
         header = (

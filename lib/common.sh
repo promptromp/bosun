@@ -746,6 +746,10 @@ release_keep_awake() {
 # expect the session on a day you stopped it.
 stop_marker() { echo "$BOSUN_STATE_DIR/stopped-$BOSUN_SESSION_NAME"; }
 
+# When install.sh last set bosun up (`date '+%F %T'`): the watchdog's day checks owe no morning or learning run
+# that was due before it (lib/watchdog.py's set_up_after), since its launchd job was not loaded at its time.
+installed_marker() { echo "$BOSUN_STATE_DIR/installed"; }
+
 # Whether `bosun quit` left bosun stopped until it is started (lib/quit_state.py, quit.json in the state
 # folder): succeeds and prints the time of the quit (HH:MM). The watchdog's and learning's scheduled runs
 # skip while it does; quit_paused is the same for the morning run, when the quit also paused it.

@@ -10,8 +10,10 @@
 #      BOSUN_LEARN_ENABLED=1; and the console, with BOSUN_CONSOLE_ALWAYS=1. One whose setting is off is removed
 #   3. print (or with --with-wake, run via sudo) the pmset repeating-wake command; with BOSUN_WAKE=0 (the wake is
 #      not bosun's to set) neither, unless --with-wake
-#   4. link `bosun` into ~/.local/bin
-#   5. run `bosun doctor`
+#   4. stamp the time bosun was set up ($BOSUN_STATE_DIR/installed): the watchdog owes no morning or learning
+#      run that was due before it, since its job was not loaded at its time
+#   5. link `bosun` into ~/.local/bin
+#   6. run `bosun doctor`
 # Exit status: 0 done; 1 a step failed (its ERROR line says which), and the steps after it were not made; 2 bad
 # usage; 3 every step was made, and `bosun doctor` found problems (its FAIL lines).
 set -uo pipefail
@@ -96,6 +98,9 @@ elif [ "$BOSUN_WAKE" = "1" ]; then
 else
   log "the Mac's repeating wake is not bosun's to set (BOSUN_WAKE=0): pmset is left as it is"
 fi
+
+# The watchdog's day checks go by it: a morning or learning run due before now was not owed, its job not loaded.
+date '+%F %T' >"$(installed_marker)" || die "could not write $(installed_marker)"
 
 # Last: get.sh takes this link for an install that is set up, and runs `bosun update` on it; made any
 # earlier, an install cut short after it (at the jobs, or at sudo for the wake) would never be finished.
