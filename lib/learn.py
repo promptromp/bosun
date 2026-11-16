@@ -933,18 +933,24 @@ def propose(
         except IdTaken as exc:
             dropped.append(f"{finding.title}: {exc}")
             continue
-        state.findings[finding.key].update(status="proposed", item=learn_id, **digests)
+        recorded = {"status": "proposed", "item": learn_id, **digests}
+        state.findings[finding.key].update(recorded)
         proposed[finding.key] = learn_id
-        keep_finding(config.learn_dir, finding.key, state.findings[finding.key])
+        keep_finding(config.learn_dir, finding.key, recorded, state.findings[finding.key])
     return proposed
 
 
-def keep_finding(learn_dir: Path, key: str, info: dict[str, Any]) -> None:
-    """<key>'s entry saved in learn's state at once: a run that fails later saves nothing else of
-    what it found (finish reloads the state), and an item learn does not know it cannot apply."""
+def keep_finding(learn_dir: Path, key: str, recorded: dict[str, Any], entry: dict[str, Any]) -> None:
+    """What a proposal <recorded> of finding <key> (status, item, digests), saved in learn's state at
+    once: a run that fails later saves nothing else of what it found (finish reloads the state), and
+    an item learn does not know it cannot apply. Only a new finding is saved whole (<entry>); a known
+    one keeps its stored counts, since the next run reads the same window again and counts it then."""
 
     def change(state: State) -> None:
-        state.findings[key] = dict(info)
+        if key in state.findings:
+            state.findings[key].update(recorded)
+        else:
+            state.findings[key] = dict(entry)
 
     update_state(learn_dir, change)
 

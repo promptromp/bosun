@@ -332,6 +332,26 @@ class UpdateGateTest(LearnCase):
         self.assertEqual(self.state().findings[DRAFTS["key"]]["status"], "proposed")
         self.assertEqual(self.apply(learn_id)[0], 0)
 
+    def test_a_known_finding_proposed_by_a_failed_run_is_not_counted_twice(self) -> None:
+        known = {"title": "t", "category": "stall", "times_seen": 1, "status": "reported"}
+        learn.update_state(self.config.learn_dir, lambda s: s.findings.__setitem__(STALL["key"], dict(known)))
+        self.analysis_returns(STALL, DRAFTS)
+        record = learn.record_proposal
+
+        def refuse_the_second(finding: learn.Finding, *args: Any) -> tuple[str, dict[str, str]]:
+            if finding.key == DRAFTS["key"]:
+                raise update_gate.WriteRefused("an update started")
+            return record(finding, *args)
+
+        with mock.patch.object(learn, "record_proposal", side_effect=refuse_the_second):
+            self.assertEqual(self.run_learn()[0], 1)
+        stored = self.state().findings[STALL["key"]]
+        self.assertEqual((stored["status"], stored["times_seen"]), ("proposed", 1))
+        self.assertTrue(stored["item"].startswith("learn:"))
+        self.assertNotIn(DRAFTS["key"], self.state().findings)  # a new finding the run did not propose
+        self.assertEqual(self.run_learn()[0], 0)  # the same window again: counted once
+        self.assertEqual(self.state().findings[STALL["key"]]["times_seen"], 2)
+
     def test_a_refused_apply_changes_nothing_and_a_later_one_applies_once(self) -> None:
         self.analysis_returns(STALL, DRAFTS)
         self.run_learn()

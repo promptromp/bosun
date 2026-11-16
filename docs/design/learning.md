@@ -180,8 +180,9 @@ Deferred (ROADMAP), each for a reason:
   passwords, signed URL queries and email addresses before it cuts an excerpt (a private key cut
   short already is redacted from its BEGIN marker on). The analysis call sends it to the same model
   provider the sessions already use; no other service sees it.
-- **Retention.** Run folders (digest, prompt, raw result, report), dry runs' too, are deleted after
-  14 days, by the next run of any kind (a scheduled one that is not due included);
+- **Retention.** Run folders (digest, prompt, raw result, stderr, report), dry runs' too, are deleted after
+  14 days, when a run starts (a dry run, a digest, a scheduled one that is not due; not one that
+  `libexec/bosun-learn` skips during an update's hold or, scheduled, while bosun is quit);
   `state.json` keeps keys, titles and counts, not excerpts.
 - **People.** Memory notes are work-relevant only (how someone prefers to work with the user, never
   judgements); the prompt says so, and the user reviews each note.
