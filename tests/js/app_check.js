@@ -295,6 +295,18 @@ async function main() {
     return node.children.length === 2 && node.textContent === "abc" ? problems(node) : `got ${node.textContent}`;
   });
 
+  check("a window with no credit is a login problem, on its card and in the Login card", () => {
+    const { windowCard, loginCard } = sandbox;
+    const login = { state: "no-credit", detail: "every reply since Mon 09:00 is 'credit balance too low' (billing_error/400)" };
+    const window = { name: "orch", kind: "orchestrator", dir: "", model: "", effort: "", window: false, state: "idle" };
+    const card = windowCard({ ...window, agent: null, held: [], active: null, last_report: null, login, attach: "" });
+    const health = loginCard({ state: "ok", detail: "logged in", last_check: null, gated: [], windows: [{ name: "orch", ...login }] });
+    const marked = (node) => [...walk(node)].filter((n) => n.nodeType === 1 && n.classList.contains("problem")).map((n) => n.textContent);
+    if (!marked(card).some((text) => text.startsWith("no-credit: every reply since"))) return "the window card does not mark it";
+    if (!marked(health).includes("@orch: no-credit")) return "the Login card does not mark it";
+    return problems(card) || problems(health);
+  });
+
   check("pairs() renders names and values, nested ones too, as elements", () => {
     const node = pairs([["window", "@exporter"], ["results", [el("div", {}, "one"), el("div", {}, "two")]], ["empty", ""]]);
     const names = node.children.filter((child) => child.nodeName === "DT").map((child) => child.textContent);

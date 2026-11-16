@@ -1002,7 +1002,7 @@ function loginCard(l) {
       ["state", [badge(l.state, level), " ", l.detail]],
       ["last check", l.last_check ? `${when(l.last_check.at)}: ${l.last_check.outcome}` : "none yet"],
       ["paused", l.gated.length ? l.gated.map((g) => el("div", {}, `@${g.window} since ${when(g.since)}`)) : ""],
-      ["windows", l.windows.length ? l.windows.map((w) => el("div", { className: "small" }, `@${w.name}: ${w.state}`)) : ""],
+      ["windows", l.windows.length ? l.windows.map((w) => el("div", { className: LOGIN_PROBLEMS.includes(w.state) ? "small problem" : "small" }, `@${w.name}: ${w.state}`)) : ""],
     ]),
   );
 }
