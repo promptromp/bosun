@@ -1348,6 +1348,13 @@ seconds_until_awake_end() {
   echo $((target > now ? target - now : 0))
 }
 
+# The morning run's log for now (lib/awake.py's morning-log, the one owner of its name): the workday's, the day the
+# awake window that now is in began, so a run past midnight in a window that runs past it is that day's, as the
+# watchdog, the status and the console read it.
+morning_log_file() {
+  echo "$BOSUN_LOG_DIR/$(python3 "$BOSUN_ROOT/lib/awake.py" morning-log --days "$BOSUN_DAYS" --start "$BOSUN_START_TIME" --until "$BOSUN_AWAKE_UNTIL")"
+}
+
 # Seconds left in the awake window that now is in: the one rule (lib/awake.py, which the watchdog and the status
 # use too), so `bosun morning --now` and they agree on what "inside" is. Exits 3 (awake.OUTSIDE) printing
 # nothing outside every window; 2 printing one line when BOSUN_DAYS, BOSUN_START_TIME or BOSUN_AWAKE_UNTIL does

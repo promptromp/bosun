@@ -33,6 +33,7 @@ from typing import Any
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import awake
 import claude_state
 import event_model
 import events
@@ -183,8 +184,15 @@ def window_logins(windows: list[dict[str, Any]], state: login.State) -> dict[str
     return found
 
 
-def morning_log(settings: Settings) -> Path:
-    return settings.log_dir / f"morning-{datetime.now():%Y-%m-%d}.log"
+def morning_log(settings: Settings, now: datetime | None = None) -> Path:
+    """The morning run's log for now: the workday's (awake.workday), as the watchdog reads it and `bosun
+    morning` writes it; today's when the schedule does not load."""
+    moment = now or datetime.now()
+    try:
+        day = awake.workday(watchdog_config(settings).awake, moment)
+    except LiveError:
+        day = moment.date()
+    return settings.log_dir / awake.morning_log_name(day)
 
 
 @dataclass

@@ -97,7 +97,7 @@ start_in_background() {
     fi
   done
   if launchd_said="$(launchctl kickstart "gui/$(id -u)/$label" 2>&1)"; then
-    log "morning run started by launchd ($label); its log is $BOSUN_LOG_DIR/morning-$(date +%F).log"
+    log "morning run started by launchd ($label); its log is $(morning_log_file)"
   else
     die "launchd did not start $label: $(tr '\n' ' ' <<<"$launchd_said")"
   fi
@@ -105,7 +105,7 @@ start_in_background() {
 }
 [ "$BACKGROUND" = "1" ] && start_in_background
 
-LOG_FILE="$BOSUN_LOG_DIR/morning-$(date +%F).log"
+LOG_FILE="$(morning_log_file)" # the workday's: a run past midnight, in a window that runs past it, is that day's
 exec > >(tee -a "$LOG_FILE") 2>&1
 LOG_TO_FILE=0 # all of its output goes to its day's file already (log() in lib/common.sh)
 

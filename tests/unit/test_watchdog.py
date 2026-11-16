@@ -19,6 +19,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import app_release
+import awake
 import claude_state
 import login
 import quit_state
@@ -565,6 +566,21 @@ class PastMidnightTest(WatchdogCase):
         self.assertEqual(len(sent), 1)
         self.assertIn("tmux session 'main' is not running", sent[0])
         self.assertIn(f"session-missing:{MONDAY}", self.state()["alerted"])
+
+    def test_a_late_run_past_midnight_is_the_workday_s(self) -> None:
+        """The Mac asleep all day, opened at 00:30 Tuesday: launchd runs the missed 08:00 job then, and `bosun
+        morning` writes it in the workday's log (awake.py morning-log), which the watchdog reads: no false
+        "No morning run today", and the session is expected."""
+        name = awake.morning_log_name(awake.workday(self.config.awake, at(TUESDAY, "00:30")))
+        self.assertEqual(name, f"morning-{MONDAY}.log")
+        (self.log_dir / name).write_text(
+            f"{TUESDAY} 00:30:00 [morning] === morning run (trigger=launchd, session=main, dry_run=0) ===\n"
+            f"{TUESDAY} 00:32:00 [morning] morning run complete\n"
+        )
+        ctx = self.inputs(at(TUESDAY, "00:40")).context(watchdog.State())
+        self.assertEqual(watchdog.check_morning_missing(ctx).findings, [])
+        self.assertIsNone(watchdog.session_gate_kind(ctx))
+        self.assertEqual(self.runs(at(TUESDAY, "00:40"), 2), [])
 
     def test_a_stop_before_or_after_midnight_counts_until_the_window_ends(self) -> None:
         self.morning_run(MONDAY)

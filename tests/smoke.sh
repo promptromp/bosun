@@ -3373,7 +3373,7 @@ rm -f "$BOSUN_STATE_DIR/quit.json" "$BOSUN_STATE_DIR/console/wanted" "$BOSUN_STA
 # current time, so these hold whatever time the suite runs at: a window ending in 20 minutes that began 2 minutes
 # ago is inside (an end earlier than the start runs past midnight, which the window rule handles), one that is 10
 # to 20 minutes ahead is outside, and with every day but today's and yesterday's scheduled, no window holds now.
-section morning-now "morning --now (the morning run at any hour or day)" needs quit covers 'libexec/bosun-morning,libexec/bosun-quit,libexec/bosun-stop,libexec/bosun-ledger,lib/keep_awake.py,lib/login_start.py'
+section morning-now "morning --now (the morning run at any hour or day)" needs quit covers 'libexec/bosun-morning,libexec/bosun-quit,libexec/bosun-stop,libexec/bosun-ledger,lib/keep_awake.py,lib/login_start.py,lib/awake.py'
 today_letter="$(printf MTWRFSU | cut -c "$(date +%u)")"
 yesterday_letter="$(printf MTWRFSU | cut -c "$(date -v-1d +%u)")"
 unscheduled_days="$(printf MTWRFSU | tr -d "$today_letter$yesterday_letter")"
@@ -3413,6 +3413,15 @@ out="$(now_morning "${awake_inside[@]}" "$BOSUN" morning --now --skip-setup)"
 check "--now inside the awake window holds the keep-awake until BOSUN_AWAKE_UNTIL (the record says so) and starts the session" bash -c 'grep -q "holding keep-awake for " <<<"$1" && ! grep -q "outside the awake window" <<<"$1" && tmux -L "$2" has-session -t =smoke' _ "$out" "$SOCKET"
 check "... the record ends at that minute" keep_awake_ends_at "$inside_until"
 now_clean
+
+# A window that began yesterday and runs past midnight into now (an hour from now until half an hour from now, the
+# next day): the run's log is yesterday's, the workday's, which the watchdog reads (lib/awake.py's morning-log).
+now_hm=$((10#$(date +%H%M)))
+if [ "$now_hm" -ge 30 ] && [ "$now_hm" -lt 2230 ]; then
+  rm -f "$BOSUN_LOG_DIR/morning-$(date -v-1d +%F).log"
+  now_morning BOSUN_DAYS=MTWRFSU BOSUN_START_TIME="$(date -v+1H +%H:%M)" BOSUN_AWAKE_UNTIL="$(date -v+30M +%H:%M)" "$BOSUN" morning --now --dry-run >/dev/null
+  check "in a window that began yesterday and runs past midnight, the run's log is the workday's, as the watchdog reads it" grep -q "=== morning run (trigger=now, session=smoke, dry_run=1) ===" "$BOSUN_LOG_DIR/morning-$(date -v-1d +%F).log"
+fi
 
 out="$(now_morning "${awake_unscheduled[@]}" "$BOSUN" morning --now --skip-setup)"
 check "--now on a day that is not scheduled holds no keep-awake, and starts the session" bash -c 'grep -q "outside the awake window" <<<"$1" && ! grep -q "holding keep-awake" <<<"$1" && tmux -L "$2" has-session -t =smoke' _ "$out" "$SOCKET"

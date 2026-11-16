@@ -493,14 +493,12 @@ class Context:
 
     @property
     def workday(self) -> date:
-        """The day the morning run, the session and the day's findings belong to: the day the awake window
-        that now is in began (yesterday, in a window that runs past midnight), else today."""
-        current = self.config.awake.current(self.now)
-        return current[0].date() if current else self.today
+        """The day the morning run, the session and the day's findings belong to (awake.workday)."""
+        return awake.workday(self.config.awake, self.now)
 
     @property
     def morning_log(self) -> Path:
-        return self.config.log_dir / f"morning-{self.workday:%Y-%m-%d}.log"
+        return self.config.log_dir / awake.morning_log_name(self.workday)
 
 
 def window_signals(ctx: Context, window: str, record: dict[str, Any] | None) -> signals.Signals:
