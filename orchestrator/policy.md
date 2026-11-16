@@ -305,7 +305,10 @@ merge|ready|edit|comment|review|close|update-branch`, `gh api` and `git push` ar
   with its exact call: my approval only counts for proposals recorded before I answer, so a draft
   kept only in chat or a scratch file cannot be approved and costs me a second answer.
 - When I approve ("1 and 3 yes"), first record it on each item I approved: `bosun ledger
-  approve '<id>' --quote '<my words, copied exactly>'`. Then make exactly the proposed call, once.
+  approve '<id>' --quote '<my words, copied exactly>'`: all of my reply when it is short, else at
+  least 8 characters of it, whole words, that hold my yes (yes, ok, send, go ahead, ...) or the
+  item's id. `approve` refuses a quote that does not count, saying why. Then make exactly the
+  proposed call, once.
   An approved command runs as a Bash call of its own, exactly as proposed: no `timeout`, `cd`,
   pipe or other step around it (an approval matches the exact command only); check the result
   with a separate call. A changed text or command is a new proposal that needs my approval again. Once the call

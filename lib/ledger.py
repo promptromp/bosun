@@ -181,6 +181,10 @@ class Store:
     # What the journal records as the command of each write ("ledger transition", "guard"): set
     # with configure_command by each command that configures the ledger; unset, unnamed.
     command: str = ""
+    # BOSUN_ORCHESTRATOR and BOSUN_DRAIN_PROMPT (configure_approvals): what `ledger approve` needs to
+    # tell my prompts from what bosun pasted into the orchestrator, as the guard does.
+    orchestrator: str = ""
+    drain_prompt: str = ""
 
     @property
     def rules_file(self) -> Path | None:
@@ -229,6 +233,8 @@ def configure(
     STORE.owned_projects = frozenset()
     STORE.orchestrator_dir = ""
     STORE.command = ""
+    STORE.orchestrator = ""
+    STORE.drain_prompt = ""
     STORE.state_dir = Path(state_dir)
     STORE.mask = mask
     STORE.status_map = status_map
@@ -253,6 +259,13 @@ def configure_tickets(owned_projects: str, orchestrator_dir: str = "") -> None:
 def configure_scan(lookback_hours: float, max_lookback_hours: float) -> None:
     """Set the Slack scan window (BOSUN_SLACK_LOOKBACK_HOURS, ..._MAX_LOOKBACK_HOURS)."""
     STORE.scan = ScanWindow(lookback_hours, max_lookback_hours)
+
+
+def configure_approvals(orchestrator: str, drain_prompt: str) -> None:
+    """Set the orchestrator's window (BOSUN_ORCHESTRATOR), whose pasted prompts are not mine, and the
+    drain prompt (BOSUN_DRAIN_PROMPT), which `ledger approve` leaves out as the guard does."""
+    STORE.orchestrator = orchestrator
+    STORE.drain_prompt = drain_prompt
 
 
 def configure_command(command: str) -> None:
@@ -1998,14 +2011,55 @@ def cmd_propose(args: argparse.Namespace) -> str:
 MAX_QUOTE_LENGTH = 500
 
 
+@dataclass(frozen=True)
+class SessionPrompts:
+    """The prompts of the agent session a command runs in, and how to tell mine among them."""
+
+    prompts: approvals.PromptSource
+    speaker: approvals.Speaker
+
+
+def approving_session() -> SessionPrompts | None:
+    """The prompts of the agent session that runs `ledger approve` (agent_state.calling_session), when
+    bosun can check a quote of my words there; None from a terminal, or from an agent whose prompts bosun
+    cannot read: the guard still checks the quote when the call is made."""
+    session = agent_state.calling_session()
+    if session is None or not session.verifies_quotes or session.transcript is None:
+        return None
+    if not session.transcript.is_file():
+        return None
+    window = STORE.orchestrator
+    pasted = events.pasted_hashes(STORE.state_dir, window, datetime.now(UTC)) if window else set()
+    speaker = approvals.Speaker(frozenset(pasted), STORE.drain_prompt)
+    return SessionPrompts(approvals.transcript_prompts(str(session.transcript)), speaker)
+
+
+def check_approval_quote(
+    item_id: str, proposal: dict[str, Any], approval: dict[str, Any], session: SessionPrompts | None
+) -> None:
+    """Refuse an approval whose quote the guard would not take (approvals.quote_verified), checked in
+    the session that records it; from no session there is nothing to check it in yet."""
+    if session is None:
+        return
+    if approvals.quote_verified(approval, proposal["proposed_at"], session.prompts, session.speaker, item_id):
+        return
+    raise LedgerError(
+        f"the quote {approval['quote']!r} does not count as my approval of {item_id} in this session, so "
+        f"nothing was recorded: {approvals.QUOTE_RULE}. Quote my reply as I typed it: all of it when it is "
+        "short, else the words of it that approve this item"
+    )
+
+
 def cmd_approve(args: argparse.Namespace) -> str:
     """Record my approval of the pending proposal's action spec, quoting my words; the guard lets
-    exactly that call through once (lib/approvals.py)."""
+    exactly that call through once (lib/approvals.py). From an agent's session, a quote the guard would
+    not take is refused here (check_approval_quote)."""
     quote = approvals.normalize(args.quote)
     if not quote or len(quote) > MAX_QUOTE_LENGTH:
         raise LedgerError(
             f"--quote takes my exact words of approval as I typed them (1 to {MAX_QUOTE_LENGTH} characters)"
         )
+    session = approving_session()
     with locked_ledger(write=True) as ledger:
         item = get_item(ledger, args.id)
         proposal = item.get("proposal")
@@ -2017,7 +2071,9 @@ def cmd_approve(args: argparse.Namespace) -> str:
             )
         if (proposal.get("approval") or {}).get("used_at"):
             raise LedgerError(f"{args.id}'s approval was already used; propose it again for another call")
-        proposal["approval"] = {"at": now(), "quote": quote, "hash": approvals.spec_hash(proposal["spec"])}
+        approval = {"at": now(), "quote": quote, "hash": approvals.spec_hash(proposal["spec"])}
+        check_approval_quote(args.id, proposal, approval, session)
+        proposal["approval"] = approval
         record(item, "approved", quote, action=proposal["action"])
     return f"ok: {args.id} approved ('{quote}'); make exactly the proposed call now"
 
@@ -4627,6 +4683,7 @@ def configure_from_environment(command: str = "") -> None:
     configure_command(command)
     configure_site(os.environ.get("BOSUN_CONFIG_DIR") or None)
     configure_tickets(os.environ.get(tickets.OWNED_SETTING, ""), os.environ.get("BOSUN_ORCHESTRATOR_DIR", ""))
+    configure_approvals(os.environ.get("BOSUN_ORCHESTRATOR", ""), os.environ.get("BOSUN_DRAIN_PROMPT", ""))
     configure_scan(
         hours_setting("BOSUN_SLACK_LOOKBACK_HOURS", DEFAULT_LOOKBACK_HOURS),
         hours_setting("BOSUN_SLACK_MAX_LOOKBACK_HOURS", DEFAULT_MAX_LOOKBACK_HOURS),

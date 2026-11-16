@@ -790,7 +790,7 @@ def approved_commands(event: dict[str, Any], settings: ApprovalSettings) -> list
             (item["id"], proposal["spec"]["command"])
             for item, proposal in approvals.pending_specs(book["items"])
             if proposal["spec"].get("type") == approvals.RUN
-            and approvals.approval_problem(proposal, prompts, settings.speaker) is None
+            and approvals.approval_problem(proposal, prompts, settings.speaker, item["id"]) is None
         ]
 
 

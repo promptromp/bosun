@@ -8,9 +8,10 @@ stores proposals and approvals, lib/guard.py runs the checks as hooks.
   a spec only exactly: the same channel, thread and text (whitespace-normalized), the same command
   string, the same tool and arguments.
 - An approval (`ledger approve <id> --quote '<my words>'`) is good for one call, and only while
-  the quote appears in a prompt I typed (or sent from my phone) in the calling session, between the
-  proposal and the approval. Text bosun pasted, other sessions' messages, tool results and
-  context summaries never count.
+  the quote is my approval in a prompt I typed (or sent from my phone) in the calling session,
+  between the proposal and the approval: all of that prompt, or at least MIN_QUOTE_CHARS of its
+  whole words holding an approving word or the proposal's id (approval_quote_in). Text bosun pasted,
+  other sessions' messages, tool results and context summaries never count.
 - Standing classes (BOSUN_STANDING_CLASSES) allow routine PR traffic without a chat approval,
   under the conditions in STANDING_CLASSES below.
 - After the call (PostToolUse / PostToolUseFailure): which used approval the call carried out, and
@@ -153,6 +154,76 @@ def quote_in(quote: str, texts: Iterable[str]) -> bool:
     return bool(wanted) and any(wanted in normalize(text).casefold() for text in texts)
 
 
+# A quote that is not a whole prompt counts for an approval only at this length, and only holding an
+# approving word or the proposal's id: "e" or "today" is in nearly every prompt and says nothing of it.
+MIN_QUOTE_CHARS = 8
+APPROVING_WORDS = (
+    "yes",
+    "yep",
+    "ok",
+    "okay",
+    "sure",
+    "go ahead",
+    "approve",
+    "approved",
+    "send",
+    "do it",
+    "lgtm",
+    "ship it",
+    "proceed",
+    "confirm",
+    "confirmed",
+    "fine",
+)
+QUOTE_RULE = (
+    "a quote counts only from a prompt typed (or sent from the phone) in this session after the proposal: "
+    f'all of that prompt ("yes", "1 and 3"), or at least {MIN_QUOTE_CHARS} characters of its whole words '
+    f"that hold an approving word ({', '.join(APPROVING_WORDS[:7])}, ...) or the item's id. Tool results, "
+    "pasted and injected text never count"
+)
+WORD_CHAR = re.compile(r"\w")
+EDGE_PUNCTUATION = re.compile(r"^\W+|\W+$")
+
+
+def comparable(text: str) -> str:
+    """A prompt as a quote is compared with it: as typed (activity.unwrap), runs of whitespace as one
+    space, case-folded."""
+    return normalize(activity.unwrap(text)).casefold()
+
+
+def at_word_edges(wanted: str, text: str) -> bool:
+    """Whether <wanted> occurs in <text> without beginning or ending inside a word (both comparable):
+    "e" is not in "yes", nor "es, sta" in "yes, staging"."""
+    if not wanted:
+        return False
+    start = r"(?<!\w)" if WORD_CHAR.match(wanted[0]) else ""
+    end = r"(?!\w)" if WORD_CHAR.match(wanted[-1]) else ""
+    return re.search(start + re.escape(wanted) + end, text) is not None
+
+
+def whole_prompt(wanted: str, text: str) -> bool:
+    """Whether <wanted> is all of <text> (both comparable), apart from punctuation at either end."""
+    bare = EDGE_PUNCTUATION.sub("", wanted)
+    return bool(bare) and bare == EDGE_PUNCTUATION.sub("", text)
+
+
+def approves(wanted: str, item_id: str) -> bool:
+    """Whether a quote (comparable) holds an approving word or <item_id>, as whole words."""
+    marks = (*APPROVING_WORDS, item_id.casefold()) if item_id else APPROVING_WORDS
+    return any(at_word_edges(mark, wanted) for mark in marks)
+
+
+def approval_quote_in(quote: str, texts: Iterable[str], item_id: str) -> bool:
+    """Whether <quote> is my approval of proposal <item_id> in one of <texts>: all of one ("yes", "1 and
+    3"), or at least MIN_QUOTE_CHARS of its whole words holding an approving word or the id."""
+    wanted = normalize(quote).casefold()
+    partial = len(wanted) >= MIN_QUOTE_CHARS and approves(wanted, item_id)
+    return any(
+        whole_prompt(wanted, text) or (partial and at_word_edges(wanted, text))
+        for text in map(comparable, texts)
+    )
+
+
 PromptSource = Callable[[datetime], list[claude_state.Prompt]]
 
 
@@ -170,13 +241,14 @@ def transcript_prompts(transcript: str) -> PromptSource:
 
 
 def quote_verified(
-    approval: dict[str, Any], proposed_at: str, prompts: PromptSource, speaker: Speaker
+    approval: dict[str, Any], proposed_at: str, prompts: PromptSource, speaker: Speaker, item_id: str
 ) -> bool:
-    """The approval's quote is in a genuine prompt made after the proposal and before the approval."""
+    """The approval's quote approves proposal <item_id> (approval_quote_in) in a genuine prompt made
+    after the proposal and before the approval."""
     start = datetime.fromisoformat(proposed_at)
     end = datetime.fromisoformat(approval["at"]) + APPROVAL_GRACE
     texts = [p.text for p in prompts(start) if p.at <= end and is_genuine(p.text, speaker)]
-    return quote_in(str(approval.get("quote", "")), texts)
+    return approval_quote_in(str(approval.get("quote", "")), texts, item_id)
 
 
 # ---- verdicts ---------------------------------------------------------------------------------
@@ -207,8 +279,10 @@ def pending_specs(items: dict[str, Item]) -> Iterable[tuple[Item, dict[str, Any]
             yield item, proposal
 
 
-def approval_problem(proposal: dict[str, Any], prompts: PromptSource, speaker: Speaker) -> str | None:
-    """Why a matching proposal's approval does not let the call through, or None."""
+def approval_problem(
+    proposal: dict[str, Any], prompts: PromptSource, speaker: Speaker, item_id: str
+) -> str | None:
+    """Why the approval of <item_id>'s matching proposal does not let the call through, or None."""
     approval = proposal.get("approval")
     if not approval:
         return "is proposed but not approved yet"
@@ -216,11 +290,8 @@ def approval_problem(proposal: dict[str, Any], prompts: PromptSource, speaker: S
         return "was approved in an earlier version; the proposal changed since"
     if approval.get("used_at"):
         return f"had its one approval used at {approval['used_at']}; propose and approve it again"
-    if not quote_verified(approval, proposal["proposed_at"], prompts, speaker):
-        return (
-            f"has an approval whose quote ({approval.get('quote', '')!r}) is not in anything the user typed "
-            "in this session after the proposal (tool results, pasted and injected text do not count)"
-        )
+    if not quote_verified(approval, proposal["proposed_at"], prompts, speaker, item_id):
+        return f"has an approval whose quote ({approval.get('quote', '')!r}) does not count: {QUOTE_RULE}"
     return None
 
 
@@ -230,7 +301,7 @@ def approved(items: dict[str, Item], call: Call, prompts: PromptSource, speaker:
     for item, proposal in pending_specs(items):
         if not call_matches(proposal["spec"], call.tool, call.tool_input):
             continue
-        problem = approval_problem(proposal, prompts, speaker)
+        problem = approval_problem(proposal, prompts, speaker, item["id"])
         if problem is None:
             return Verdict(APPROVED, item["id"])
         problems.append(f"{item['id']} {problem}")

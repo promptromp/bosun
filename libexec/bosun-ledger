@@ -46,7 +46,10 @@
 #                                                for (an action spec; the action defaults to it)
 #   approve <id> --quote '<my exact words>'      I approved the pending proposal's action spec in
 #                                                chat: the guard lets exactly that call through,
-#                                                once, while my words are in the session
+#                                                once, while my words are in the session: all of
+#                                                a prompt, or 8+ characters of its whole words
+#                                                with my yes or the id (refused here when they
+#                                                are not, from the session that runs it)
 #                                                (BOSUN_APPROVALS_ENABLED; docs/design/approvals.md)
 #   approvals [--since T] [--auto]               calls the guard let through: approved in chat, or
 #                                                (--auto: only) under a standing class
@@ -241,4 +244,5 @@ BOSUN_STATE_DIR="$BOSUN_STATE_DIR" BOSUN_REPO_MASK="$BOSUN_REPO_MASK" \
   BOSUN_SLACK_MAX_LOOKBACK_HOURS="$BOSUN_SLACK_MAX_LOOKBACK_HOURS" \
   BOSUN_EVENTS_ENABLED="$BOSUN_EVENTS_ENABLED" BOSUN_CALLER_WINDOW="$caller" \
   BOSUN_CONFIG_DIR="$BOSUN_CONFIG_DIR" \
+  BOSUN_ORCHESTRATOR="$BOSUN_ORCHESTRATOR" BOSUN_DRAIN_PROMPT="$BOSUN_DRAIN_PROMPT" \
   exec python3 "$BOSUN_ROOT/lib/ledger.py" "$@"

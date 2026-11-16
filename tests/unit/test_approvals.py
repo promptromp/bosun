@@ -18,6 +18,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import activity
+import agent_state
 import approvals
 import claude_state
 import guard
@@ -74,11 +75,14 @@ def tool_result(text: str, moment: datetime) -> dict[str, Any]:
 
 
 class ApprovalsTestCase(unittest.TestCase):
-    """A scratch ledger with my PR, and a transcript file for the session."""
+    """A scratch ledger with my PR, and a transcript file for the session. `ledger approve` runs from
+    no agent's session (a terminal) unless a test says otherwise: the suite itself may run inside one,
+    which must not count."""
 
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
+        self.approving_in(None)
         self.state = Path(self.tmp.name) / "state"
         ledger.configure(self.state)
         minted.forget()
@@ -92,6 +96,12 @@ class ApprovalsTestCase(unittest.TestCase):
             # touch stands in for an outward command (the headless check does the same)
             "BOSUN_APPROVALS_GATED_COMMANDS": "touch, acme-deploy run",
         }
+
+    def approving_in(self, session: agent_state.CallingSession | None) -> None:
+        """Run `ledger approve` from <session>, as the agent session that ran it; None: from a terminal."""
+        patcher = mock.patch.object(agent_state, "calling_session", return_value=session)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     @property
     def review_request_id(self) -> str:
@@ -171,6 +181,58 @@ class MatchingTest(unittest.TestCase):
             {kind: set(states) for kind, states in approvals.TERMINAL_STATES.items()},
             {kind: set(spec["terminal"]) for kind, spec in ledger.KINDS.items()},
         )
+
+
+class QuoteRuleTest(unittest.TestCase):
+    """What counts as my approval of a proposal (approvals.approval_quote_in): all of a prompt, or at
+    least MIN_QUOTE_CHARS of its whole words holding an approving word or the proposal's id."""
+
+    def counts(self, quote: str, *prompts: str, item_id: str = PR) -> bool:
+        return approvals.approval_quote_in(quote, prompts, item_id)
+
+    def test_a_whole_prompt_counts_however_short(self) -> None:
+        for quote, prompt in [
+            ("yes", "yes"),
+            ("send it", "Send it!"),
+            ("1 and 3", "  1 and\n3 "),
+            ("y", "y."),
+            ("go with option 2", "go with option 2"),
+        ]:
+            with self.subTest(quote=quote):
+                self.assertTrue(self.counts(quote, prompt))
+
+    def test_a_part_needs_whole_words_the_length_and_an_approving_word_or_the_id(self) -> None:
+        prompt = "1 and 3 YES, 2 skip; also check why the exporter's CI is red today"
+        self.assertTrue(self.counts("1 and 3 yes", prompt))
+        self.assertTrue(self.counts("1 and 3 yes, 2 skip", prompt))
+        self.assertTrue(self.counts(f"{PR} go", f"for {PR} go, the rest later"))
+        self.assertTrue(self.counts("ok, send that", "fine by me. OK, send that one"))
+        for quote in [
+            "e",  # one letter of any prompt
+            "today",  # a whole word, but short and approving nothing
+            "the exporter's CI is red",  # long enough, approving nothing
+            "es, 2 skip",  # cuts "YES" in half
+            "1 and 3 ye",  # cuts it at the other end
+            "yes",  # an approving word, too short as a part of a longer prompt
+            "check why the exporter's",  # long, but no approving word
+        ]:
+            with self.subTest(quote=quote):
+                self.assertFalse(self.counts(quote, prompt))
+
+    def test_an_approving_word_inside_another_word_is_none(self) -> None:
+        prompt = "yesterday's okayish draft is in the doc"
+        self.assertFalse(self.counts("yesterday's okayish", prompt))
+        self.assertFalse(self.counts("okayish draft", prompt))
+
+    def test_the_id_is_this_proposals(self) -> None:
+        prompt = f"{OTHER_PR} looks good to merge now"
+        self.assertTrue(self.counts(f"{OTHER_PR} looks good", prompt, item_id=OTHER_PR))
+        self.assertFalse(self.counts(f"{OTHER_PR} looks good", prompt, item_id=PR))
+
+    def test_text_bosun_pasted_is_compared_as_typed(self) -> None:
+        self.assertTrue(self.counts("yes", "<pasted_content>yes</pasted_content>"))
+        self.assertFalse(self.counts("", "anything"))
+        self.assertFalse(self.counts("...", "..."))
 
 
 class GatedTest(unittest.TestCase):
@@ -367,8 +429,35 @@ class ChatApprovalTest(ApprovalsTestCase):
                 self.approve_touch(entry)
                 self.assertFalse(self.allowed(self.event("Bash", command=TOUCH)))
                 self.assertIn(
-                    "is not in anything the user typed", self.denial(self.event("Bash", command=TOUCH)) or ""
+                    "does not count: a quote counts only from a prompt typed",
+                    self.denial(self.event("Bash", command=TOUCH)) or "",
                 )
+
+    def test_approve_in_a_session_refuses_a_quote_the_guard_would_not_take(self) -> None:
+        self.approving_in(agent_state.CallingSession("claude", 4242, self.transcript, True))
+        self.propose_touch()
+        self.say(typed("what is on my plate today?", self.now()))
+        for quote in ("e", "today", "on my plate", "what is on my plate today? yes"):
+            with self.subTest(quote=quote):
+                with self.assertRaises(ledger.LedgerError) as refused:
+                    run("approve", PR, "--quote", quote)
+                said = str(refused.exception)
+                self.assertIn(f"does not count as my approval of {PR} in this session", said)
+                self.assertIn("nothing was recorded", said)
+                self.assertIn(approvals.QUOTE_RULE, said)
+        self.assertNotIn("approval", self.item(PR)["proposal"])
+        self.say(typed("1 and 3 yes, and look at the CI", self.now()))
+        run("approve", PR, "--quote", QUOTE)
+        self.assertTrue(self.allowed(self.event("Bash", command=TOUCH)))
+
+    def test_approve_records_unchecked_where_it_cannot_read_the_session(self) -> None:
+        """From a terminal (the base case) or an agent whose prompts bosun cannot read, approve records
+        the quote, and the guard checks it when the call is made."""
+        self.approving_in(agent_state.CallingSession("codex", 4242, None, False))
+        self.propose_touch()
+        run("approve", PR, "--quote", "e")
+        self.assertFalse(self.allowed(self.event("Bash", command=TOUCH)))
+        self.assertIn("does not count", self.denial(self.event("Bash", command=TOUCH)) or "")
 
     def test_what_bosun_pasted_is_not_mine(self) -> None:
         events_dir = self.state / "events"
