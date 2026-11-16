@@ -514,6 +514,8 @@ class OtherQuestionsTest(unittest.TestCase):
         self.assertIn("sudo pmset repeat wakeorpoweron MTWRF 08:01:00", ui.screens[5])
         self.assertIn("password once", ui.screens[5])
         self.assertIn("charger", ui.screens[5])
+        # what bosun doctor checks: on power, and the lid open or an external display (never the lid alone)
+        self.assertIn("the lid open or an external display connected", " ".join(ui.screens[5].split()))
 
     def test_someone_elses_wake_is_kept_unless_you_say_otherwise(self) -> None:
         the_facts = facts(repeating_wake="wake at 6:00AM")

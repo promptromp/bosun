@@ -471,7 +471,7 @@ def wake_options(facts: Facts, answers: Answers) -> list[Option]:
     if command:
         yes += [f"Runs: {command}", "That needs your password once, after you accept the plan."]
     if facts.has_battery:
-        yes.append("On a laptop, a scheduled wake needs the charger connected and the lid open.")
+        yes.append(init_plan.LAPTOP_WAKE_NOTE)
     if facts.repeating_wake:
         yes.append(f"pmset keeps only one repeating event, so this replaces: {facts.repeating_wake}")
     no = ("The morning run then happens the next time the Mac is awake after its start time.",)

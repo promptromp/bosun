@@ -241,6 +241,14 @@ class RecommendTest(unittest.TestCase):
         answers = init_plan.recommend(facts(repeating_wake="wake at 8:01AM", env={"BOSUN_DAYS": "MTWRF"}))
         self.assertTrue(answers.wake)
 
+    def test_a_laptop_s_wake_note_is_what_doctor_checks(self) -> None:
+        """On power, and the lid open or an external display: doctor's power and lid lines."""
+        self.assertEqual(
+            init_plan.wake_notes(facts(has_battery=True), Answers()), [init_plan.LAPTOP_WAKE_NOTE]
+        )
+        self.assertIn("the lid open or an external display connected", init_plan.LAPTOP_WAKE_NOTE)
+        self.assertEqual(init_plan.wake_notes(facts(), Answers()), [])
+
     def test_a_rerun_keeps_the_wake_answer_bosun_env_records(self) -> None:
         """A wake said no to (or another app's left) is BOSUN_WAKE=0, which a re-run recommends again; a
         bosun.env from before the key had the wake as bosun's, its default."""

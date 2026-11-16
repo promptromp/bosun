@@ -1007,11 +1007,16 @@ def login_notes(facts: Facts) -> list[str]:
     return notes
 
 
+# What `bosun doctor` checks of a laptop (its power and lid lines): on power, and the lid open or a display.
+LAPTOP_WAKE_NOTE = (
+    "On a laptop, a scheduled wake needs the charger connected, "
+    "and the lid open or an external display connected."
+)
+
+
 def wake_notes(facts: Facts, answers: Answers) -> list[str]:
     if answers.wake:
-        return [
-            "On a laptop, a scheduled wake needs the charger connected and the lid open."
-        ] * facts.has_battery
+        return [LAPTOP_WAKE_NOTE] * facts.has_battery
     if facts.repeating_wake:
         kept = (
             f"pmset already has a repeating event ({facts.repeating_wake}) and keeps only one, so it stays. "
