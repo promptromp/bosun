@@ -25,7 +25,8 @@ changes: the wizard only fills those in, so `--answers` and the wizard cannot di
 
 `install.sh` exits 3 when it made every step and only `bosun doctor` found problems, and 1 when a step stopped
 it. On 3, `init` goes on as on 0: it adds the menu bar app and asks to start the windows, then ends by saying
-doctor's problems again (each `FAIL` line, with what is listed under it) and exits 3. On 1 it says what stopped
+doctor's problems again (each `FAIL` line, with what is listed under it; when doctor stopped without one, the
+last lines it printed) and exits 3. On 1 it says what stopped
 `install.sh` (its last `ERROR` line), adds no app, asks nothing more and exits 1.
 
 **Nothing changes until you accept the plan.** In a terminal `bosun init` asks its questions and then

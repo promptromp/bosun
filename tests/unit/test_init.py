@@ -613,7 +613,8 @@ class CommandTest(WorldTest):
         status, out, err = self.bosun_init("--recommended")
         self.assertEqual(status, init.EXIT_DOCTOR)
         self.assertEqual(self.app_calls(), [["bosun", "app", "install"], ["bosun", "app", "login", "on"]])
-        self.assertIn("bosun is set up", out)
+        self.assertEqual(out.count("bosun is set up"), 1)  # said once: the closing names doctor's problems
+        self.assertNotIn("bosun is set up", err)
         self.assertTrue(err.rstrip().endswith("Fix them, then run bosun doctor again to check."))
         self.assertIn(
             "`bosun doctor` found problems:\n"
@@ -624,6 +625,22 @@ class CommandTest(WorldTest):
         )
         self.assertNotIn("on battery", err)
         self.assertNotIn("install.sh stopped", err)
+
+    def test_a_doctor_that_stopped_with_no_fail_line_says_its_last_lines(self) -> None:
+        self.install_status = init.EXIT_DOCTOR
+        self.install_lines = [
+            "Schedule",
+            "  ok    launchd job loaded",
+            "",
+            "doctor: line 9: jq: command not found",
+        ]
+        status, _, err = self.bosun_init("--recommended")
+        self.assertEqual(status, init.EXIT_DOCTOR)
+        self.assertIn(
+            "`bosun doctor` stopped before it was done; it said last:\nSchedule\n  ok    launchd job loaded\n"
+            "doctor: line 9: jq: command not found\nRun bosun doctor to see it whole.",
+            err,
+        )
 
     def test_an_install_sh_that_stopped_says_what_stopped_it(self) -> None:
         self.install_status = 1

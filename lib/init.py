@@ -40,6 +40,7 @@ EXIT_DOCTOR = 3  # set up, with the problems `bosun doctor` found; install.sh's 
 FAIL_LINE = "  FAIL  "  # how `bosun doctor` begins a check that failed
 UNDER_A_LINE = "    "  # how it indents what it lists under one (the missing tools, a store's findings)
 ERROR_MARK = "ERROR: "  # how lib/common.sh's die says what stopped a script
+LAST_LINES = 3  # of what install.sh printed, said again when doctor stopped without saying what failed
 UNATTENDED_VARIABLE = "BOSUN_INIT_UNATTENDED"  # what get.sh --unattended sets: --unattended
 # What get.sh hands init for this run only (init_detect's CHANNEL_VARIABLE among them): never for the windows
 HANDED_OVER = frozenset({"BOSUN_USER_PATH", "BOSUN_RERUN", UNATTENDED_VARIABLE, init_detect.CHANNEL_VARIABLE})
@@ -161,6 +162,7 @@ class Installed:
     status: int
     error: str = ""
     problems: tuple[str, ...] = ()
+    last_lines: tuple[str, ...] = ()  # what it printed last, said again when doctor stopped with no FAIL line
 
     @property
     def set_up(self) -> bool:
@@ -217,7 +219,8 @@ def run_steps(plan: Plan) -> Installed:
             print(f"No terminal to ask for your password, so run this once yourself: {command}", flush=True)
     status, lines = run_shown([str(ROOT / "install.sh"), *flags])
     if status == EXIT_DOCTOR:
-        return Installed(status, problems=doctor_problems(lines))
+        said = tuple(line for line in lines if line.strip())[-LAST_LINES:]
+        return Installed(status, problems=doctor_problems(lines), last_lines=said)
     return Installed(status, error="" if status == 0 else last_error(lines))
 
 
@@ -294,14 +297,18 @@ def stopped_line(installed: Installed) -> str:
 
 
 def doctor_closing(installed: Installed) -> str:
-    """The last thing init says when `bosun doctor` found problems: each of them, said again."""
-    if not installed.problems:
-        return ""
-    listed = "\n".join(installed.problems)
-    return (
-        f"\nbosun is set up, but `bosun doctor` found problems:\n{listed}\n"
-        "Fix them, then run bosun doctor again to check."
-    )
+    """The last thing init says when `bosun doctor` found problems: each of them, said again; or, when it
+    stopped without a FAIL line, the last lines it printed."""
+    if installed.problems:
+        listed = "\n".join(installed.problems)
+        return f"\n`bosun doctor` found problems:\n{listed}\nFix them, then run bosun doctor again to check."
+    if installed.status == EXIT_DOCTOR:
+        said = "\n".join(installed.last_lines) or "(nothing)"
+        return (
+            f"\n`bosun doctor` stopped before it was done; it said last:\n{said}\n"
+            "Run bosun doctor to see it whole."
+        )
+    return ""
 
 
 def carry_out(plan: Plan, config_dir: Path) -> Installed:
