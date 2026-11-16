@@ -2,10 +2,10 @@
 
 import unittest
 
-from exporter import as_csv, invoice_total
+from exporter import invoice_total
 
 
-class ExporterTest(unittest.TestCase):
+class TotalsTest(unittest.TestCase):
     def test_one_of_each(self) -> None:
         self.assertEqual(invoice_total([{"price": 10.0, "quantity": 1}], 0.0), 10.0)
 
@@ -15,8 +15,10 @@ class ExporterTest(unittest.TestCase):
     def test_quantity_counts(self) -> None:
         self.assertEqual(invoice_total([{"price": 10.0, "quantity": 3}], 0.0), 30.0)
 
-    def test_csv(self) -> None:
-        self.assertEqual(as_csv([{"price": 10.0, "quantity": 3}]), "10.0,3")
+    def test_tax_rounds_per_line(self) -> None:
+        # 0.33 plus 19% is 0.3927, so 0.39 on each of the two lines: 0.78, where rounding once gives 0.79.
+        lines = [{"price": 0.33, "quantity": 1}, {"price": 0.33, "quantity": 1}]
+        self.assertEqual(invoice_total(lines, 0.19), 0.78)
 
 
 if __name__ == "__main__":

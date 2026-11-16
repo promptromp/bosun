@@ -182,8 +182,8 @@ check gets no protection from it, which is why the first update converts at a qu
    - the rules versions;
    - config keys added, renamed or removed, with what each added one means, and the value written to
      `bosun.env` for a key whose default would change what the install did;
-   - the prompts that changed: `policy.md`, `chores.md`, the task files, `learn.md` and
-     `slack-watch.md`, counted and named;
+   - the prompts that changed: `policy.md`, the ontology's rules (`knowledge.md`), `chores.md`, the task
+     files, `learn.md` and `slack-watch.md`, counted and named;
    - which windows need a restart and which only need to re-read something (see below);
    - which launchd jobs need reloading;
    - what the new version needs that is missing (its `lib/preflight.sh`);
@@ -323,8 +323,12 @@ Each window gets one of three treatments, decided from the plan and the window's
 
 - **Nothing it was launched with changed.** It is left alone. This is the case for most updates. The
   next bosun command or hook it runs uses the new version.
-- **Only the orchestrator's prompts changed** (`policy.md`, the task files). Once it is idle, it gets
-  the update prompt, which asks it to re-read those files. Tasks already handed to repo sessions keep
+- **Only the orchestrator's prompts changed** (`policy.md`, `knowledge.md`, the task files). Once it is idle, it
+  gets the update prompt, which asks it to re-read those files; `knowledge.md` only with
+  `BOSUN_KNOWLEDGE_ENABLED=1`, as its policy holds the ontology's rules only then (with the key off, the update
+  that brings them lists them among the changed prompts and asks nothing of the orchestrator for them). A
+  repo window whose system prompt holds the ontology's rules (`BOSUN_KNOWLEDGE_ENABLED=1`, a Claude window)
+  cannot re-read it: their file is part of its fingerprint (below), so a change to it restarts the window. Tasks already handed to repo sessions keep
   their text, as today; the summary lists them, so I can send `delegate --update` if a rule matters:
   each item handed a task type whose file changed (`delegate review,fix` hands both; a type the site
   replaces in its own `tasks/` is the site's text, which an update never changes), and every item
@@ -359,11 +363,13 @@ Each window gets one of three treatments, decided from the plan and the window's
 agent and the model and effort it runs with, the window's directory and any `--model` / `--effort` it
 was given, and a fingerprint in two parts:
 
-- the agent's arguments, built for a placeholder conversation name, with the policy's text left out:
-  a new day's or a fresh conversation's name is no launch input, and the policy is re-read, not
-  restarted for;
+- the agent's arguments, built for a placeholder conversation name, with the text after
+  `--append-system-prompt` left out: a new day's or a fresh conversation's name is no launch input, the
+  policy is re-read, not restarted for, and a repo window's ontology rules count through their file;
 - the content of the files under each argument that is a path inside the install (the plugin, a
-  settings file), read through the install link, as the agent reads them.
+  settings file), read through the install link, as the agent reads them, and of the file whose text a
+  repo window's prompt holds (`orchestrator/knowledge.md`, with the key on; with it off, nothing is added and
+  the fingerprint is what it was before the rules).
 
 `bosun launch --fingerprint <window>` gives the fingerprint a launch would record now, and `bosun
 refresh --update-restart` restarts a window through refresh's path. Both start from the record:

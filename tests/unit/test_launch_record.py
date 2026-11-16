@@ -108,6 +108,19 @@ class FingerprintTest(unittest.TestCase):
         (self.install / "orchestrator" / "extra-plugin" / "review.md").write_text("# Review\n")
         self.assertNotEqual(before["files"], self.fingerprint(args)["files"])
 
+    def test_a_repo_window_s_rules_count_through_their_file(self) -> None:
+        rules = self.install / "orchestrator" / "knowledge.md"
+        rules.write_text("Look before asking.\n")
+        args = ["--append-system-prompt", rules.read_text(), "--name", "api"]
+        plain = self.fingerprint(args)
+        self.assertEqual(launch_record.fingerprint(args, self.install, texts=()), plain)  # none: as before
+        with_rules = launch_record.fingerprint(args, self.install, texts=[str(rules)])
+        self.assertEqual(with_rules["args"], plain["args"])
+        self.assertNotEqual(with_rules["files"], plain["files"])
+        rules.write_text("Look before asking, then ask.\n")
+        changed = ["--append-system-prompt", rules.read_text(), "--name", "api"]
+        self.assertNotEqual(launch_record.fingerprint(changed, self.install, texts=[str(rules)]), with_rules)
+
     def test_the_files_are_read_through_the_path_the_arguments_name(self) -> None:
         link = Path(self.tmp.name) / "share" / "bosun"
         link.parent.mkdir()
@@ -354,6 +367,19 @@ class LaunchCommandTest(unittest.TestCase):
         self.assertNotEqual(unknown.returncode, 0)
         self.assertIn("no agent 'nope': bosun knows claude, codex, agy", unknown.stderr)
 
+    def test_a_claude_window_s_rules_are_a_launch_input_only_with_the_key_on(self) -> None:
+        plain = self.fingerprint_of("api")
+        self.env["BOSUN_KNOWLEDGE_ENABLED"] = "0"
+        self.assertEqual(self.fingerprint_of("api"), plain)
+        self.env["BOSUN_KNOWLEDGE_ENABLED"] = "1"
+        ruled = self.fingerprint_of("api")
+        assert isinstance(ruled, dict) and isinstance(plain, dict)
+        self.assertNotEqual(ruled["files"], plain["files"])  # their file: what an update compares
+        done = self.bosun("launch", "api", cwd=self.repo)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(self.launched("api")["fingerprint"], ruled)
+        self.assertEqual(self.fingerprint_of("web"), self.fingerprint_of("web"))  # Codex: no rules
+
     def test_a_window_with_neither_a_list_entry_nor_a_record_is_refused(self) -> None:
         refused = self.bosun("launch", "--fingerprint", "elsewhere", cwd=self.repo)
         self.assertNotEqual(refused.returncode, 0)
@@ -382,6 +408,21 @@ class NewVersionTest(unittest.TestCase):
             )
             self.assertNotEqual(launch_record.fingerprint(args, link, new)["files"], recorded["files"])
             self.assertEqual(launch_record.fingerprint(args, link), recorded)  # through the link: the old one
+
+    def test_changed_rules_in_the_new_version_show_before_the_switch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            old, new, link = base / "versions" / "old", base / "versions" / "new", base / "bosun"
+            for version in (old, new):
+                (version / "orchestrator").mkdir(parents=True)
+                (version / "orchestrator" / "knowledge.md").write_text("Look before asking.\n")
+            link.symlink_to(old)
+            args = ["--append-system-prompt", "<rules>", "--name", "api"]
+            rules = [str(link / "orchestrator" / "knowledge.md")]
+            recorded = launch_record.fingerprint(args, link, texts=rules)
+            self.assertEqual(launch_record.fingerprint(args, link, new, rules), recorded)
+            (new / "orchestrator" / "knowledge.md").write_text("Look, then ask.\n")
+            self.assertNotEqual(launch_record.fingerprint(args, link, new, rules)["files"], recorded["files"])
 
 
 if __name__ == "__main__":

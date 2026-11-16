@@ -135,7 +135,55 @@ bosun kg context --for releases         # a small cited pack of confirmed facts
   and the next write makes a new key. A `secret.key` that is not a key (empty, the wrong length, unreadable)
   while no such record needs it is moved aside by the next write, kept as
   `secret.key.aside-<time>` (not in the history), and made again, with a line on stderr.
+- **Bounded reads:** `kg lookup` prints at most 800 tokens (`--max-tokens N`; the rest is
+  `(N more: kg facts <entity>)`) and five waiting facts, then a count; `kg search` shows 10 hits
+  (`--limit`); `--json` is complete. `bosun delegate` logs each pack's size, one line in
+  `delegate-<date>.log` of the log folder.
+- **Context packs:** `kg context --for <entity|repo|topic> [--for ...] [--max-tokens N]` prints at
+  most about 1.5k tokens of confirmed, current facts, each citing its `[id]` and source, with one
+  section per target and one budget for all. A repo can be named as the ledger does
+  (`acme/invoice-exporter`), by id, name or alias. A pack names who reviews or owns the work and
+  leaves a person's own profile (timezone, hours, preferences, title) out unless the person is the
+  target; identifiers and unconfirmed facts never appear. With `BOSUN_KNOWLEDGE_ENABLED=1` in
+  `bosun.env` (default `0`), `bosun delegate` adds the pack for the task's repos, its area and
+  its workstream's area to the brief, after the task's rules, under "What bosun knows about this
+  work", and adds nothing when the knowledge base holds no confirmed fact about them. A task moved
+  to another window does not get it again. A knowledge base that cannot be read costs the brief one
+  line saying so, never the hand-over.
 - **Seeding:** `kg import <file>` reads entities and facts as JSON lines, records every fact as a
   proposal (`--auto-confirm` applies the rules above), is a dry run unless `--apply`, and says how
   many daily batches the review takes; `tools/survey_to_kg.py` converts a survey's markdown tables, with a mapping file kept
   next to the survey, into such a file. `bosun doctor` shows the counts and runs `kg validate`.
+
+## In the agents' hands
+
+One key, `BOSUN_KNOWLEDGE_ENABLED` (default `0`, so briefs and system prompts stay as they were until you set
+it; `bosun init` recommends `1`), switches on the packs and the rules below. The check of your words is not part
+of it: it is always on.
+
+- **Packs in briefs.** `bosun delegate` adds "What bosun knows about this work": the pack for the task's repo and
+  area (at most 1500 tokens in all, its first line included). A repo is found by its slug, alias or last path
+  segment. It never fails a hand-over, and each pack's size is logged to `delegate-<date>.log` in
+  `$BOSUN_LOG_DIR`.
+- **Look before asking.** The orchestrator's system prompt, and every Claude repo window's, end with
+  `orchestrator/knowledge.md` (about 300 tokens): look a fact up before asking you, record what you state as
+  standing in your exact words, supersede it when you correct it, confirm or reject a waiting fact only when you
+  name it, and say in one line what was recorded or why it stays proposed. Codex and Antigravity windows get
+  packs in their briefs but not these rules: bosun cannot check their transcripts, so a fact from them would
+  never be confirmed.
+
+**Words that count** (always on, whatever the key says). Inside an agent session, `--from-user --quote` needs no
+`--transcript`: `kg` finds the session that ran it by walking up its process tree to an agent's session record. A
+quote is checked against that session only (another session's transcript is refused), and only genuine prompts of
+the last 24 hours count, from a terminal with `--transcript` too. Text bosun pasted into the window (a brief, a
+`bosun send`) is never your words. `kg confirm`, `reject`, `batch apply`, and `supersede --close` or `--by`, run
+from a session, need `--from-user --quote` that verifies, at least 8 characters, typed after the facts they decide
+on were proposed; for `batch apply` the quote holds each group number the decision names (or "all", when it says
+all). The quote is kept in the decision's note, on this Mac only. A correction with `--value` or `--object` needs a
+source: your words, checked the same way, or a `--source`. From a terminal, and in the console's review, they work
+as before.
+
+`kg lookup` prints at most 800 tokens (`--max-tokens`), five waiting facts and a count, and says how to see
+more; `kg search` shows 10 hits; `--json` is complete. Your own profile facts and identifiers never reach a
+pack. The check of your words guards against a session's mistakes, not against a hostile agent, which can
+escape the process-tree walk.

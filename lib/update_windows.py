@@ -162,12 +162,14 @@ class _CtrlC:
 
 
 def _reread_files(plan: Plan, root: Path) -> tuple[str, ...]:
-    """The changed files the orchestrator re-reads, through the install link."""
+    """The changed files the orchestrator re-reads, through the install link: by the same patterns as
+    the plan's treatment (update_facts.knowledge_on, as plan_for reads it)."""
     install = install_paths.install_path(root)
+    patterns = update_plan.reread_patterns(update_facts.knowledge_on(root))
     return tuple(
         str(install / path)
         for path in plan.prompts
-        if any(fnmatch.fnmatchcase(path, pattern) for pattern in update_plan.REREAD)
+        if any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)
     )
 
 

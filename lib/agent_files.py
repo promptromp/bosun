@@ -121,6 +121,9 @@ class Profile:
     # the arguments to its command that update it, which `bosun morning` runs once at a quiet moment; () for
     # an agent that updates itself or is updated by hand
     update_args: tuple[str, ...] = ()
+    # whether bosun can check a quote of my words in its sessions' transcripts (a genuine prompt I typed
+    # there), so that a fact or a review in my words from one of its sessions can count as mine
+    verifies_quotes: bool = False
 
 
 def command_line(pid: int | str) -> str:

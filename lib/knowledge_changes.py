@@ -23,7 +23,8 @@ is a `person/` entity (every record of it, as the fact never changes its subject
 `person/` entity. So is every record of a fact I stated, whole: one whose sources hold my words
 or name my sessions (`holds_my_words`: a `user` source with its quote, a `transcript` source),
 from the write that brings them on (its records are classed by the fact as the write leaves it,
-so genesis keeps such a fact's whole history here). An update for a fact this knowledge base no
+so genesis keeps such a fact's whole history here), and an update recording a decision that stands
+on my words (`quotes_me`: its reviewed_by and note hold my quote). An update for a fact this knowledge base no
 longer holds is local too (fail closed). Everything else is private. A delete on request
 removes only local changes: `removed` says what a deletion took out, and `held_privately` which
 of it the private journal holds, which a deletion refuses.
@@ -102,6 +103,15 @@ def holds_my_words(sources: Any) -> bool:
     )
 
 
+def quotes_me(record: Record) -> bool:
+    """Whether a fact-log update records a decision that stands on my words: its reviewed_by holds
+    my quote (kg confirm, reject, a batch's answer or a supersede from an agent's session), as its
+    note does."""
+    changes = record.get("set")
+    by = changes.get("reviewed_by") if isinstance(changes, dict) else None
+    return isinstance(by, dict) and bool(by.get("quote"))
+
+
 def is_local_fact(fact: Record | None) -> bool:
     """Whether a fact's records stay on this Mac: it names a person, I stated it (its sources hold
     my words), or it is not known (fail closed)."""
@@ -118,6 +128,7 @@ def record_edit(record: Record, facts: Mapping[str, Record]) -> Edit:
         is_local_fact(facts.get(fact_id))
         or (added and is_local_fact(record["fact"]))
         or holds_my_words(record.get("sources"))
+        or quotes_me(record)
     )
     return Edit(FACT_ADD if added else FACT_UPDATE, fact_id, record, local)
 

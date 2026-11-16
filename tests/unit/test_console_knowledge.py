@@ -25,6 +25,7 @@ from typing import Any
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
+import agent_state
 import console_kb
 import console_kg_graph as graph
 import console_knowledge as ck
@@ -54,6 +55,10 @@ class KnowledgeWorld(unittest.TestCase):
         self.now = START
         knowledge.CLOCK = lambda: self.now
         self.addCleanup(setattr, knowledge, "CLOCK", knowledge.clock)
+        # kg runs from a terminal: the suite itself may run inside an agent's session, which must not count
+        no_session = unittest.mock.patch.object(agent_state, "calling_session", return_value=None)
+        no_session.start()
+        self.addCleanup(no_session.stop)
         self.state = str(self.tmp / "state")  # this Mac's replica id, for the journal
         knowledge.configure(self.root, git=False, state_dir=self.state)
         self.kg("import", str(KG_FIXTURE), "--apply", "--auto-confirm")

@@ -107,6 +107,13 @@ repos:
         language: system
         types: [shell]
         exclude: ^tests/smoke\.sh$
+      # ... and parsed by macOS's own /bin/bash, 3.2, which every Mac runs them with (a parse error there
+      # passed shellcheck and bash 5 once); where /bin/bash is not 3.2 (CI's Linux lint) it skips in one line.
+      - id: bash32-parse
+        name: bash 3.2 parse (macOS's /bin/bash)
+        entry: tools/bash32_hook.sh
+        language: system
+        types: [shell]
       # Everything else that gets written by hand here. The tests come last (below): on every commit the
       # unit tests the change reaches; the end-to-end suite before pushing.
       - id: hadolint

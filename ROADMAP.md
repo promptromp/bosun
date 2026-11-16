@@ -201,10 +201,17 @@ learning counts rework), the **Constellation** a second tab (the whole knowledge
 force layout, hover, facts panel, search, chips, an "as of" slider; capped at 400 entities), and
 the overview and entity browser a third, **Raw data**. The Metro map is the next item.
 
-**Next:** MVP 3, context packs in delegate briefs behind a flag, the orchestrator's
-"check `kg lookup` first" rule, and capture of my own words in every window; later, a knowledge
-pass in the learning run (counting rediscovery and rework episodes) and a team-shared variant
-after a privacy review.
+**Done (2026-11-15), MVP 3:** the ontology in the agents' hands behind `BOSUN_KNOWLEDGE_ENABLED`
+(`bosun init` recommends it): packs in delegate briefs, the "look before asking" and capture rules for the
+orchestrator and Claude windows; and, whatever the key says, a verified quote for confirming from a session and
+bounded `kg` output
+([design](docs/design/knowledge.md#mvp-3-decisions-2026-11-15)).
+
+**Next:** measurement through a knowledge pass in the learning run (rediscovery and rework episodes, and whether
+packs stay the default); Codex's and Antigravity's transcripts, so capture works there; fewer lookups per routing
+question (the VM saw 3 lookups and 2 searches for one question, and a wording nudge regressed a case); bosun
+flagging an API key's "Credit balance too low" replies (the watchdog's spend-limit check covers subscription limits
+only); a team-shared variant after a privacy review.
 
 ### 4a. Ontology: Metro map treatment
 

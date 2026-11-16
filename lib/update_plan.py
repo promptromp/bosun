@@ -20,12 +20,17 @@ import migrations
 
 PROMPTS = (
     "orchestrator/policy.md",
+    "orchestrator/knowledge.md",
     "orchestrator/plugin/commands/chores.md",
     "orchestrator/tasks/*.md",
     "orchestrator/learn.md",
     "orchestrator/slack-watch.md",
 )
+# What the orchestrator re-reads when it changed (reread_patterns); a repo window whose prompt holds the
+# ontology's rules is restarted instead (launch_record counts their file).
 REREAD = ("orchestrator/policy.md", "orchestrator/tasks/*.md")
+# The ontology's rules, which the orchestrator's policy ends with only with BOSUN_KNOWLEDGE_ENABLED=1.
+KNOWLEDGE_RULES = "orchestrator/knowledge.md"
 TASK = "orchestrator/tasks/{}.md"  # a task type's built-in text
 # The rules every task gets, whatever its types: a site's own _common.md only adds to them.
 COMMON = TASK.format("_common")
@@ -121,6 +126,13 @@ def _matches(path: str, patterns: Sequence[str]) -> bool:
     return any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)
 
 
+def reread_patterns(knowledge_on: bool) -> tuple[str, ...]:
+    """The prompt files the orchestrator re-reads when they changed: the ontology's rules only with the
+    key on (<knowledge_on>), as its policy holds them only then. With it off, an update that brings
+    them asks nothing of the orchestrator for them."""
+    return (*REREAD, KNOWLEDGE_RULES) if knowledge_on else REREAD
+
+
 def prompts_changed(old: VersionFacts, new: VersionFacts) -> tuple[str, ...]:
     """The prompt files whose digest differs (or that one version lacks), sorted."""
     paths = {p for p in (*old.prompts, *new.prompts) if _matches(p, PROMPTS)}
@@ -178,10 +190,11 @@ def make_plan(  # noqa: PLR0913 - the facts the caller gathers, all keyword-only
     deletion_cut_short: bool,
     console: bool,
     console_job: bool = False,
+    knowledge_on: bool = False,
     steps: Callable[[str, int, int], Sequence[tuple[int, int]]],
 ) -> Plan:
     changed = prompts_changed(old, new)
-    reread = any(_matches(p, REREAD) for p in changed)
+    reread = any(_matches(p, reread_patterns(knowledge_on)) for p in changed)
     migrations, blocked = _migrations(old, new, steps)
     blockers = [*missing, *blocked, *([CUT_SHORT] if deletion_cut_short else [])]
     return Plan(

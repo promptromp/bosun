@@ -355,17 +355,24 @@ def ask_schedule(ui: Ui, facts: Facts, answers: Answers, top: Sequence[str]) -> 
 
 # ---- how proactive, which model, the wake, AWS -----------------------------------------------------
 
-FEATURES_ON = {"events": True, "approvals": True, "learning": True}
-FEATURES_OFF = {"events": False, "approvals": False, "learning": False, "slack_watch": False}
+FEATURES_ON = {"events": True, "approvals": True, "learning": True, "knowledge": True}
+FEATURES_OFF = {
+    "events": False,
+    "approvals": False,
+    "learning": False,
+    "knowledge": False,
+    "slack_watch": False,
+}
 PROACTIVE_PREVIEW = (
     "Reports from your sessions reach the orchestrator as they happen, not at the next check-in.",
     "Anything going out under your name waits for your yes to that exact call, in one line.",
     "Each evening a learning run proposes what to fix, quoting its evidence (at most $2 a run).",
+    "The ontology in your agents' hands: briefs carry what it knows, windows record what you state.",
 )
 SLACK_PREVIEW = "A small model also looks for new Slack mentions every 15 minutes (at most $1.50 a day)."
 QUIET_PREVIEW = (
     "Sessions come up each morning and the orchestrator runs its chores and hourly check-ins.",
-    "Outward actions stop at a permission prompt, which waits until you look. No learning.",
+    "Outward actions stop at a permission prompt, which waits until you look. No learning, no ontology.",
 )
 
 

@@ -165,6 +165,9 @@ LEDGER_TEXT_COMMANDS = {
     "fold",
     "ticket-sync",
 }
+# `bosun kg` subcommands that take a quote of my words, or a name, alias, summary, value or note that may
+# hold text from Slack, a PR or a ticket.
+KG_TEXT_COMMANDS = {"add-entity", "propose", "supersede", "confirm", "reject", "batch"}
 SEND_ITEM_FLAGS = {"--id", "--no-item"}
 SEND_INFO_FLAGS = {"--list", "-h", "--help"}
 SEND_START_WITHOUT_MESSAGE = 2  # send --start <window>
@@ -376,16 +379,26 @@ def send_without_item(words: list[str]) -> str | None:
     return SEND_WITHOUT_ITEM
 
 
+def carries_text(words: list[str]) -> bool:
+    """A bosun command whose arguments hold text from a person (mine, or someone's I pass on)."""
+    if any(is_bosun(words, name) for name in TEXT_COMMANDS):
+        return True
+    if len(words) <= MIN_COMMAND_WORDS:
+        return False
+    return (is_bosun(words, "ledger") and words[2] in LEDGER_TEXT_COMMANDS) or (
+        is_bosun(words, "kg") and words[2] in KG_TEXT_COMMANDS
+    )
+
+
 def text_command_risk(words: list[str], command: str) -> str | None:
     """bosun delegate/send (or a ledger command carrying someone's text) whose text would run
     a command substitution."""
-    is_text_command = any(is_bosun(words, name) for name in TEXT_COMMANDS) or (
-        is_bosun(words, "ledger") and len(words) > MIN_COMMAND_WORDS and words[2] in LEDGER_TEXT_COMMANDS
-    )
-    if is_text_command and runs_substitution(command):
+    if carries_text(words) and runs_substitution(command):
         return (
-            "text passed to bosun delegate/send, or to ledger reach-out/ask/replied/propose/approve/"
-            "spawn/link/unlink/fold/ticket-sync, must not be able to run commands. This checks the "
+            "text passed to bosun delegate/send, to ledger reach-out/ask/replied/propose/approve/"
+            "spawn/link/unlink/fold/ticket-sync, or to kg add-entity/propose/supersede/confirm/reject/batch "
+            "(its --name, --alias, --summary, --value or --quote), must not be able to run commands. "
+            "This checks the "
             "whole Bash call: a $(...) or backticks anywhere in it count, also in another step joined "
             "with ; && | or in a variable set before the command. Run the bosun command as its own "
             "Bash call, with every value in single quotes or on stdin with a quoted heredoc "

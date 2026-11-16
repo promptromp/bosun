@@ -6,7 +6,9 @@ import contextlib
 import dataclasses
 import importlib
 import io
+import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -88,21 +90,25 @@ class AgentProfileTest(unittest.TestCase):
         with contextlib.redirect_stdout(captured):
             assert agent_state.main(["profiles"]) == 0
         assert captured.getvalue().splitlines() == [
-            "claude\tBOSUN_CLAUDE_BIN\tBOSUN_CLAUDE_FLAGS\tBOSUN_MODEL\tyes\tyes\tyes\tyes\tidle,busy,shell,waiting\t-",
-            "codex\tBOSUN_CODEX_BIN\tBOSUN_CODEX_FLAGS\tBOSUN_CODEX_MODEL\tno\tno\tno\tno\tidle,busy\t-",
-            "agy\tBOSUN_AGY_BIN\tBOSUN_AGY_FLAGS\tBOSUN_AGY_MODEL\tno\tyes\tno\tno\tidle,busy,shell,waiting\tupdate",
+            "claude\tBOSUN_CLAUDE_BIN\tBOSUN_CLAUDE_FLAGS\tBOSUN_MODEL\tyes\tyes\tyes\tyes\tidle,busy,shell,waiting\t-\tyes",
+            "codex\tBOSUN_CODEX_BIN\tBOSUN_CODEX_FLAGS\tBOSUN_CODEX_MODEL\tno\tno\tno\tno\tidle,busy\t-\tno",
+            "agy\tBOSUN_AGY_BIN\tBOSUN_AGY_FLAGS\tBOSUN_AGY_MODEL\tno\tyes\tno\tno\tidle,busy,shell,waiting\tupdate\tno",
         ]
 
     def test_profiles_print_update_args(self) -> None:
+        verifies = {"claude": "yes", "codex": "no"}
         for harness in ("claude", "codex"):
             assert AGENTS[harness].PROFILE.update_args == ()
-            assert agent_state.profile_line(harness, AGENTS[harness].PROFILE).endswith("\t-")
+            line = agent_state.profile_line(harness, AGENTS[harness].PROFILE)
+            assert line.endswith("\t-\t" + verifies[harness])
         assert AGENTS["agy"].PROFILE.update_args == ("update",)
         assert agent_state.profile_line("agy", AGENTS["agy"].PROFILE).endswith(
-            "\tidle,busy,shell,waiting\tupdate"
+            "\tidle,busy,shell,waiting\tupdate\tno"
         )
         updating = dataclasses.replace(claude_state.PROFILE, update_args=("update", "--now"))
-        assert agent_state.profile_line("stub", updating).endswith("\tidle,busy,shell,waiting\tupdate --now")
+        assert agent_state.profile_line("stub", updating).endswith(
+            "\tidle,busy,shell,waiting\tupdate --now\tyes"
+        )
 
     def test_every_agent_but_the_orchestrators_has_its_setup_texts(self) -> None:
         for name, agent in AGENTS.items():
@@ -128,6 +134,102 @@ class AgentProfileTest(unittest.TestCase):
 
     def test_the_orchestrators_agent(self) -> None:
         assert agent_state.ORCHESTRATOR_HARNESS == claude_state.HARNESS
+
+
+def fake_agent(sessions: dict[int, dict[str, object]], verifies: bool = True) -> types.SimpleNamespace:
+    """An agent whose running sessions are <sessions> by pid; a record with "stale" set is a stale one."""
+    return types.SimpleNamespace(
+        PROFILE=dataclasses.replace(claude_state.PROFILE, verifies_quotes=verifies),
+        record=lambda pid: sessions.get(int(pid)),
+        is_stale=lambda entry: bool(entry.get("stale")),
+        session_transcript=lambda entry: Path(str(entry["transcript"])) if entry.get("transcript") else None,
+    )
+
+
+class CallingSessionTest(unittest.TestCase):
+    """calling_session: the agent session that ran a command, from its process's ancestors. Nothing here reads
+    the real agents' records: the suite itself may run inside an agent's session."""
+
+    def ancestors(self, parents: dict[int, int]) -> None:
+        patcher = mock.patch.object(agent_state, "parent_pid", side_effect=parents.get)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def agents(self, **agents: object) -> None:
+        patcher = mock.patch.dict(agent_state.AGENTS, agents, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_the_nearest_ancestor_that_is_an_agent_with_a_session(self) -> None:
+        self.ancestors({100: 200, 200: 300, 300: 400, 400: 1})
+        self.agents(
+            near=fake_agent({300: {"transcript": "/scratch/near.jsonl"}}),
+            other=fake_agent({400: {"transcript": "/scratch/far.jsonl"}}, verifies=False),
+        )
+        session = agent_state.calling_session(100)
+        assert session == agent_state.CallingSession("near", 300, Path("/scratch/near.jsonl"), True)
+        assert agent_state.calling_session(400) == agent_state.CallingSession(
+            "other", 400, Path("/scratch/far.jsonl"), False
+        )
+
+    def test_a_stale_record_is_no_session(self) -> None:
+        self.ancestors({100: 200, 200: 300, 300: 1})
+        self.agents(stub=fake_agent({200: {"stale": True}, 300: {}}))
+        assert agent_state.calling_session(100) == agent_state.CallingSession("stub", 300, None, True)
+
+    def test_no_agent_above_is_none(self) -> None:
+        self.ancestors({100: 200, 200: 1})
+        self.agents(stub=fake_agent({}))
+        assert agent_state.calling_session(100) is None
+        self.ancestors({100: 200})  # 200 has gone: ps finds no parent
+        assert agent_state.calling_session(100) is None
+
+    def test_it_looks_at_most_max_ancestors_up(self) -> None:
+        looked: list[int] = []
+        self.ancestors({pid: pid + 1 for pid in range(10, 10 + 2 * agent_state.MAX_ANCESTORS)})
+        stub = fake_agent({})
+        stub.record = lambda pid: looked.append(int(pid))
+        self.agents(stub=stub)
+        assert agent_state.calling_session(10) is None
+        assert len(looked) == agent_state.MAX_ANCESTORS
+
+    def test_it_starts_from_the_parent_of_this_process(self) -> None:
+        self.ancestors({})
+        self.agents(stub=fake_agent({4242: {}}))
+        with mock.patch("os.getppid", return_value=4242):
+            assert agent_state.calling_session() == agent_state.CallingSession("stub", 4242, None, True)
+
+    def test_a_claude_code_session_is_checked_in_its_own_transcript(self) -> None:
+        home = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        sessions = home / ".claude" / "sessions"
+        sessions.mkdir(parents=True)
+        entry = {"pid": 4242, "sessionId": "0f1e2d3c", "cwd": str(home / "repo")}
+        (sessions / "4242.json").write_text(json.dumps(entry))
+        for name, value in (("LIVE_SESSIONS_DIR", sessions), ("PROJECTS_DIR", home / ".claude" / "projects")):
+            patcher = mock.patch.object(claude_state, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.ancestors({100: 4242, 4242: 1})
+        self.agents(claude=claude_state)
+        expected = claude_state.transcript_path(str(home / "repo"), "0f1e2d3c")
+        assert expected.name == "0f1e2d3c.jsonl" and expected.is_relative_to(home)
+        assert agent_state.calling_session(100) == agent_state.CallingSession("claude", 4242, expected, True)
+        assert claude_state.session_transcript({"pid": 4242}) is None
+        # a record written partly (no pid) is no session: kg runs on as from a terminal
+        (sessions / "4242.json").write_text(json.dumps({"sessionId": "0f1e2d3c", "cwd": str(home / "repo")}))
+        assert agent_state.calling_session(100) is None
+        assert claude_state.is_stale({"pid": "4242"}) and claude_state.is_stale({})
+
+    def test_only_claude_code_checks_quotes_and_the_others_keep_no_stale_records(self) -> None:
+        assert claude_state.PROFILE.verifies_quotes
+        for agent in (codex_state, agy_state):
+            assert not agent.PROFILE.verifies_quotes
+            assert agent.session_transcript({"pid": 1, "sessionId": "x", "cwd": "/scratch"}) is None
+            assert not agent.is_stale({"pid": 1})
+
+    def test_the_parent_of_a_process_from_ps(self) -> None:
+        assert agent_state.parent_pid(os.getpid()) == os.getppid()
 
 
 class AgentSetupCommandTest(unittest.TestCase):

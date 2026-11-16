@@ -371,6 +371,13 @@ def console_running(state_dir: Path) -> bool:
     return console_token.running(state_dir)
 
 
+def knowledge_on(root: Path) -> bool:
+    """Whether the install has the ontology on (BOSUN_KNOWLEDGE_ENABLED=1), as the version in <root>
+    reads the config: only then does the orchestrator's policy hold its rules, to re-read when changed."""
+    done = shell(root, 'printf "%s" "$BOSUN_KNOWLEDGE_ENABLED"')
+    return done.returncode == 0 and done.stdout.strip() == "1"
+
+
 def console_job(root: Path) -> bool:
     """Whether the version in <root> would restart the console after the switch: its launchd job is
     loaded and wanted (lib/common.sh's console_restartable)."""
@@ -501,6 +508,7 @@ def plan_for(old_root: Path, new_root: Path, state_dir: Path, config_dir: Path) 
         deletion_cut_short=cut_short,
         console=console_running(state_dir),
         console_job=console_job(new_root),
+        knowledge_on=knowledge_on(new_root),
         steps=_steps,
     )
     extra = [

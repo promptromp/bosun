@@ -15,29 +15,46 @@
 #   propose <subject> <predicate> [<object>] [--value V] --source kind:ref [--source ...]
 #           [--authority user_said|stakeholder_said|observed|inferred] [--valid-from T] [--order N]
 #           [--rework] [--note N]
-#   propose ... --from-user --quote '<my exact words>' --transcript <session.jsonl>
+#   propose ... --from-user --quote '<my exact words>' [--transcript <session.jsonl>]
 #                                      record a fact (an object entity or a --value). Proposing the
 #                                      same fact again re-observes it (adds the source). It is
 #                                      confirmed at once only when: the quote is in a prompt I typed
-#                                      in that transcript; or two trusted sources of different kinds
-#                                      back a low-risk fact naming no person; or a profile source
-#                                      gives a person's title or timezone. Slack, PR, ticket and doc
-#                                      text never confirms anything. Otherwise it waits for kg batch
-#   confirm <fact-id|group-key> ...    confirm facts after review (a group key: an entity id, or
-#   reject <fact-id|group-key> ...     <entity>#reviews|owns|approves, as kg batch groups them)
+#                                      in the last 24 hours in the session; or two trusted sources of
+#                                      different kinds back a low-risk fact naming no person; or a
+#                                      profile source gives a person's title or timezone. Slack, PR,
+#                                      ticket and doc text never confirms anything. Otherwise it
+#                                      waits for kg batch. The session is the agent's session that
+#                                      ran kg (a --transcript of another is refused; in an agent
+#                                      whose words bosun cannot check, the fact stays proposed);
+#                                      from a terminal, the one --transcript names, which it needs
+#   confirm <fact-id|group-key> ... [--from-user --quote Q] [--note N]
+#   reject <fact-id|group-key> ... [--from-user --quote Q] [--note N]
+#                                      confirm or reject facts after review (a group key: an entity
+#                                      id, or <entity>#reviews|owns|approves, as kg batch groups
+#                                      them). From an agent's session, only with a quote of my words
+#                                      that counts in it, as for propose, of at least 8 characters and
+#                                      typed after the facts were proposed (kept in the decision's
+#                                      note, on this Mac only); from a terminal, as it is
 #   supersede <fact-id> (--value V | --object E | --by <fact-id> | --close) [--source ... |
-#             --from-user --quote Q --transcript P] [--note N]
-#                                      close a fact (valid_to, superseded_by), never delete it
+#             --from-user --quote Q [--transcript P]] [--note N]
+#                                      close a fact (valid_to, superseded_by), never delete it; a
+#                                      correction in my words needs a quote that counts. From an
+#                                      agent's session, --by and --close need one too, as confirm
+#                                      (a correction with a --source needs none)
 #   batch [--cap N] [--max-facts N] [--json]
 #                                      the review batch: proposals grouped by entity and axis, one
 #                                      numbered list, rework-preventing groups first; at most --cap
 #                                      groups (BOSUN_KNOWLEDGE_BATCH_CAP, 10), --max-facts facts
 #                                      (BOSUN_KNOWLEDGE_BATCH_FACTS, 40) and
 #                                      BOSUN_KNOWLEDGE_GROUP_FACTS (8) facts a group
-#   batch apply '<decision>' | --confirm 1,3 --reject 2b [--skip 4]  [--dry-run]
+#   batch apply '<decision>' | --confirm 1,3 --reject 2b [--skip 4]  [--from-user --quote Q]
+#               [--dry-run]
 #                                      answer the last batch in one line: 'confirm all except 2b'
 #                                      (2b stays proposed), 'confirm 1,3 reject 2b', 'skip 4';
-#                                      unanswered facts stay proposed for a later batch
+#                                      unanswered facts stay proposed for a later batch. From an
+#                                      agent's session, only with a quote of my words, as confirm,
+#                                      that holds each group number the decision names (or all,
+#                                      when it says all)
 #   import <file> [--dry-run | --apply] [--auto-confirm]
 #                                      entities and facts from a JSON or JSON-lines file, all as
 #                                      proposals (--auto-confirm: apply the rules above); a dry run
@@ -51,13 +68,19 @@
 #                                      person facts not re-observed for 12 months
 #
 # Reading:
-#   lookup <entity> [--json]           current confirmed facts with sources, links to it, what waits
+#   lookup <entity> [--max-tokens N] [--json]
+#                                      current confirmed facts with sources, links to it, what waits
+#                                      (at most N tokens, default 800, and 5 waiting facts, then
+#                                      counts; --json is complete)
 #   facts <entity> [--predicate P] [--as-of T] [--status confirmed|proposed|rejected|expired|all]
 #         [--closed] [--json]          facts about an entity, now or as they held at --as-of
-#   search <text> [--limit N]          entities by name, alias, related term, summary or fact text
+#   search <text> [--limit N]          entities (10 by default) by name, alias, related term, summary or
+#                                      fact text
 #   neighbors <entity> [--hops N]      linked entities within N hops (default 1, at most 3)
-#   context --for <entity|repo|topic> [--max-tokens N]
-#                                      a small pack of confirmed, cited facts (about 1.5k tokens)
+#   context --for <entity|repo|topic> [--for ...] [--max-tokens N]
+#                                      a small pack of confirmed, cited facts (about 1.5k tokens,
+#                                      shared by the targets; a person's own profile facts are left
+#                                      out unless the person is the target; owner/repo finds repo/repo)
 #   lint [--stale-days N] [--json] [--strict]
 #                                      contradictions, expired proposals, retention, stale facts, alias
 #                                      collisions, merge suggestions, orphans (--strict: exit 1 if any)

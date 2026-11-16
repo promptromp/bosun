@@ -1,8 +1,23 @@
 #!/bin/bash
 # GitHub's stand-in for tests/sandbox/live.sh: logged in as acme-dev, and it remembers pull requests in
 # ~/.sandbox/gh, which `gh api graphql` answers about in GitHub's shape. Writing there goes past Codex's
-# sandbox, as reading a real login from the Keychain does.
+# sandbox, as reading a real login from the Keychain does. Which repository a pull request is in comes from
+# --repo, else from the working copy's origin (the configured address, which git's insteadOf rule has not
+# rewritten to a local folder), so that every repository of the sandbox's world is its own.
 state="$HOME/.sandbox/gh"
+repo_slug() {
+	local previous="" arg
+	for arg in "$@"; do
+		case "$previous" in
+		--repo | -R)
+			echo "$arg"
+			return
+			;;
+		esac
+		previous="$arg"
+	done
+	git config --get remote.origin.url 2>/dev/null | sed -E 's#^.*github\.com[:/]##; s#\.git$##'
+}
 mkdir -p "$state"
 echo "gh $*" >>"$state/calls.log"
 case "$*" in
@@ -16,7 +31,7 @@ case "$*" in
 	;;
 "pr create"*)
 	number=$(($(find "$state" -name 'pr-*.json' | wc -l) + 1))
-	url="https://github.com/acme/exporter/pull/$number"
+	url="https://github.com/$(repo_slug "$@" | grep . || echo acme/exporter)/pull/$number"
 	printf '{"number":%d,"url":"%s","state":"OPEN","isDraft":true,"title":"A pull request"}\n' "$number" "$url" \
 		>"$state/pr-$number.json"
 	echo "$url"

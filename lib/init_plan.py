@@ -139,6 +139,7 @@ class Answers:
     events: bool = True
     approvals: bool = True
     learning: bool = True
+    knowledge: bool = True  # BOSUN_KNOWLEDGE_ENABLED: the ontology in the agents' hands
     slack_watch: bool = False
     model: str = DEFAULT_MODEL
     harness: str = agent_state.DEFAULT_HARNESS
@@ -163,7 +164,17 @@ WINDOW_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\[\]-]*$")
 CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 BOOL_ANSWERS = (
-    *("events", "approvals", "learning", "slack_watch", "wake", "menu_app", "start_at_login", "trust"),
+    *(
+        "events",
+        "approvals",
+        "learning",
+        "knowledge",
+        "slack_watch",
+        "wake",
+        "menu_app",
+        "start_at_login",
+        "trust",
+    ),
 )
 TEXT_ANSWERS = (
     "days",
@@ -510,6 +521,7 @@ def recommend(facts: Facts) -> Answers:
         events=events,
         approvals=on("BOSUN_APPROVALS_ENABLED", True),
         learning=on("BOSUN_LEARN_ENABLED", True),
+        knowledge=on("BOSUN_KNOWLEDGE_ENABLED", True),
         slack_watch=on("BOSUN_SLACK_WATCH_ENABLED", facts.slack_plugin and events),
         model=recommended_model(facts),
         harness=recommended_harness(facts),
@@ -646,6 +658,7 @@ def env_groups(answers: Answers) -> list[tuple[str, list[tuple[str, str]]]]:
                 ("BOSUN_APPROVALS_ENABLED", flag[answers.approvals]),
                 ("BOSUN_LEARN_ENABLED", flag[answers.learning]),
                 ("BOSUN_LEARN_AT", learn_at(answers)),
+                ("BOSUN_KNOWLEDGE_ENABLED", flag[answers.knowledge]),
             ],
         ),
     ]
@@ -1100,6 +1113,7 @@ def describe_features(answers: Answers) -> str:
         ("events", answers.events),
         ("approvals", answers.approvals),
         ("learning", answers.learning),
+        ("ontology", answers.knowledge),
         ("Slack watcher", answers.slack_watch),
     )
     on = [name for name, value in switches if value]

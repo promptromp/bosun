@@ -26,6 +26,8 @@
 #           real money, about a dollar. It reads API keys from your Keychain, as BOSUN_SANDBOX_ANTHROPIC_ITEM
 #           and BOSUN_SANDBOX_OPENAI_ITEM name them; they never leave the clone, which is deleted.
 #           BOSUN_SANDBOX_CODEX_MODEL picks a cheaper model than Codex's default.
+#           On Claude Code it includes the ontology end to end (live.sh's `ontology`, after the hand-over);
+#           BOSUN_SANDBOX_LIVE_STEP=ontology runs only that, after the install (about 15 minutes).
 #           live agy needs you: its login is a browser sign-in, in the desktop session. The clone boots with
 #           its window, agy is installed with Google's installer, and you are told to open Terminal there,
 #           run ~/.local/bin/agy, sign in with Google (a personal account's free quota) and quit it; the run
@@ -36,8 +38,8 @@
 #   try     the same, with bosun already set up and running in it, signed in: Claude Code (and Codex with
 #           `codex`) installed by the installer's own lines, its first-run screens gone through, your Anthropic
 #           key from the Keychain as its apiKeyHelper (as for live; the OpenAI key for codex), bosun installed
-#           unattended from the release (--from checkout: this checkout), the exporter repo as its window, the
-#           menu bar app (from the release), and started. Its agents use BOSUN_SANDBOX_TRY_MODEL (sonnet): the
+#           unattended from the release (--from checkout: this checkout, with the ontology), the acme world's three
+#           repos as its windows, the menu bar app (from the release), and started. Its agents use BOSUN_SANDBOX_TRY_MODEL (sonnet): the
 #           key is billed per request for as long as bosun runs in it, until you leave the shell. --run <script>:
 #           instead of your shell, the script runs in the clone (zsh, its output here, masked), and the clone is
 #           deleted when it ends: bosun with the real agents, set up and checked with no one at it
@@ -329,12 +331,15 @@ need_key() { # <Keychain item>: without -w, this asks whether it is there and no
 
 # A key only ever goes through a pipe, so it is never in a variable, an argument or a screen, and goes into
 # a file only the VM's user can read: what apiKeyHelper reads, or Codex's own login. Anything coming back
-# that looks like a key is masked.
+# that looks like a key is masked. ~/Development is a working directory of every window too: an agent that
+# makes a worktree beside its repo (../repo-fix) reads there, and Claude Code 2.1.308 otherwise stops the
+# window to ask about each read outside its working directories, as a person who said "keep allowing" once
+# would not be asked.
 keys_into_vm() { # <agent>
   # shellcheck disable=SC2016 # expands in the VM
   security find-generic-password -s "$ANTHROPIC_ITEM" -w | in_vm "$CLONE" 'umask 077; mkdir -p ~/.config/sandbox ~/.claude
     cat >~/.config/sandbox/anthropic-key
-    printf "{\"apiKeyHelper\": \"cat %s/.config/sandbox/anthropic-key\"}\n" "$HOME" >~/.claude/settings.json' ||
+    printf "{\"apiKeyHelper\": \"cat %s/.config/sandbox/anthropic-key\", \"permissions\": {\"additionalDirectories\": [\"%s/Development\"]}}\n" "$HOME" "$HOME" >~/.claude/settings.json' ||
     die "could not put the Anthropic key in the VM"
   [ "$1" = "codex" ] || return 0
   security find-generic-password -s "$OPENAI_ITEM" -w | in_vm "$CLONE" '/opt/homebrew/bin/codex login --with-api-key >/dev/null 2>&1' ||
@@ -367,7 +372,7 @@ live() { # [claude|codex|agy]
   # The keys first: a failure of theirs, or a Keychain prompt on this Mac, never comes after the sign-in.
   keys_into_vm "$agent"
   [ "$agent" = "agy" ] && { in_vm_masked login agy || die "the sign-in to Antigravity did not finish"; }
-  in_vm_masked go "$agent" "${BOSUN_SANDBOX_CODEX_MODEL:-}"
+  in_vm_masked "${BOSUN_SANDBOX_LIVE_STEP:-go}" "$agent" "${BOSUN_SANDBOX_CODEX_MODEL:-}"
 }
 
 # A clone with its window, and your shell in it, until you leave it. A restart in the clone (to try Open at Login,
@@ -430,6 +435,24 @@ person_shell() {                 # <welcome>
 
 # `shell` with bosun set up, running and signed in (see the header). The keys go in as for live: through a pipe,
 # into a file only the clone's user can read, and the clone is deleted when you leave.
+welcome_text() { # <from> <model>: what `mac try` tells a person (a function: bash 3.2 misparses this heredoc inside $( ))
+  local from="$1" model="$2"
+  cat <<WELCOME
+
+A throwaway Mac with bosun running in it, from the $from, signed in with your Anthropic key (as its
+apiKeyHelper), its agents on $model. The key is billed per request for as long as bosun runs: leaving
+this shell (exit) deletes the clone, and \`bosun stop\` stops it sooner. A restart keeps it.
+
+  bosun status          how it is (and the menu bar icon in the window)
+  bosun attach          the windows: the orchestrator, and a session for each of the three repos
+  bosun console         the web console
+
+The repos (~/Development/exporter, pdf-renderer, ledger-sync) push to a local stand-in of GitHub, so nothing leaves the Mac
+but requests to the agents' APIs. Remote Control needs a claude.ai login: it does not work with a key.
+
+WELCOME
+}
+
 try() { # [--from release|checkout] [--run <script>] [claude|codex]
   local from=release agent=claude repo model="${BOSUN_SANDBOX_TRY_MODEL:-sonnet}" script=""
   while [ $# -gt 0 ]; do
@@ -468,22 +491,7 @@ try() { # [--from release|checkout] [--run <script>] [claude|codex]
       in_vm "$CLONE" "zsh -l -s" 2>&1 | sed -l -E -e "$KEY_SHAPE" -e "$TOKEN_SHAPE"
     return "${PIPESTATUS[1]}" # the script's, through ssh
   fi
-  person_shell "$(
-    cat <<WELCOME
-
-A throwaway Mac with bosun running in it, from the $from, signed in with your Anthropic key (as its
-apiKeyHelper), its agents on $model. The key is billed per request for as long as bosun runs: leaving
-this shell (exit) deletes the clone, and \`bosun stop\` stops it sooner. A restart keeps it.
-
-  bosun status          how it is (and the menu bar icon in the window)
-  bosun attach          the windows: the orchestrator, the exporter repo's session
-  bosun console         the web console
-
-The exporter repo (~/Development/exporter) pushes to a local stand-in of GitHub, so nothing leaves the Mac
-but requests to the agents' APIs. Remote Control needs a claude.ai login: it does not work with a key.
-
-WELCOME
-  )"
+  person_shell "$(welcome_text "$from" "$model")"
 }
 
 clean() {

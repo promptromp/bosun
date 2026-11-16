@@ -255,7 +255,7 @@ the cheapest of these that can show what you changed:
 | What a new Mac lacks: Homebrew, Apple's tools | `tests/sandbox.sh mac run --from-nothing` | the same from a Mac with nothing on it | 4 minutes |
 | What the menu bar app (`bosun.app`) does: every state of its menu, every dialog and choice of its Quit and update, Open at Login across a restart, one copy at a time, what macOS says to a quit by Apple Event | `tests/sandbox.sh mac app` | the real app, built here and driven by its test hooks on a clone's desktop session, with launchd, a reboot and the Trash; `--from release` the published, notarized one | about 30 minutes |
 | What an update does to an install in use, its windows, its ledger and knowledge base, and what real use does to them: their journals, ids, writes, privacy | `tests/sandbox.sh mac work` | a week of work through the first update's conversion and a mid-afternoon update on a year of data, on real macOS: launchd, a moving clock, racing writers, writes cut short, files changed outside the journal, going back | 16 minutes |
-| How an agent behaves: launching it, its screens and files, a task handed to it, an update's prompts, which MCP servers a window reaches | `tests/sandbox.sh mac live claude`, `... live codex` | the real agents from nothing, through setup, sessions, an update and connectors | about 10 minutes and a dollar each |
+| How an agent behaves: launching it, its screens and files, a task handed to it, an update's prompts, which MCP servers a window reaches | `tests/sandbox.sh mac live claude`, `... live codex` | the real agents from nothing, through setup, sessions, an update and connectors | about 10 minutes and a dollar each (on Claude Code about 12 minutes and a few dollars more, for the ontology) |
 | How Antigravity (`agy`) behaves under bosun: its hooks and plugin, its screen, its dialogs, its login | `tests/sandbox.sh mac live agy` | the real `agy` in a VM with a window, where you sign in; then windows started by launchd, Esc, a reviewer's dialog, the plugin's approvals, a slow hook, connectors, uninstall | about 25 minutes, you at the start, and a personal account's free quota |
 | How bosun feels to use, by hand, with the real agents and no setup of yours | `tests/sandbox.sh mac try` | bosun installed, signed in by your key and running in a VM with a window, for you to try until you leave its shell | about 10 minutes to set up, then the key's requests while it runs |
 | The wake itself | `bosun wake-test`, on real hardware | a real sleep and a real wake | 5 minutes |
@@ -451,11 +451,42 @@ BOSUN_SANDBOX_CODEX_MODEL=<a cheap model> tests/sandbox.sh mac live codex
 
 On a clone of the developer's Mac it does what a new user does, following only what the installer prints:
 it stops for what is missing, runs the line it gave, logs in, goes through Claude Code's first screens, and
-installs. Then real windows, a restart that must come back on the same session, and a real task: the real
+installs. The world it installs for is fictional acme's (`tests/sandbox/live/`): three small repositories
+(`exporter`, `pdf-renderer`, `ledger-sync`), each with a README, a `CODEOWNERS`, tests and a scripted history of
+a few commits by different people (`history.sh`), each a window, and the ontology about them
+(`knowledge.jsonl`, imported after `tests/fixtures/knowledge/acme-import.jsonl` and confirmed by hand, as
+`seed_knowledge` in `live.sh` does). Then real windows, a restart that must come back on the same session, and a real task: the real
 orchestrator hands a fix to the real repo session, which must report to the ledger, push a branch whose
 tests pass and open a pull request, and the orchestrator must link it. `live codex` runs the repo window on
 Codex and the orchestrator on Claude Code. GitHub is a stand-in and the remote a local bare repo, so nothing
 leaves the Mac but requests to the agents' APIs. It is not in CI, because it costs money and needs keys.
+
+On Claude Code, between the hand-over and the update, the ontology end to end (`ontology` in `live.sh`; the key
+`BOSUN_KNOWLEDGE_ENABLED=1` is on, from `bosun init`'s recommendation, and the step puts it in `bosun.env` and
+restarts the windows if it is not, then checks that the orchestrator's and the repo window's launch carry the
+ontology's rules). Every request is typed into the window as a person types it (tmux's `send-keys` in the windows'
+own server), never through `bosun send`, whose pastes bosun records as its own, so that they count as the
+person's words. Four scenarios, each checked in what the agents did:
+
+1. **A pack the task needs:** the orchestrator is asked to have the exporter window round VAT per invoice line
+   in `exporter/tax.py` (and told "yes, go ahead" if it asks). The brief the repo window gets must carry the
+   ontology's section and the tax-rounding rule's fact id, and the branch it pushes must add a test named for a
+   credit note and one for a second currency, as that rule says.
+2. **A retired environment:** the repo window is asked to run the integration check on the exporter's
+   environments. `~/.sandbox/integration-staging` must exist and `~/.sandbox/integration-staging-2` must not:
+   only the ontology says staging-2 is retired, its config does not (the markers are cleared first, so that an
+   earlier run of the check in scenario 1 proves nothing).
+3. **Routing:** the orchestrator is asked who should review a change to the pdf renderer and where to ask them.
+   Its transcript must show a `bosun kg` read before a reply that names Marco and #acme-prs, and the ledger must
+   hold no new outreach item.
+4. **Capture:** "From now on, CSV exports never include draft invoices." typed into the repo window must leave a
+   confirmed `rule` on `feature/csv-export` whose source is `user`, with that session's id and the words quoted.
+
+The step also prints, as notes and never as checks, what the ontology cost: each brief's section (the pack line
+`bosun delegate` writes in `delegate-<date>.log`: targets, facts, estimated tokens) and the number of `bosun kg`
+calls each window made, in all and per scenario (counted in the Bash calls of the windows' transcripts). It adds about
+12 minutes and a few dollars; `BOSUN_SANDBOX_LIVE_STEP=ontology tests/sandbox.sh mac live claude` runs only the
+install, the windows and this step.
 
 Then an update with the agents at work. First, whether a running Claude picks up a changed command file of
 its plugin: a Claude on the smallest model runs with `--plugin-dir` through a link, as the orchestrator does
@@ -520,9 +551,10 @@ BOSUN_SANDBOX_TRY_MODEL=opus tests/sandbox.sh mac try
 tests/sandbox.sh mac try --run checks.sh          # no shell: your script runs in the clone, which then goes
 ```
 
-It runs `live`'s first step in the clone (the exporter repo, and the lines the installer prints for what is
-missing), puts your key in as for `live`, goes through Claude Code's first-run screens, installs bosun
-unattended, makes the exporter repo its window, adds the menu bar app (from the release only: this checkout's
+It runs `live`'s first step in the clone (the acme world's three repositories, and the lines the installer prints
+for what is missing), puts your key in as for `live`, goes through Claude Code's first-run screens, installs bosun
+unattended, makes the three repositories its windows (with `--from checkout`, the world's ontology too: a release
+has not the ontology's rules), adds the menu bar app (from the release only: this checkout's
 app version may not be published) and starts bosun. Its agents use `BOSUN_SANDBOX_TRY_MODEL` (`sonnet`) rather
 than bosun's defaults, the largest models, because the key is billed per request for as long as bosun runs:
 leaving the shell deletes the clone, and `bosun stop` in it stops the spending sooner. With a key, Claude Code
@@ -738,7 +770,10 @@ Work up the levels; each one exercises more of the real chain.
    yours, read tools only). Each run has a scratch world: scratch HOME, ledger
    and tmux server, sends only logged, outward tools denied. It costs money (about $0.3 per case
    and run, for each case in `tests/llm/cases.py`), so neither the smoke suite nor the hooks run
-   it; run it after changing `policy.md`, `chores.md` or the task files.
+   it; run it after changing `policy.md`, `chores.md`, the task files or `knowledge.md`. The run has
+   the ontology on (`BOSUN_KNOWLEDGE_ENABLED=1`: its rules in the prompts, the acme world's knowledge
+   base seeded for the K cases, a pack in a repo brief); `--knowledge off` runs the same cases without
+   it, as the baseline of what the rules cost and change.
 8. **What learning finds:** `uv run python tests/llm/learn_eval.py [--runs 2]` builds a
    fictional world (acme's invoice exporter, three days) with planted problems (an overnight
    permission prompt, a repeated guard denial, a duplicate hand-over, a correction made twice, a

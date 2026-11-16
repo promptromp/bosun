@@ -365,6 +365,9 @@ set_knowledge_defaults() {
   BOSUN_KNOWLEDGE_GROUP_FACTS="8"
   # `kg lint` reports confirmed facts not observed for this many days as stale.
   BOSUN_KNOWLEDGE_STALE_DAYS="180"
+  # 1: `bosun delegate` adds what the knowledge base says about the task's repo and area (a context
+  # pack of confirmed, cited facts) to each brief. 0: a brief is the same as without it.
+  BOSUN_KNOWLEDGE_ENABLED="0"
 }
 
 set_console_defaults() {
@@ -629,14 +632,36 @@ one_at_a_time() { # <name> <wait seconds> <message>
   exit 75
 }
 
+# The ontology's standing rules (orchestrator/knowledge.md: look before asking, record what I state as standing),
+# with their heading. Both the orchestrator's policy and a repo window's prompt end with them.
+knowledge_rules() {
+  printf '# The ontology\n\n'
+  cat "$BOSUN_ROOT/orchestrator/knowledge.md"
+}
+
 # The orchestrator's policy: orchestrator/policy.md, then the site's $BOSUN_CONFIG_DIR/policy.md
-# if there is one (additions for this machine or team, without forking the repo).
+# if there is one (additions for this machine or team, without forking the repo), then, with
+# BOSUN_KNOWLEDGE_ENABLED=1, the ontology's rules. With it off, the policy is what it was without them.
 orchestrator_policy() {
   cat "$BOSUN_ROOT/orchestrator/policy.md"
   if [ -f "$BOSUN_CONFIG_DIR/policy.md" ]; then
     printf '\n\n# Site policy (%s)\n\n' "$BOSUN_CONFIG_DIR/policy.md"
     cat "$BOSUN_CONFIG_DIR/policy.md"
   fi
+  if [ "$BOSUN_KNOWLEDGE_ENABLED" = "1" ]; then
+    printf '\n\n'
+    knowledge_rules
+  fi
+}
+
+# What a repo window's system prompt gets from the ontology: its rules when BOSUN_KNOWLEDGE_ENABLED=1 and the
+# agent the window runs on (<harness>) is one whose sessions bosun can check a quote of my words in (its
+# profile's verifies_quotes); nothing otherwise (the other agents get what the ontology knows in their briefs).
+window_knowledge_prompt() { # <harness>
+  [ "$BOSUN_KNOWLEDGE_ENABLED" = "1" ] || return 0
+  # Only Claude's module calls this today; the check keeps it right for another agent that reuses it.
+  [ "$(profile_field "$1" verifies_quotes 2>/dev/null)" = "yes" ] || return 0
+  knowledge_rules
 }
 
 # The keep-awake (caffeinate) pid file that `morning` writes and `stop` releases.
@@ -1672,11 +1697,12 @@ find_window() {
     awk -F'\t' -v name="$1" '$1 == name && !found { print $2; found = 1 } END { exit !found }'
 }
 
-# With events on, tell <window>'s prompt hook that <text> is bosun's, not yours, so it is not
-# recorded as something you said (`ledger said`, user-said events): every prompt bosun gives a
-# window, pasted (`send`) or passed at launch (refresh's fresh conversation, `send --new`).
+# Note that <text> is bosun's, not yours, so it is never taken for something you said: by <window>'s
+# prompt hook (`ledger said`, user-said events) or as your words in a quote (`kg --from-user`, which
+# runs whatever the events key says): every prompt bosun gives a window, pasted (`send`) or passed at
+# launch (refresh's fresh conversation, `send --new`).
 note_bosun_prompt() { # <window> <text>
-  [ "$BOSUN_EVENTS_ENABLED" = "1" ] && [ -n "$2" ] || return 0
+  [ -n "$2" ] || return 0
   BOSUN_STATE_DIR="$BOSUN_STATE_DIR" python3 "$BOSUN_ROOT/lib/events.py" pasted "$1" <<<"$2" ||
     log "warning: could not note bosun's prompt for $1's prompt hook"
 }

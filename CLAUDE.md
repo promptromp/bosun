@@ -162,7 +162,7 @@ of truth, so don't copy rules into this file.
   files are), `lib/knowledge_store.py` (files, lock, git), `lib/knowledge.py` + `libexec/bosun-kg`
   (the CLI and import, and the write boundary: the journal first, then the files and `view.json`;
   reads caught up with the journal, `knowledge.load` being the one reader, which the console calls with the identifiers, forgotten records and key left out; `kg validate`). Quotes of my words are checked
-  with `lib/approvals.py`'s genuine-prompt test. `tools/survey_to_kg.py` converts a survey into an
+  with `lib/approvals.py`'s genuine-prompt test, in the session that ran `kg` (`calling_session` in `lib/agent_state.py`, through the `AGENTS` table). With `BOSUN_KNOWLEDGE_ENABLED=1`, `bosun delegate` adds the pack, and the orchestrator's and Claude windows' prompts end with `orchestrator/knowledge.md` (`knowledge_rules`, `window_knowledge_prompt` in `lib/common.sh`; `Profile.verifies_quotes` says which agents). `tools/survey_to_kg.py` converts a survey into an
   import file; the fixture knowledge base is `tests/fixtures/knowledge/acme-import.jsonl`.
 - Agents (design: `docs/design/harnesses.md`): an adapter per agent, `lib/claude_state.py`,
   `lib/codex_state.py` and `lib/agy_state.py`, each a module with the functions of `Agent` in `lib/agent_state.py`, whose `AGENTS`
@@ -412,7 +412,9 @@ tests, which come last (CI's `lint` job runs a copy with `fail_fast: false`, so 
 - Shell: shellcheck (`-S style`, follows `source` via `.shellcheckrc`), shfmt (2-space indent,
   indented `case`, from `.editorconfig`), and `tools/shell_complexity.py` (functions: branch
   count <= 15 and <= 60 lines; script bodies <= 25 and <= 120 lines), since the Python tools do
-  not read shell.
+  not read shell; and `tools/bash32_hook.sh`, every script parsed by macOS's own `/bin/bash` 3.2
+  (`bash -n`), which caught what shellcheck and bash 5 missed, skipping in one line where
+  `/bin/bash` is not 3.2 (CI's Linux `lint`).
 - Swift (the menu bar app in `app/`; three hooks on `files: ^app/`, so a Python-only commit pays nothing, each
   run only on a Mac and skipping with one line elsewhere or when `swift` is absent, through `tools/swift_hook.sh`:
   CI's Linux `lint` job has a `swift` that cannot build AppKit, and the macOS `app` job runs them): `swift format lint --strict` (the

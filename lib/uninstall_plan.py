@@ -134,6 +134,7 @@ LOG_FILES = tuple(
         "checkin-*.log",
         "learn-*.log",
         "hook-*.log*",
+        "delegate-*.log",
         "impact-*.log",
         "launch-*.log",
         "launchd.out",

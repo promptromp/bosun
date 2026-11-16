@@ -11,7 +11,7 @@ ORCHESTRATOR_HARNESS="claude"
 # process: one tab-separated line per agent, in AGENTS order, with the columns of AGENT_PROFILE_COLUMNS.
 # A command substitution has its own copy of the variable, so a function that makes many of them reads the
 # profiles first (need_profiles), and what they inherit is filled in.
-AGENT_PROFILE_COLUMNS="harness bin_key flags_key model_key names_sessions remote_control autocompact subagents statuses update_args"
+AGENT_PROFILE_COLUMNS="harness bin_key flags_key model_key names_sessions remote_control autocompact subagents statuses update_args verifies_quotes"
 AGENT_PROFILES=""
 AGENT_PROFILES_ERROR=""
 

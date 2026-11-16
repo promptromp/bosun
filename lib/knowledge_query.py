@@ -9,18 +9,22 @@ Pure over a knowledge_model.KB.
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
 import knowledge_model as km
 import knowledge_review as kr
+import knowledge_schema as ks
 from knowledge_model import KB, Record
 
 
 DEFAULT_PACK_TOKENS = 1500
 CHARS_PER_TOKEN = 4  # a rough estimate, enough to keep a pack small
 MAX_HOPS = 3
-DEFAULT_SEARCH_LIMIT = 10
+LOOKUP_TOKENS = 800  # what `kg lookup` prints at most (its --json stays complete)
+LOOKUP_PENDING = 5  # waiting facts a lookup lists; it counts the rest
+SEARCH_HITS = 10
 PACK_TOPIC_ENTITIES = 3
 MORE_LINE_RESERVE = 80  # room for the "(N more: ...)" line
 # Context packs try these types when --for names neither an entity nor an alias.
@@ -64,22 +68,48 @@ def entity_header(kb: KB, entity: Record) -> list[str]:
     return lines
 
 
-def lookup(kb: KB, ref: str) -> str:
-    """An entity's current confirmed facts with sources, what links to it, and what waits."""
+def within(lines: list[str], budget: int) -> tuple[list[str], int]:
+    """All of <lines> if they fit in <budget> characters, else the leading ones that fit with room for a
+    "more" line; returns them and how many facts were left out (a "linked from:" heading is no fact)."""
+    if sum(len(line) + 1 for line in lines) <= budget:
+        return lines, 0
+    used = 0
+    for index, line in enumerate(lines):
+        used += len(line) + 1
+        if used > budget - MORE_LINE_RESERVE:
+            return lines[:index], sum(1 for rest in lines[index:] if rest[0] == " ")
+    return lines, 0
+
+
+def waiting_lines(kb: KB, entity_id: str) -> list[str]:
+    """The facts about <entity_id> that wait for review: LOOKUP_PENDING of them, then a count."""
+    pending = by_order([f for f in kr.waiting(kb) if entity_id in (f["subject"], f.get("object"))])
+    if not pending:
+        return []
+    lines = [f"unconfirmed ({len(pending)}, not used in context packs):"]
+    lines += [f"  {fact_line(kb, f)}" for f in pending[:LOOKUP_PENDING]]
+    if len(pending) > LOOKUP_PENDING:
+        lines.append(f"(+{len(pending) - LOOKUP_PENDING} more waiting for review)")
+    return lines
+
+
+def lookup(kb: KB, ref: str, max_tokens: int = LOOKUP_TOKENS) -> str:
+    """An entity's current confirmed facts with sources, what links to it, and what waits: the facts
+    and links within <max_tokens> (then how many more, and the command that shows them), at most
+    LOOKUP_PENDING waiting ones."""
     entity = kb.entities[km.resolve(kb, ref)]
     entity_id = entity["id"]
-    lines = entity_header(kb, entity)
     own, links = outgoing(kb, entity_id), incoming(kb, entity_id)
-    lines.append("facts:" if own else "facts: none confirmed")
-    lines += [f"  {fact_line(kb, f)}" for f in own]
+    head = [*entity_header(kb, entity), "facts:" if own else "facts: none confirmed"]
+    tail = waiting_lines(kb, entity_id)
+    body = [f"  {fact_line(kb, f)}" for f in own]
     if links:
-        lines.append("linked from:")
-        lines += [f"  {fact_line(kb, f)}" for f in links]
-    pending = [f for f in kr.waiting(kb) if entity_id in (f["subject"], f.get("object"))]
-    if pending:
-        lines.append(f"unconfirmed ({len(pending)}, not used in context packs):")
-        lines += [f"  {fact_line(kb, f)}" for f in by_order(pending)]
-    return "\n".join(lines)
+        body += ["linked from:", *[f"  {fact_line(kb, f)}" for f in links]]
+    fixed = sum(len(line) + 1 for line in head + tail)
+    shown, left = within(body, max_tokens * CHARS_PER_TOKEN - fixed)
+    if left:
+        shown.append(f"({left} more: kg lookup {entity_id} --max-tokens {max_tokens * 4})")
+    return "\n".join(head + shown + tail)
 
 
 @dataclass(frozen=True)
@@ -143,7 +173,7 @@ def fact_text_hits(kb: KB, wanted: str) -> list[tuple[Record, str]]:
     return hits
 
 
-def search(kb: KB, text: str, limit: int = DEFAULT_SEARCH_LIMIT) -> list[tuple[int, str, str]]:
+def search(kb: KB, text: str, limit: int = SEARCH_HITS) -> list[tuple[int, str, str]]:
     """(score, entity id, why) for entities matching <text> in a name, alias, summary or the value
     of a fact about them (current facts only; unconfirmed ones count too, marked as such)."""
     wanted = km.norm(text)
@@ -189,17 +219,48 @@ def links_of(entity_id: str, links: list[Record], used: set[str]) -> list[Record
 # ---- context packs ------------------------------------------------------------------------------
 
 
-def pack_targets(kb: KB, target: str) -> list[str]:
-    """The entities a pack is for: the one <target> names (or <type>/<target> for the usual types),
-    else the best search matches for it as a topic."""
+def repo_by_last_segment(kb: KB, target: str) -> str:
+    """The repo a path or URL names by its last segment (owner/repo, remotes/repo, a local path or
+    host/owner/repo.git, which is how a remote that is rewritten to a folder reads): the repo's slug,
+    name or strong alias. "" if <target> has no slash or the segment names no repo."""
+    segment = target.strip().rstrip("/").rpartition("/")[2].removesuffix(".git")
+    if "/" not in target or not segment:
+        return ""
+    if f"repo/{segment}" in kb.entities:
+        return f"repo/{segment}"
     try:
-        return [km.resolve(kb, target)]
+        found = km.resolve(kb, segment)
     except km.KnowledgeError:
-        pass
-    for entity_type in PACK_TYPES:
-        candidate = f"{entity_type}/{target.strip().lower()}"
+        return ""
+    return found if found.startswith("repo/") else ""
+
+
+def named_entity(kb: KB, target: str) -> str:
+    """The entity <target> names, or ""."""
+    try:
+        return km.resolve(kb, target)
+    except km.KnowledgeError:
+        return ""
+
+
+def pack_targets(kb: KB, target: str, *, topics: bool = True) -> list[str]:
+    """The entities a pack is for: the one <target> names (or <type>/<target> for the usual types;
+    for owner/repo, repo/<repo>), else, with <topics>, the best search matches for it as a topic.
+    Without <topics> (a brief's repo or area), a target that names a person is none: a person's own
+    profile is nothing to put in a brief."""
+    named = named_entity(kb, target)
+    if named:
+        return [named] if topics or not ks.is_person(named) else []
+    slug = target.strip().lower()
+    candidates = [f"{entity_type}/{slug}" for entity_type in PACK_TYPES]
+    for candidate in candidates:
         if candidate in kb.entities:
             return [candidate]
+    repo = repo_by_last_segment(kb, slug)
+    if repo:
+        return [repo]
+    if not topics:
+        return []
     return [entity_id for _, entity_id, _ in search(kb, target, PACK_TOPIC_ENTITIES)]
 
 
@@ -217,7 +278,9 @@ def pack_line(kb: KB, fact: Record) -> str:
 
 
 def pack_facts(kb: KB, targets: list[str]) -> list[Record]:
-    """The targets' own facts and the links to them, then their neighbours' own facts."""
+    """The targets' own facts and the links to them, then their neighbours' own facts, but a
+    neighbouring person's: who reviews or owns the target is one of the links to it, and that
+    person's own profile (timezone, hours, preferences, title) is nothing to put in a brief."""
     ordered: list[Record] = []
     seen: set[str] = set()
 
@@ -232,31 +295,101 @@ def pack_facts(kb: KB, targets: list[str]) -> list[Record]:
         add(incoming(kb, entity_id))
     for entity_id in targets:
         for _, fact in neighbors(kb, entity_id, 1):
-            add(outgoing(kb, fact["object"] if fact["subject"] == entity_id else fact["subject"]))
+            other = fact["object"] if fact["subject"] == entity_id else fact["subject"]
+            if not ks.is_person(other):
+                add(outgoing(kb, other))
     return ordered
 
 
-def context_pack(kb: KB, target: str, max_tokens: int = DEFAULT_PACK_TOKENS) -> str:
-    """At most about <max_tokens> of confirmed, current facts, each citing its id and source."""
-    targets = pack_targets(kb, target)
-    if not targets:
-        return f"No knowledge recorded for {target!r}."
-    names = ", ".join(f"{km.label(kb, t)} ({t})" for t in targets)
+@dataclass(frozen=True)
+class Pack:
+    """A context pack's lines and how many of them are facts."""
+
+    lines: tuple[str, ...]
+    facts: int
+
+
+def section_head(kb: KB, entities: list[str], budget: int) -> list[str]:
+    """A section's header and the summaries that fit in <budget> characters after it; none when
+    the header itself does not fit."""
+    names = ", ".join(f"{km.label(kb, t)} ({t})" for t in entities)
     lines = [f"Knowledge for {names}: confirmed facts only; cite the [id] when you rely on one."]
-    lines += [f"{t}: {kb.entities[t]['summary']}" for t in targets if kb.entities[t].get("summary")]
-    budget = max_tokens * CHARS_PER_TOKEN - MORE_LINE_RESERVE
+    used = len(lines[0]) + 1
+    if used > budget:
+        return []
+    for entity_id in entities:
+        summary = kb.entities[entity_id].get("summary")
+        line = f"{entity_id}: {summary}"
+        if summary and used + len(line) + 1 <= budget:
+            lines.append(line)
+            used += len(line) + 1
+    return lines
+
+
+def pack_section(kb: KB, entities: list[str], budget: int, shown: set[str]) -> tuple[list[str], int, int]:
+    """The header, summaries and facts of one target (not those <shown> already), within <budget>
+    characters; returns its lines, the facts among them and the characters those took (the line
+    that counts what did not fit is not among them: pack_of keeps room for it)."""
+    lines = section_head(kb, entities, budget)
+    if not lines:
+        return [], 0, 0
     used = sum(len(line) + 1 for line in lines)
-    facts = pack_facts(kb, targets)
+    facts = [f for f in pack_facts(kb, entities) if f["id"] not in shown]
+    count = 0
     for index, fact in enumerate(facts):
         line = pack_line(kb, fact)
         if used + len(line) + 1 > budget:
-            lines.append(f"({len(facts) - index} more: kg lookup {targets[0]})")
+            lines.append(f"({len(facts) - index} more: kg lookup {entities[0]})")
             break
         lines.append(line)
+        shown.add(fact["id"])
         used += len(line) + 1
+        count += 1
     if not facts:
         lines.append("(no confirmed facts yet)")
-    return "\n".join(lines)
+    return lines, count, used
+
+
+def pack_of(
+    kb: KB, targets: Sequence[str], max_tokens: int = DEFAULT_PACK_TOKENS, *, topics: bool = True
+) -> Pack:
+    """A section per target that names something (one shared budget: each gets an equal share of
+    what is left, so the first cannot use it all), or no lines when none does."""
+    sections: list[list[str]] = []
+    for target in targets:
+        entities = pack_targets(kb, target, topics=topics)
+        if entities and entities not in sections:
+            sections.append(entities)
+    remaining = max_tokens * CHARS_PER_TOKEN - MORE_LINE_RESERVE * len(sections)
+    lines: list[str] = []
+    facts = 0
+    shown: set[str] = set()
+    for index, entities in enumerate(sections):
+        later = len(sections) - index - 1
+        section, count, used = pack_section(kb, entities, remaining // (later + 1), shown)
+        if not section:
+            # its share cannot hold even its header: it takes what is left, the room kept for the
+            # later sections' last lines too, and no later section comes
+            section, count, _ = pack_section(kb, entities, remaining + MORE_LINE_RESERVE * later, shown)
+            lines += section
+            facts += count
+            break
+        remaining -= used
+        lines += section
+        facts += count
+    return Pack(tuple(lines), facts)
+
+
+def context_pack(
+    kb: KB, targets: Sequence[str] | str, max_tokens: int = DEFAULT_PACK_TOKENS, *, topics: bool = True
+) -> str:
+    """At most about <max_tokens> of confirmed, current facts, each citing its id and source: a
+    section per target (a single <targets> string is one target)."""
+    named = [targets] if isinstance(targets, str) else list(targets)
+    pack = pack_of(kb, named, max_tokens, topics=topics)
+    if not pack.lines:
+        return f"No knowledge recorded for {', '.join(repr(t) for t in named)}."
+    return "\n".join(pack.lines)
 
 
 def estimate_tokens(text: str) -> int:

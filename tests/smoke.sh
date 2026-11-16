@@ -798,6 +798,25 @@ check "an empty auto-compact setting leaves Claude Code's default" bash -c '! gr
 check "an auto-compact window out of range is refused" fails_with "must be auto or 100000-1000000" env BOSUN_AUTOCOMPACT_TOKENS=5000 "$BOSUN" launch alpha
 out="$(cd "$REPO_A" && "$BOSUN" launch alpha 2>&1)"
 check "repo sessions get the compaction hook" bash -c 'grep -q "SessionStart" <<<"$1" && grep -qE "compact-context.{0,2} --window.{0,2} alpha" <<<"$1"' _ "$out"
+# The ontology's standing rules (orchestrator/knowledge.md), for a window on an agent whose quotes bosun can check.
+# Off, the launch is what it was; the launch record's fingerprint tells the two apart (the policy's text itself is not in it).
+off_fingerprint="$(jq -r .fingerprint.args "$BOSUN_STATE_DIR/launches/smoke/alpha.json")"
+out_on="$(cd "$REPO_A" && BOSUN_KNOWLEDGE_ENABLED=1 "$BOSUN" launch alpha 2>&1)"
+check "with the ontology on, a repo window's launch carries its rules, after the model and effort" grep -qE -- '--model opus --settings .*--append-system-prompt .*Look.before.asking.*--autocompact 300000 --name alpha' <<<"$out_on"
+check "... recorded as a launch with a policy argument, so a window launched before is seen to differ" bash -c '
+  [ "$(jq -r .fingerprint.args "$1/launches/smoke/alpha.json")" != "$2" ]' _ "$BOSUN_STATE_DIR" "$off_fingerprint"
+out_off="$(cd "$REPO_A" && BOSUN_KNOWLEDGE_ENABLED=0 "$BOSUN" launch alpha 2>&1)"
+check "with it off, a repo window launches with no system prompt, as before" bash -c '
+  ! grep -q -- "--append-system-prompt" <<<"$1" && ! grep -q "Look.before.asking" <<<"$1"' _ "$out_off"
+check "... and records the fingerprint it had" test "$(jq -r .fingerprint.args "$BOSUN_STATE_DIR/launches/smoke/alpha.json")" = "$off_fingerprint"
+policy_off="$WORK/policy-ontology-off.txt"
+policy_on="$WORK/policy-ontology-on.txt"
+bash -c 'source "$1/lib/common.sh"; BOSUN_CONFIG_DIR="$2"; load_config; orchestrator_policy' _ "$ROOT" "$WORK/no-site-config" >"$policy_off"
+BOSUN_KNOWLEDGE_ENABLED=1 bash -c 'source "$1/lib/common.sh"; BOSUN_CONFIG_DIR="$2"; load_config; orchestrator_policy' _ "$ROOT" "$WORK/no-site-config" >"$policy_on"
+check "with the ontology off, the orchestrator's policy is policy.md and nothing else" cmp -s "$policy_off" "$ROOT/orchestrator/policy.md"
+check "... and on, it ends with the ontology's rules" bash -c '
+  head -c "$(wc -c <"$2")" "$1" | cmp -s - "$2" && tail -c "$(wc -c <"$3")" "$1" | cmp -s - "$3" && grep -q "^# The ontology$" "$1"' _ \
+  "$policy_on" "$policy_off" "$ROOT/orchestrator/knowledge.md"
 check "BOSUN_COMPACT_CONTEXT=0 leaves the hook out" bash -c '! grep -q "compact-context" <<<"$1"' _ "$(cd "$REPO_A" && BOSUN_COMPACT_CONTEXT=0 "$BOSUN" launch alpha 2>&1)"
 out="$(printf '{"hook_event_name":"SessionStart","source":"compact"}' | "$BOSUN" hook compact-context --window alpha)"
 check "the compaction hook adds the window's items as SessionStart context" bash -c 'jq -e ".hookSpecificOutput.hookEventName == \"SessionStart\" and (.hookSpecificOutput.additionalContext | test(\"compacted\"))" <<<"$1" >/dev/null' _ "$out"
@@ -1348,6 +1367,12 @@ rm -f "$HOME/.local/bin/date"
 echo "Site rule: be brief." >"$BOSUN_CONFIG_DIR/policy.md"
 check "a site policy.md is appended to the orchestrator policy" contains "$(cd "$REPO_A" && BOSUN_ORCHESTRATOR=orch "$BOSUN" launch orch 2>&1)" "Site rule: be brief."
 rm "$BOSUN_CONFIG_DIR/policy.md"
+check "with the ontology on, the orchestrator's launch ends its policy with the ontology's rules" grep -qE -- '--append-system-prompt .*Look.before.asking' <<<"$(cd "$REPO_A" && BOSUN_ORCHESTRATOR=orch BOSUN_KNOWLEDGE_ENABLED=1 "$BOSUN" launch orch 2>&1)"
+orch_off="$(cd "$REPO_A" && BOSUN_ORCHESTRATOR=orch BOSUN_KNOWLEDGE_ENABLED=0 "$BOSUN" launch orch 2>&1)"
+check "... and off, it does not" bash -c 'grep -q -- "--append-system-prompt" <<<"$1" && ! grep -q "Look.before.asking" <<<"$1"' _ "$orch_off"
+check "the orchestrator may read and write the ontology without asking, but not forget or import" bash -c '
+  jq -e "(.permissions.allow | index(\"Bash(bosun kg propose:*)\") and index(\"Bash(bosun kg lookup:*)\") and index(\"Bash(bosun kg add-entity:*)\"))
+    and ((.permissions.allow | map(select(test(\"kg (forget|import|identify)\"))) | length) == 0)" "$1"' _ "$ROOT/orchestrator/settings.json"
 check "orchestrator settings are valid JSON" jq -e '.permissions.ask | index("Bash(gh pr merge:*)")' "$ROOT/orchestrator/settings.json"
 guard_says() { # <command>: the guard's decision for an orchestrator Bash command ("" = allowed)
   jq -n --arg c "$1" '{tool_name: "Bash", tool_input: {command: $c}}' | "$BOSUN" guard |
@@ -1606,6 +1631,9 @@ rm -f "$HOME/.claude/settings.json"
 rm -f "$WORK/mcp-claude.calls" "$BOSUN_STATE_DIR/connectors.json" "$LAUNCH_LOG"
 
 section knowledge "knowledge (kg, fixture acme knowledge base)" covers 'libexec/bosun-kg,libexec/bosun-context,tests/fixtures/knowledge/**'
+# kg runs from a terminal here: kg asks the agent session that ran it for my words, and this run's own process
+# is a running Claude's record (above), so the record is set aside until the session checks at the end.
+mv "$HOME/.claude/sessions/$$.json" "$WORK/own-session.json"
 out="$(kg import "$KG_FIXTURE" 2>&1)"
 check "import is a dry run first: counts and refusals, nothing written" bash -c 'grep -q "confirmed automatically: 0; waiting for review: 20" <<<"$1" && grep -q "refused: 2 people whitelist" <<<"$1" && [ ! -e "$2" ]' _ "$out" "$KG_DIR"
 check "import --apply --auto-confirm writes the knowledge base" contains "$(kg import "$KG_FIXTURE" --apply --auto-confirm 2>&1)" "confirmed automatically: 6; waiting for review: 14"
@@ -1644,6 +1672,25 @@ check "kg usage errors exit 2" bash -c '
     "$1" kg $args >/dev/null 2>&1
     [ $? -eq 2 ] || { echo "kg $args did not exit 2"; exit 1; }
   done' _ "$BOSUN"
+# From a Claude session (this run's process, with a session of its own for now): a quote of my words is
+# checked in that session's own transcript, a review needs one, and another transcript is refused.
+kg_session="44444444-0000-0000-0000-000000000001"
+kg_own="$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import claude_state; print(claude_state.transcript_path(sys.argv[2], sys.argv[3]))' "$ROOT/lib" "$WORK" "$kg_session")"
+mkdir -p "$(dirname "$kg_own")"
+printf '{"type":"user","timestamp":"%s","origin":{"kind":"human"},"message":{"role":"user","content":"the pdf renderer renders slowly"}}\n' \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$kg_own"
+printf '{"pid":%d,"sessionId":"%s","cwd":"%s"}' $$ "$kg_session" "$WORK" >"$HOME/.claude/sessions/$$.json"
+check "from a Claude session, my words are checked in its own transcript" contains "$(kg propose repo/pdf-renderer caveat --value 'renders slowly' --from-user --quote 'the pdf renderer renders slowly')" "confirmed (your own words"
+check "... another transcript is refused there" fails_with "not this session's transcript" kg propose repo/pdf-renderer caveat --value x --from-user --quote 'the pdf renderer renders slowly' --transcript "$transcript"
+check "... and a review there needs my words" fails_with "from a session, confirm with --from-user --quote" kg confirm repo/pdf-renderer
+# What bosun pasted into the window (a `bosun send`, events off) is in its transcript as a prompt, but not mine.
+kg_pasted="note for later: the exporter rounds per line"
+printf '{"type":"user","timestamp":"%s","origin":{"kind":"human"},"message":{"role":"user","content":"%s"}}\n' \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$kg_pasted" >>"$kg_own"
+BOSUN_EVENTS_ENABLED=0 bash -c 'source "$1/lib/common.sh" && note_bosun_prompt kg-window "$2"' _ "$ROOT" "$kg_pasted"
+check "... and text bosun pasted into the window is not my words, with events off too" contains "$(BOSUN_CALLER_WINDOW=kg-window kg propose repo/pdf-renderer caveat --value 'rounds per line' --from-user --quote 'the exporter rounds per line')" "stays proposed"
+rm -f "$kg_own"
+mv "$WORK/own-session.json" "$HOME/.claude/sessions/$$.json"
 
 always_run
 # From here on `claude` is this fake (refresh asks it for the installed version), never a real
@@ -2677,6 +2724,25 @@ PY
 check "the task table in docs/orchestrator.md matches the task files, row for row" bash -c '
   table="$(sed -n "/^## Delegated tasks/,/^## /p" "$2" | grep "^| " | grep -v "^| Task |")"
   diff <(sort <<<"$1") <(sort <<<"$table")' _ "$("$BOSUN" delegate --list --markdown)" "$ROOT/docs/orchestrator.md"
+# What the ontology says about the work: its own knowledge base (the fixture's six facts that confirm
+# themselves are enough), read by delegate only while BOSUN_KNOWLEDGE_ENABLED is 1.
+dkg() { BOSUN_CONFIG_DIR="$WORK/kg-delegate" "$BOSUN" "$@"; }
+dkg kg import "$KG_FIXTURE" --apply --auto-confirm >/dev/null 2>&1
+L upsert 'review:acme/invoice-exporter#5' --kind review-request --title 'Round tax per line' >/dev/null
+pack_opening="What bosun knows about this work (its ontology; cite a fact's [id] when you rely on it, and tell me if one is wrong):"
+brief="$(BOSUN_KNOWLEDGE_ENABLED=1 dkg delegate review --id 'review:acme/invoice-exporter#5' --ask "review it" --print 2>&1)"
+check "with the key on, a brief carries the pack for its repo, named as the ledger names it (owner/repo)" contains "$brief" "$pack_opening"
+check "... with its confirmed facts and their ids" bash -c 'grep -Eq "^- invoice exporter depends on pdf renderer \[f-[0-9a-z]{6}; " <<<"$1"' _ "$brief"
+check "... after the task's rules and before the shared ones" bash -c '
+  [ "$(grep -n "submit it as APPROVE" <<<"$1" | head -1 | cut -d: -f1)" -lt "$(grep -nF "$2" <<<"$1" | cut -d: -f1)" ] &&
+    [ "$(grep -nF "$2" <<<"$1" | cut -d: -f1)" -lt "$(grep -n "^In every task:" <<<"$1" | cut -d: -f1)" ]' _ "$brief" "$pack_opening"
+check "... and no unconfirmed fact" bash -c '! grep -q "tax rounding needs a test" <<<"$1"' _ "$brief"
+brief="$(BOSUN_KNOWLEDGE_ENABLED=0 dkg delegate review --id 'review:acme/invoice-exporter#5' --ask "review it" --print 2>&1)"
+check "with the key off, it does not" bash -c '! grep -qF "What bosun knows about this work" <<<"$1"' _ "$brief"
+brief="$(BOSUN_KNOWLEDGE_ENABLED=1 "$BOSUN" delegate review --id 'review:acme/invoice-exporter#5' --ask "review it" --print 2>&1)"
+check "with the key on but nothing known about the repo, there is no section" bash -c '! grep -qF "What bosun knows about this work" <<<"$1"' _ "$brief"
+BOSUN_KNOWLEDGE_ENABLED=1 dkg delegate review --id 'review:acme/invoice-exporter#5' --ask "review it" --print >/dev/null 2>&1
+check "a pack's size is logged in the delegate log" bash -c 'grep -Eq "\[delegate\] pack for .*: [0-9]+ facts, ~[0-9]+ tokens" "$1"/delegate-*.log' _ "$BOSUN_LOG_DIR"
 
 section chores-dry-run "chores dry run (fake claude)" covers 'libexec/bosun-chores,libexec/bosun-ledger'
 cat >"$WORK/fake-claude" <<FAKE
@@ -4575,6 +4641,9 @@ for line in sys.stdin:
   check "a window without a harness: stays on Claude Code" contains "$(CX launch cl)" "$WORK/fake-claude"
   check "BOSUN_CODEX_MODEL applies to a Codex window" contains "$(BOSUN_CODEX_MODEL=gpt-test CX launch cx)" "--model gpt-test"
   check "... and not BOSUN_MODEL" not_contains "$(BOSUN_MODEL=opus CX launch cx)" "--model opus"
+  out="$(BOSUN_KNOWLEDGE_ENABLED=1 CX launch cx)"
+  check "with the ontology on, a Codex window's launch carries none of its rules (its brief carries the pack)" bash -c '
+    grep -q -- "--no-daemon" <<<"$1" && ! grep -q -- "--append-system-prompt" <<<"$1" && ! grep -qE "Look.before.asking|The.ontology" <<<"$1"' _ "$out"
   out="$(BOSUN_HARNESS=codex BOSUN_MODEL=opus CX launch not-listed)"
   check "a window sessions.yml does not list runs on BOSUN_HARNESS" contains "$out" "--no-daemon"
   check "... with Codex's default model, not BOSUN_MODEL" not_contains "$out" "--model opus"
@@ -4715,6 +4784,9 @@ FAKE
   out="$(AGYD launch agyw)"
   check "a new agy window's dry run says what it would run" contains "$out" "dry-run: would run: $WORK/fake-agy"
   check "... with its folder trusted by --settings, in auto" contains "$out" 'agentMode'
+  out="$(BOSUN_KNOWLEDGE_ENABLED=1 AGYD launch agyw)"
+  check "with the ontology on, an agy window's launch carries none of the ontology's rules" bash -c '
+    grep -q "dry-run: would run:" <<<"$1" && ! grep -q -- "--append-system-prompt" <<<"$1" && ! grep -qE "Look.before.asking|The.ontology" <<<"$1"' _ "$out"
   check "... a log file named for its conversation, and Remote Control" bash -c 'grep -qF -- "--log-file $2/agy-agyw.log --remote-control" <<<"$1"' _ "$out" "$BOSUN_LOG_DIR"
   check "... and a first prompt of its own, ready to be answered" contains "$out" "--prompt-interactive=This\\ is\\ bosun\\'s\\ agyw\\ window"
   check "... none of the flags an agy window never gets" bash -c '! grep -qE -- " (--add-dir|--mode|-c|--continue|--dangerously-skip-permissions)( |$)" <<<"$1"' _ "$out"
@@ -5116,6 +5188,11 @@ PY
   printf '# acme: an install from before connectors\n' >"$U_CONFIG/bosun.env"
   ug() { git -C "$U_UP" -c core.hooksPath=/dev/null -c commit.gpgsign=false -c user.name=acme -c user.email=dev@example.com "$@"; }
   ug init -q -b main
+  # No housekeeping after upstream's commits: git (2.54 at least) starts a detached repack after a commit of
+  # a few hundred objects, and a local clone (here, update-convert's) hardlinks upstream's objects while that
+  # repack writes its tmp_pack, and dies ("hardlink different from source"). As lib/knowledge_store.py does.
+  ug config maintenance.auto false
+  ug config gc.auto 0
   ug add -A
   ug commit -qm v1
   U_V1_COMMIT="$(ug rev-parse HEAD)"

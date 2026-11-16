@@ -8,7 +8,7 @@ AGENT_BIN="$BOSUN_CLAUDE_BIN"
 # The orchestrator has its own flags, settings, plugin and policy, and the hooks of
 # orchestrator_extra_settings; a repo session gets the hooks of repo_session_settings (lib/common.sh).
 # Both get the connectors their list names (connector_settings), in place of any the settings file names.
-# shellcheck disable=SC2154  # build_model_effort_args and set_autocompact_flag (lib/common.sh) set their arrays
+# shellcheck disable=SC2154  # build_model_effort_args and set_autocompact_flag (lib/common.sh) set their arrays; harness: libexec/bosun-launch's
 build_agent_args() { # <window> <session name> <model> <effort>
   # Here, in the launch's own shell: the lookup runs once, and a failure stops the launch. The settings
   # built below must still hold the limit (require_connector_limit).
@@ -32,6 +32,15 @@ build_agent_args() { # <window> <session name> <model> <effort>
     require_connector_limit "$1" "$connector_settings_json"
     # shellcheck disable=SC2206  # the flags are words, on purpose
     agent_args=($BOSUN_CLAUDE_FLAGS ${model_effort_args[@]+"${model_effort_args[@]}"})
+    # With BOSUN_KNOWLEDGE_ENABLED=1, the ontology's rules, after the model and effort (launch_settings reads
+    # those back from ps); nothing is added with it off. Their file is a launch input (launch_texts): an update
+    # that changes it restarts the window, which cannot be asked to re-read what its system prompt holds.
+    knowledge_prompt="$(window_knowledge_prompt "$harness")"
+    if [ -n "$knowledge_prompt" ]; then
+      agent_args+=(--append-system-prompt "$knowledge_prompt")
+      # shellcheck disable=SC2034  # for the launch record and --fingerprint, in libexec/bosun-launch
+      launch_texts=("$BOSUN_INSTALL/orchestrator/knowledge.md")
+    fi
   fi
   # BOSUN_AUTOCOMPACT_TOKENS: Claude Code compacts the conversation past that size by itself.
   set_autocompact_flag "$1"

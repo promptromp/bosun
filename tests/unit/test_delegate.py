@@ -5,20 +5,27 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import agent_state
 import delegate
+import knowledge
+import knowledge_query
+import workstreams
+from knowledge_model import KnowledgeError
 
 
+FIXTURE = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "knowledge" / "acme-import.jsonl"
 TASK = """---
 title: Do a thing
 kinds: mention
@@ -119,6 +126,185 @@ class RenderTest(unittest.TestCase):
     def test_several_ids_and_optional_fields(self) -> None:
         text = delegate.render(args(id=["slack:C1/1", "slack:C1/2"]), [self.types["investigate"]])
         self.assertTrue(text.startswith("Ledger ids: slack:C1/1, slack:C1/2\nAsk: the ask"))
+
+
+class PackTest(unittest.TestCase):
+    """A brief carries what the ontology says about its repo and area (BOSUN_KNOWLEDGE_ENABLED)."""
+
+    ITEM: ClassVar[dict[str, Any]] = {
+        "kind": "task",
+        "state": "accepted",
+        "fields": {"repo": "acme/invoice-exporter", "area": "release"},
+    }
+
+    def setUp(self) -> None:
+        self.types = delegate.load_task_types()
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.addCleanup(setattr, knowledge, "CLOCK", knowledge.clock)
+        for patch in (
+            mock.patch.object(agent_state, "calling_session", return_value=None),
+            mock.patch.dict(
+                "os.environ", {"BOSUN_CONFIG_DIR": str(self.tmp), "BOSUN_KNOWLEDGE_ENABLED": "1"}
+            ),
+        ):
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.run_kg("import", str(FIXTURE), "--apply", "--auto-confirm")
+
+    def run_kg(self, *argv: str) -> None:
+        """`bosun kg` on the scratch knowledge base (delegate configures the module for its own reads)."""
+        knowledge.configure(self.tmp / "knowledge", git=False, state_dir=str(self.tmp / "state"))
+        args = knowledge.build_parser().parse_args(list(argv))
+        args.func(args)
+
+    def facts(self) -> list[dict[str, Any]]:
+        return list(knowledge.load(knowledge.paths()).facts.values())
+
+    def brief(self, items: dict[str, Any] | None = None) -> str:
+        items = items if items is not None else {"task:2026-11-01/1": self.ITEM}
+        pack = delegate.knowledge_pack(delegate.pack_targets_of(items))
+        return delegate.render(args(id=list(items)), [self.types["new-work"]], pack=pack)
+
+    def test_a_brief_carries_the_pack_for_its_repo_and_area(self) -> None:
+        text = self.brief()
+        opening = delegate.PACK_OPENING
+        self.assertIn(f"\n\n{opening}\nKnowledge for invoice exporter (repo/invoice-exporter)", text)
+        self.assertIn("Knowledge for Release process (process/release)", text)
+        self.assertLess(text.index("New work"), text.index(opening))
+        self.assertLess(text.index(opening), text.index(delegate.common_rules()))
+        self.assertTrue(text.rstrip().endswith(delegate.common_rules()))
+        confirmed = [f for f in self.facts() if f["status"] == "confirmed"]
+        cited = [f for f in confirmed if f["subject"] in ("repo/invoice-exporter", "process/release")]
+        self.assertGreaterEqual(len(cited), 3)
+        for fact in cited:
+            self.assertIn(f"[{fact['id']};", text)
+        for fact in self.facts():
+            if fact["status"] != "confirmed":
+                self.assertNotIn(fact["id"], text)
+        self.assertNotIn("U0000000002", text)
+
+    def test_a_pack_is_logged_with_its_size(self) -> None:
+        logs = self.tmp / "logs"
+        with mock.patch.dict("os.environ", {"BOSUN_LOG_DIR": str(logs)}):
+            pack = delegate.knowledge_pack(["repo/invoice-exporter", "process/release"])
+        (log,) = logs.glob("delegate-*.log")
+        (line,) = log.read_text().splitlines()
+        facts = sum(1 for row in pack.splitlines() if row.startswith("- "))
+        tokens = knowledge_query.estimate_tokens(pack)
+        self.assertIn("pack for repo/invoice-exporter, process/release", line)
+        self.assertIn(f": {facts} facts, ~{tokens} tokens", line)
+        self.assertGreater(facts, 0)
+
+    def test_the_rules_file_stays_within_300_tokens(self) -> None:
+        rules = (Path(__file__).resolve().parents[2] / "orchestrator" / "knowledge.md").read_text()
+        self.assertLessEqual(knowledge_query.estimate_tokens(rules), 300)
+
+    def test_with_the_key_off_the_brief_is_unchanged(self) -> None:
+        plain = delegate.render(args(id=["task:2026-11-01/1"]), [self.types["new-work"]])
+        for off in ("0", ""):
+            with mock.patch.dict("os.environ", {"BOSUN_KNOWLEDGE_ENABLED": off}):
+                self.assertEqual(self.brief(), plain)
+        with mock.patch.dict("os.environ", clear=False):
+            os.environ.pop("BOSUN_KNOWLEDGE_ENABLED")
+            self.assertEqual(self.brief(), plain)
+
+    def test_no_confirmed_facts_no_section(self) -> None:
+        unknown = {"task:2026-11-01/2": {**self.ITEM, "fields": {"repo": "acme/unknown", "area": "nothing"}}}
+        text = self.brief(unknown)
+        self.assertNotIn(delegate.PACK_OPENING, text)
+        self.assertEqual(text, delegate.render(args(id=list(unknown)), [self.types["new-work"]]))
+        self.run_kg("add-entity", "repo/fresh", "--name", "fresh")  # known, but nothing confirmed
+        self.assertEqual(delegate.knowledge_pack(["acme/fresh"]), "")
+
+    def test_the_brief_still_opens_as_a_hand_over(self) -> None:
+        text = self.brief()
+        self.assertTrue(text.startswith(delegate.HANDOVER_OPENINGS))
+        self.assertEqual(delegate.handover_ids(text), ["task:2026-11-01/1"])
+
+    def test_an_unreadable_ontology_adds_one_line_and_the_hand_over_goes_on(self) -> None:
+        line = "(the ontology could not be read: {})"
+        for error in (KnowledgeError("a file does not parse"), KeyError("fact"), TypeError("odd record")):
+            with self.subTest(error=error), mock.patch.object(knowledge, "load", side_effect=error):
+                pack = delegate.knowledge_pack(["acme/invoice-exporter"])
+                self.assertEqual(pack, line.format(str(error)))
+                self.assertIn(pack, self.brief())
+
+    def test_a_long_error_is_cut_short_in_the_brief(self) -> None:
+        error = KnowledgeError("x" * 5000)
+        with mock.patch.object(knowledge, "load", side_effect=error):
+            pack = delegate.knowledge_pack(["acme/invoice-exporter"])
+        reason = pack.removeprefix("(the ontology could not be read: ").removesuffix(")")
+        self.assertEqual(len(reason), delegate.UNREADABLE_REASON)
+        self.assertTrue(reason.endswith("..."))
+
+    def test_items_that_cannot_be_read_for_targets_are_one_line_too(self) -> None:
+        line = "(the ontology could not be read: odd item)"
+        items = {"task:2026-11-01/1": self.ITEM}
+        with mock.patch.object(workstreams, "item_repos", side_effect=AttributeError("odd item")):
+            self.assertEqual(delegate.brief_pack(items), line)
+        with mock.patch.object(delegate, "ledger_item", side_effect=RuntimeError("odd item")):
+            derived = {"task:2026-11-01/1": {**self.ITEM, "derived": {"workstream": {"id": "ws:x"}}}}
+            self.assertEqual(delegate.brief_pack(derived), line)
+        # ... and a command whose item reads oddly still renders its brief, with that line
+        shown = json.dumps({"id": "task:2026-11-01/1", **self.ITEM})
+        with (
+            mock.patch.object(delegate, "ledger", mock.Mock(return_value=completed(stdout=shown))),
+            mock.patch.object(delegate, "pack_targets_of", side_effect=TypeError("odd item")),
+            mock.patch("sys.stdout", io.StringIO()) as out,
+        ):
+            code = delegate.main(["new-work", "--id", "task:2026-11-01/1", "--ask", "a", "--print"])
+        self.assertEqual(code, 0)
+        self.assertIn("\n\n(the ontology could not be read: odd item)\n\nIn every task:", out.getvalue())
+
+    def test_the_whole_section_stays_within_the_pack_budget_opening_included(self) -> None:
+        for number in range(120):
+            self.run_kg("add-entity", f"system/tool-{number}", "--name", f"tool {number} " + "x" * 40)
+            for subject in ("repo/invoice-exporter", "repo/pdf-renderer"):
+                self.run_kg(
+                    "propose",
+                    subject,
+                    "depends_on",
+                    f"system/tool-{number}",
+                    "--source",
+                    f"ledger:{number}",
+                    "--source",
+                    f"report:{number}",
+                )
+        pack = delegate.knowledge_pack(["acme/invoice-exporter", "acme/pdf-renderer"])
+        self.assertTrue(pack.startswith(delegate.PACK_OPENING))
+        self.assertEqual(pack.count("more: kg lookup"), 2)
+        self.assertLessEqual(knowledge_query.estimate_tokens(pack), knowledge_query.DEFAULT_PACK_TOKENS)
+
+    def test_the_targets_are_the_repos_then_the_area_then_the_workstreams_area(self) -> None:
+        items: dict[str, dict[str, Any]] = {
+            "task:1": {
+                "fields": {"repo": "acme/b", "area": "release"},
+                "url": "https://github.com/acme/a/pull/1",
+                "derived": {"workstream": {"id": "ws:search"}},
+            },
+            "task:2": {"fields": {"repo": "acme/b"}, "derived": {"workstream": {"id": "ws:search"}}},
+            "ws:search": {"kind": "workstream", "fields": {"area": "search"}},
+        }
+        self.assertEqual(delegate.pack_targets_of(items), ["acme/a", "acme/b", "release", "search"])
+        self.assertEqual(delegate.pack_targets_of({"x": {}}), [])
+        self.assertEqual(
+            delegate.pack_targets_of({"task:1": items["task:1"]}), ["acme/a", "acme/b", "release"]
+        )
+
+    def test_the_whole_command_prints_the_pack_only_with_the_key_on(self) -> None:
+        item = json.dumps({"id": "task:2026-11-01/1", **self.ITEM})
+        ledger = mock.Mock(return_value=completed(stdout=item))
+        for key, expected in (("1", True), ("0", False)):
+            with (
+                self.subTest(key=key),
+                mock.patch.dict("os.environ", {"BOSUN_KNOWLEDGE_ENABLED": key}),
+                mock.patch.object(delegate, "ledger", ledger),
+                mock.patch("sys.stdout", io.StringIO()) as out,
+            ):
+                code = delegate.main(["new-work", "--id", "task:2026-11-01/1", "--ask", "a", "--print"])
+            self.assertEqual(code, 0)
+            self.assertEqual(delegate.PACK_OPENING in out.getvalue(), expected)
 
 
 class HandoverIdsTest(unittest.TestCase):
@@ -667,6 +853,14 @@ class MoveTest(unittest.TestCase):
             ),
         )
         self.assertEqual(err, "")
+
+    def test_a_moved_task_does_not_get_the_pack_again(self) -> None:
+        with (
+            mock.patch.dict("os.environ", {"BOSUN_KNOWLEDGE_ENABLED": "1"}),
+            mock.patch.object(delegate, "knowledge_pack", side_effect=AssertionError("asked for a pack")),
+        ):
+            send, _, _, _ = self.move(["--window", "fresh"], sends=[0, 0])
+        self.assertNotIn(delegate.PACK_OPENING, send.call_args_list[0].args[1])
 
     def test_an_old_window_that_cannot_be_told_is_recorded_and_reported(self) -> None:
         _, record, _, err = self.move(["--window", "fresh"], sends=[0, 1])

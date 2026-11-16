@@ -1,5 +1,5 @@
 #!/bin/bash
-# Usage: live.sh prepare <claude|codex|agy> | go <claude|codex|agy> [codex model] | login agy
+# Usage: live.sh prepare <claude|codex|agy> | go <claude|codex|agy> [codex model] | ontology claude | login agy
 #        | ready <claude|codex> <release|checkout> <model> <the release's get.sh URL>
 #        (through tests/sandbox.sh mac live, and mac try for ready)
 #
@@ -8,11 +8,13 @@
 # they work. GitHub is a stand-in (tests/sandbox/live/gh) and the remote a local bare repo, so nothing
 # leaves the Mac but requests to the agents' APIs. It costs real money, about a dollar a run, so nothing
 # runs it by itself.
-#   prepare   the repo, the installer stopping for what is missing, and doing what it says
+#   prepare   the three repos of the world, each with a history, the installer stopping for what is missing, and
+#             doing what it says
 #   login     agy only: waits for a person to sign in to Antigravity in the VM's window (up to 15 minutes)
 #   ready     for `mac try`, after prepare: what a person would do next, done, with no checks of it: the
-#             first-run screens, bosun installed unattended (from the release, or this checkout), the exporter
-#             repo as its window, the menu bar app (from the release only), the agents on <model>, started
+#             first-run screens, bosun installed unattended (from the release, or this checkout), the world's
+#             three repos as its windows (and, from this checkout, the ontology about them), the menu bar app
+#             (from the release only), the agents on <model>, started
 #   go        the first-run screens, the install, real windows, a restart and the hand-over; then whether a
 #             running Claude picks up a changed command file of its plugin, and `bosun update` to the next
 #             version (this checkout and tests/sandbox/update_patch.sh) while the repo window waits on a
@@ -20,6 +22,9 @@
 #             a window with BOSUN_CONNECTORS reaches only the local test servers it names, also resumed;
 #             on Claude Code a repo whose own settings allow more keeps it from starting until the list
 #             names that, and whether `claude mcp list` writes ~/.claude.json
+#             On Claude Code, right after the hand-over (before the update, whose end uninstalls bosun, and before the
+#             connectors, whose list would limit the windows): the ontology end to end, below
+#   ontology  claude only: the install and the real windows, then the ontology step alone (`go` runs it too)
 # The keys go in between, from mac.sh, so this script never sees where they come from. `agy` has steps of its
 # own (tests/sandbox/live_agy.sh, which this sources): the repo window on Antigravity, the orchestrator on
 # Claude Code, and what the design note's Testing list asks of the real agy.
@@ -50,7 +55,16 @@ UPDATE_RC=""
 BACKGROUND_ASK="The nightly invoice export has to run to its end today. Start it as a background command: \`sleep 300\` stands for it here (with Claude Code, the Bash tool's run_in_background), so that it keeps running after this turn; when it ends, the export is done and I want to hear so. Do not wait for it now. Then reply with just: started."
 passed=0
 failed=0
+FAIL_WINDOWS="" # windows whose pane and status a failed check shows (the ontology step sets it)
 
+show_windows() { # what each of FAIL_WINDOWS shows and its status, so that a failure shows its cause
+  local name
+  for name in $FAIL_WINDOWS; do
+    echo "          window $name: status $(window "$name" status 2>/dev/null || echo unknown); its last lines:"
+    tmux -L bosun capture-pane -p -J -t "=bosun:=$name" 2>/dev/null | sed 's/[[:space:]]*$//' | grep . | tail -20 | cut -c1-160 | sed 's/^/            | /'
+    bosun sessions 2>/dev/null | grep -w -- "$name" | head -2 | cut -c1-160 | sed 's/^/            > /'
+  done
+}
 check() { # <description> <command...>: on failure, show the end of its output
   local description="$1" output
   shift
@@ -61,6 +75,7 @@ check() { # <description> <command...>: on failure, show the end of its output
     failed=$((failed + 1))
     echo "  FAIL  $description"
     [ -n "$output" ] && tail -20 <<<"$output" | sed 's/^/          /'
+    [ -z "$FAIL_WINDOWS" ] || show_windows
   fi
 }
 wait_for() { # <seconds> <command...>
@@ -79,18 +94,63 @@ repo_agent() { window exporter harness; }
 reported() { bosun ledger list 2>/dev/null | grep -q '(reported)'; }
 pushed_branch() { git -C "$HOME/remotes/exporter.git" branch --format='%(refname:short)' | grep -v '^main$' | head -1; }
 
+# The fictional acme world (tests/sandbox/live/): three repositories, each a window, and the ontology about them
+# (live/knowledge.jsonl). exporter is the one the hand-over works on.
+WORLD_REPOS=(exporter pdf-renderer ledger-sync)
+
 the_repo() {
+  local name
   git config --global user.name "A Sandbox"
   git config --global user.email sandbox@example.com
   git config --global init.defaultBranch main
   # Looks like GitHub to bosun; every fetch and push lands in a local bare repo instead.
   git config --global url."$HOME/remotes/".insteadOf "https://github.com/acme/"
   mkdir -p "$HOME/remotes" "$HOME/Development" "$HOME/.local/bin"
-  git init -q --bare "$HOME/remotes/exporter.git"
-  cp -R "$ROOT/tests/sandbox/live/exporter" "$HOME/Development/exporter"
   cp "$ROOT/tests/sandbox/live/gh" "$HOME/.local/bin/gh"
-  (cd "$HOME/Development/exporter" && git init -q && git add -A && git commit -qm "the exporter" &&
-    git remote add origin https://github.com/acme/exporter.git && git push -q -u origin main)
+  for name in "${WORLD_REPOS[@]}"; do
+    git init -q --bare "$HOME/remotes/$name.git"
+    # Its scripted history (a few commits by different people), then the remote and the push.
+    bash "$ROOT/tests/sandbox/live/history.sh" "$name" "$HOME/Development/$name" &&
+      git -C "$HOME/Development/$name" remote add origin "https://github.com/acme/$name.git" &&
+      git -C "$HOME/Development/$name" push -q -u origin main || return 1
+  done
+}
+
+# bosun init's answers: a window for each repository of the world.
+answers() { # <menu_app: true|false>
+  printf '%s\n' "${WORLD_REPOS[@]}" | jq -Rn --argjson menu_app "$1" '{repos: [inputs | {dir: ("~/Development/" + .)}], menu_app: $menu_app}'
+}
+
+# The ontology of the world, as a person would have built it over the first weeks: the test suite's import and
+# the world's own, auto-confirmed where the rules allow it, then every fact still waiting confirmed by hand (the
+# high-risk ones never confirm by themselves, nor a fact about a person). From this shell, never from an agent's.
+KNOWLEDGE_FILES=("$ROOT/tests/fixtures/knowledge/acme-import.jsonl" "$ROOT/tests/sandbox/live/knowledge.jsonl")
+waiting_facts() { # the ids of the facts that still wait for review; fails when a listing does
+  local entity ids all=""
+  for entity in $(jq -r 'select(.type == "entity").id' "${KNOWLEDGE_FILES[@]}"); do
+    ids="$(bosun kg facts "$entity" --status proposed --json | jq -r '.[].id')" || return 1
+    all="$all$ids"$'\n'
+  done
+  printf '%s' "$all" | sed '/^$/d' | sort -u
+}
+seed_knowledge() {
+  local file
+  for file in "${KNOWLEDGE_FILES[@]}"; do
+    bosun kg import "$file" --apply --auto-confirm >/dev/null || return 1
+  done
+  waiting_facts | xargs bosun kg confirm --note "the sandbox's world" >/dev/null
+}
+seeded() { # the world imported and confirmed, and a listing that works (a failing one is no proof of nothing waiting)
+  local waiting confirmed
+  seed_knowledge || return 1
+  waiting="$(waiting_facts)" || return 1
+  [ -z "$waiting" ] || return 1
+  confirmed="$(bosun kg facts repo/invoice-exporter --status confirmed --json | jq 'length')" || return 1
+  [ "$confirmed" -ge 3 ]
+}
+every_repo_has_a_window() {
+  local name
+  for name in "${WORLD_REPOS[@]}"; do grep -q "name: $name" "$CONFIG/sessions.yml" || return 1; done
 }
 
 prepare() {
@@ -164,9 +224,10 @@ install_it() {
   check "... and going through them is enough" jq -e '.hasCompletedOnboarding == true' "$HOME/.claude.json"
   check "the same line then installs" bash -c 'sh "$1/get.sh" --unattended >"$2" 2>&1 || { tail -15 "$2"; exit 1; }' _ "$ROOT" "$out"
   check "... with no repo window, since nobody chose one" grep -qx "sessions: \[\]" "$CONFIG/sessions.yml"
-  echo '{"repos": [{"dir": "~/Development/exporter"}], "menu_app": false}' >"$OUT/answers.json"
+  answers false >"$OUT/answers.json"
   check "the repo's window, named with bosun init --answers" bash -c 'bosun init --answers "$1" >"$2" 2>&1 || { tail -15 "$2"; exit 1; }' _ "$OUT/answers.json" "$OUT/answers.txt"
-  check "... in sessions.yml" grep -q "name: exporter" "$CONFIG/sessions.yml"
+  check "... in sessions.yml, one for each repository of the world" every_repo_has_a_window
+  check "the ontology of the world is seeded, and nothing waits for review" seeded
   check "doctor passes" bash -c 'bosun doctor >"$1" 2>&1 || { tail -15 "$1"; exit 1; }' _ "$OUT/doctor.txt"
   if [ "$AGENT" = "codex" ]; then
     check "the config says Codex" says 'BOSUN_HARNESS="codex"' "$CONFIG/bosun.env"
@@ -201,8 +262,11 @@ ready() { # <release|checkout> <model> <get.sh URL>
     as_installed=(env -u BOSUN_REPO -u BOSUN_BRANCH -u BOSUN_UPDATE_CHANNEL)
     quietly "${as_installed[@]}" sh -c 'curl -fsSL "$1" | sh -s -- --unattended' _ "$url" || return 1
   fi
-  printf '{"repos": [{"dir": "~/Development/exporter"}], "menu_app": %s}\n' "$menu_app" >"$OUT/answers.json"
+  answers "$menu_app" >"$OUT/answers.json"
   quietly ${as_installed[@]+"${as_installed[@]}"} bosun init --answers "$OUT/answers.json" || return 1
+  if [ "$from" = checkout ]; then # a release has not the ontology's rules
+    quietly seed_knowledge || return 1
+  fi
   printf 'BOSUN_MODEL="%s"\nBOSUN_ORCHESTRATOR_MODEL="%s"\nBOSUN_LEARN_MODEL="%s"\n' "$model" "$model" "$model" \
     >>"$CONFIG/bosun.env"
   printf 'BOSUN_CLAUDE_FLAGS="%s"\nBOSUN_ORCHESTRATOR_FLAGS="%s"\n' "$BOSUN_CLAUDE_FLAGS" "$BOSUN_ORCHESTRATOR_FLAGS" \
@@ -899,6 +963,266 @@ show_what_happened() {
   tmux -L bosun capture-pane -p -t "=bosun:=exporter" | grep -v '^[[:space:]]*$' | tail -8 | cut -c1-100
 }
 
+# ---- the ontology in the agents' hands (Claude Code only) -----------------------------------------------
+
+# Four things a person does with the ontology on, typed into the windows as a person types (tmux's send-keys in
+# the windows' own server, never `bosun send`, whose pastes bosun records as its own: only what a person typed
+# counts as their words), each checked in what the agents did, never in what they say they did, but for the
+# reply to a question: a pack of the ontology in a hand-over's brief, a retired environment left alone, a lookup
+# before asking someone, and what I state as standing recorded as a confirmed rule. The counts of what it cost
+# (the brief's section, the `bosun kg` calls of each window) are notes, not checks.
+ONTOLOGY_TURN_SECONDS=480 # the most a window may take to answer a typed message
+ONTOLOGY_BUSY_SECONDS=600 # the most a busy window is waited for before typing into it (it is never typed into busy)
+PACK_SECONDS=900          # the first scenario: the branch pushed and the window idle again
+ASKED_AT=0                # the transcript's line count when `ask` typed its message
+PDF_QUESTION="Who should review a change to the pdf renderer, and where do I ask them?"
+CSV_STATEMENT="From now on, CSV exports never include draft invoices."
+VAT_REQUEST="Please have the exporter session round VAT per invoice line in exporter/tax.py, with tests, and open a pull request."
+INTEGRATION_ASK="Run the integration check for this change on the exporter's environments, and tell me which ones you ran it on."
+
+type_into() { # <window> <text>: typed into the window's input box, then Return, as a person does
+  tmux -L bosun send-keys -t "=bosun:=$1" -l "$2"
+  sleep 1
+  tmux -L bosun send-keys -t "=bosun:=$1" Enter
+}
+transcript_of() { window "$1" transcript; } # <window>: the file its Claude writes its conversation to
+# <window>: how many lines its transcript holds now (0 without one)
+transcript_lines() {
+  local file
+  file="$(transcript_of "$1")"
+  if [ -n "$file" ] && [ -f "$file" ]; then wc -l <"$file" | tr -d ' '; else echo 0; fi
+}
+since() { tail -n +$(($2 + 1)) "$(transcript_of "$1")"; } # <window> <lines it held before>: what it wrote after
+# From a transcript on stdin: what the assistant ran in Bash (a command a line), the assistant's words (a line
+# each), what the user side said (a JSON string each; tool results are none of it).
+bash_commands() {
+  jq -R -r 'fromjson? | select(.type == "assistant") | .message.content[]? | select(.type == "tool_use" and .name == "Bash") | .input.command // empty'
+}
+said_by_user() {
+  jq -R -r 'fromjson? | select(.type == "user") | .message.content | if type == "string" then . else (map(select(.type == "text") | .text) | join("\n")) end | select(. != "") | @json'
+}
+kg_calls() { # <window> <lines before>: "<n> bosun kg <command>" a line each
+  since "$1" "$2" 2>/dev/null | bash_commands | grep -oE 'bosun kg [a-z-]+' | sort | uniq -c | sed 's/^ *//'
+}
+note_kg_calls() { # <what> <window> <lines before>
+  echo "  note  bosun kg calls in $2, $1: $(kg_calls "$2" "$3" | tr '\n' ',' | sed 's/,$//; s/,/, /g' | grep . || echo none)"
+}
+# What the transcript holds after <lines before> has this typed message from the user (the text) and, after it,
+# an assistant message with words: the answer to it, not mere growth.
+answered() { # <window> <lines before> <text>
+  since "$1" "$2" 2>/dev/null | jq -R -s -e --arg p "$3" '
+    [split("\n")[] | fromjson?] as $e
+    | ([$e | to_entries[] | select(.value.type == "user" and ((.value.message.content
+        | if type == "string" then . else (map(select(.type == "text") | .text) | join("\n")) end) | contains($p))) | .key] | first) as $u
+    | $u != null and any($e[($u + 1):][]; .type == "assistant" and any(.message.content[]?; .type == "text"))' >/dev/null
+}
+# Its turn is over: the typed message is answered, and the window stays idle for a moment.
+turn_over() { # <window> <lines before> <text>
+  answered "$1" "$2" "$3" && idle "$1" || return 1
+  sleep 4
+  idle "$1" && answered "$1" "$2" "$3"
+}
+# Wait (bounded) until the window is idle, record where its transcript is (ASKED_AT; call `ask` itself, not in a
+# subshell), type, and wait (bounded) for the answer to that message. It never types into a busy window.
+ask() { # <window> <text>
+  wait_for "$ONTOLOGY_BUSY_SECONDS" settled "$1" || {
+    echo "  note  $1 was still busy after $ONTOLOGY_BUSY_SECONDS seconds: nothing typed into it"
+    return 1
+  }
+  ASKED_AT="$(transcript_lines "$1")"
+  type_into "$1" "$2"
+  wait_for "$ONTOLOGY_TURN_SECONDS" turn_over "$1" "$ASKED_AT" "$2"
+}
+# <window>: idle, and still so a moment later
+settled() { idle "$1" && sleep 5 && idle "$1"; }
+launch_line_has() { ps -o command= -p "$(pid_of "$1")" | grep -qF -- "$2"; } # <window> <text>
+
+both_idle() { idle orchestrator && idle exporter; }
+ontology_on() {
+  local file="$CONFIG/bosun.env"
+  if grep -q '^BOSUN_KNOWLEDGE_ENABLED="1"' "$file"; then
+    echo "  note  BOSUN_KNOWLEDGE_ENABLED=1 was already in bosun.env (bosun init recommends it)"
+  else
+    echo 'BOSUN_KNOWLEDGE_ENABLED="1"' >>"$file"
+    bosun stop >/dev/null 2>&1
+    bosun start >/dev/null 2>&1
+    check "the key is on and the windows are back" wait_for 180 both_idle
+  fi
+  check "the orchestrator's launch carries the ontology's rules" launch_line_has orchestrator "Look before asking"
+  check "the repo window's launch carries them too" launch_line_has exporter "Look before asking"
+}
+
+# <branch>'s added lines in the exporter's tests, against main of the bare remote.
+added_test_lines() { git -C "$HOME/remotes/exporter.git" diff main "$1" -- tests | grep '^+' | grep -v '^+++'; }
+branch_tests_name() { # <branch>: a test named for a credit note, and one for a second currency
+  local added
+  [ -n "$1" ] || {
+    echo "no branch to look at"
+    return 1
+  }
+  added="$(added_test_lines "$1")"
+  grep -qiE '^\+[[:space:]]*def test[A-Za-z0-9_]*credit' <<<"$added" || {
+    echo "no added test named for a credit note on $1:"
+    grep -E '^\+[[:space:]]*def test' <<<"$added"
+    return 1
+  }
+  grep -qiE '^\+[[:space:]]*def test[A-Za-z0-9_]*(currenc|eur|usd|gbp|chf)' <<<"$added" || {
+    echo "no added test named for a second currency on $1:"
+    grep -E '^\+[[:space:]]*def test' <<<"$added"
+    return 1
+  }
+}
+branch_refs() { git -C "$HOME/remotes/exporter.git" for-each-ref --format='%(refname:short) %(objectname)' refs/heads | grep -v '^main '; }
+new_branch() { # <refs before>: a branch that is new or moved since, its name
+  local line
+  while read -r line; do
+    grep -qxF -- "$line" <<<"$1" || {
+      echo "${line%% *}"
+      return 0
+    }
+  done < <(branch_refs)
+  return 1
+}
+# <lines before>: the briefs with the ontology's section that the exporter was given since
+briefed() { since exporter "$1" | said_by_user | grep -F "What bosun knows about this work"; }
+# <lines before> <fact id>
+the_brief_has() { [ -n "$2" ] && briefed "$1" | grep -qF -- "$2"; }
+tax_rule_id() {
+  bosun kg facts repo/invoice-exporter --predicate rule --status confirmed --json |
+    jq -r '[.[] | select((.value // "") | test("tax rounding"; "i"))][0].id // empty'
+}
+
+# 1. A task the ontology has a rule for: the brief carries it, and the work follows it.
+scenario_pack() {
+  local rule before_refs lines said_yes=0 started=$SECONDS branch="" exporter_lines left
+  echo "a pack the task needs: the brief of a hand-over carries the exporter's tax-rounding rule"
+  FAIL_WINDOWS="orchestrator exporter"
+  rule="$(tax_rule_id)"
+  check "the tax-rounding rule is confirmed in the ontology" test -n "$rule"
+  before_refs="$(branch_refs)"
+  wait_for "$ONTOLOGY_BUSY_SECONDS" settled orchestrator
+  lines="$(transcript_lines orchestrator)"
+  exporter_lines="$(transcript_lines exporter)"
+  type_into orchestrator "$VAT_REQUEST"
+  while [ $((SECONDS - started)) -lt "$PACK_SECONDS" ]; do
+    branch="$(new_branch "$before_refs")"
+    [ -n "$branch" ] && break
+    # A proposal waits for a yes, as it would from a person (twice at most).
+    if [ "$said_yes" -lt 2 ] && [ $((SECONDS - started - said_yes * 100)) -gt 45 ] && idle orchestrator && ! briefed "$exporter_lines" >/dev/null; then
+      type_into orchestrator "yes, go ahead" && said_yes=$((said_yes + 1))
+    fi
+    sleep 10
+  done
+  echo "  (branch after $((SECONDS - started)) seconds)"
+  check "it pushed a branch for it, within $PACK_SECONDS seconds" test -n "$branch"
+  # The same bound covers the rest of the task: the window must be idle again before the next scenario types.
+  left=$((PACK_SECONDS - (SECONDS - started)))
+  [ "$left" -ge 120 ] || left=120
+  check "the repo window finished its turn (idle again), within the same bound" wait_for "$left" settled exporter
+  echo "  (took $((SECONDS - started)) seconds)"
+  check "the repo window got a brief with the ontology's section, and the rule's id ($rule) in it" the_brief_has "$exporter_lines" "$rule"
+  branch="$(new_branch "$before_refs")"
+  check "that branch adds a test named for a credit note and one for a second currency" branch_tests_name "$branch"
+  note_kg_calls "for the hand-over" orchestrator "$lines"
+  note_kg_calls "for the hand-over" exporter "$exporter_lines"
+}
+
+# 2. A trap only the ontology knows of: staging-2 is retired, and its config does not say so.
+scenario_retired_environment() {
+  local ran
+  echo "the retired environment: the integration check runs on staging, not on staging-2"
+  FAIL_WINDOWS="exporter"
+  rm -f "$HOME/.sandbox/integration-"*
+  check "no integration check has run yet" bash -c '! ls "$HOME"/.sandbox/integration-* >/dev/null 2>&1'
+  ask exporter "$INTEGRATION_ASK" && ran=0 || ran=1
+  check "the repo window runs the integration check when asked, and answers" test "$ran" = 0
+  check "... on staging (~/.sandbox/integration-staging)" test -e "$HOME/.sandbox/integration-staging"
+  check "... and not on staging-2, which the ontology says is retired" test ! -e "$HOME/.sandbox/integration-staging-2"
+  echo "  note  the checks it ran: $(since exporter "$ASKED_AT" | bash_commands | grep -oE 'integration_check.py --env [a-z0-9-]+' | tr '\n' ',' | sed 's/,$//')"
+  note_kg_calls "for the integration check" exporter "$ASKED_AT"
+}
+
+# The ledger's outreach items: asking someone is one, and a question that is answered from the ontology is none.
+outreach_items() { bosun ledger list --kind outreach 2>/dev/null | grep -vc 'no items' || true; }
+looked_up_before_replying() { # <lines before>: a kg read, then a reply naming Marco and #acme-prs
+  since orchestrator "$1" | jq -R -r '
+    fromjson? | select(.type == "assistant") | .message.content[]? |
+    if .type == "tool_use" and .name == "Bash" and ((.input.command // "") | test("bosun kg (lookup|search|context|facts|neighbors)")) then "KG"
+    elif .type == "text" then "TEXT " + (.text | gsub("\\s+"; " "))
+    else empty end' |
+    awk '/^KG/ { kg = 1 } /^TEXT/ && /Marco/ && /acme-prs/ { found = kg; exit } END { exit !found }'
+}
+
+# 3. Routing: who reviews, and where to ask, from the ontology, with nobody asked.
+scenario_routing() {
+  local outreach ran
+  echo "routing: the orchestrator looks up who reviews a pdf renderer change"
+  FAIL_WINDOWS="orchestrator"
+  outreach="$(outreach_items)"
+  ask orchestrator "$PDF_QUESTION" && ran=0 || ran=1
+  check "the orchestrator answers the question" test "$ran" = 0
+  check "it looked in the ontology before it replied, and the reply names Marco and #acme-prs" looked_up_before_replying "$ASKED_AT"
+  check "no outreach item was made for it" test "$(outreach_items)" = "$outreach"
+  note_kg_calls "for the question" orchestrator "$ASKED_AT"
+}
+
+csv_rule_captured() { # <session id>: a confirmed rule on the feature, in my words, in that session
+  bosun kg facts feature/csv-export --predicate rule --status confirmed --json |
+    jq -e --arg sid "$1" 'any(.[]; any(.sources[]?; .kind == "user" and .ref == $sid and ((.quote // "") | test("draft invoices"; "i"))))' >/dev/null || {
+    echo "the feature's rules, whatever their status:"
+    bosun kg facts feature/csv-export --predicate rule --status all | cut -c1-200
+    return 1
+  }
+}
+
+csv_rule_soon() { # <session id>: the rule, within 90 seconds, or why not
+  wait_for 90 csv_rule_captured "$1"
+  csv_rule_captured "$1"
+}
+
+# 4. Capture: what I state as standing, typed into the repo window, becomes a confirmed rule.
+scenario_capture() {
+  local ran
+  echo "capture: a standing rule typed into the repo window is recorded as mine"
+  FAIL_WINDOWS="exporter"
+  ask exporter "$CSV_STATEMENT" && ran=0 || ran=1
+  check "the repo window takes the statement and answers" test "$ran" = 0
+  check "the ontology has a confirmed rule on feature/csv-export, with my words from that session" csv_rule_soon "$(window exporter sessionId)"
+  note_kg_calls "for the statement" exporter "$ASKED_AT"
+}
+
+ontology_costs() {
+  local name
+  echo "  note  the ontology section of each brief, from the delegate log:"
+  grep -h 'pack for' "$STATE"/logs/delegate-*.log 2>/dev/null | sed 's/^/  note    /' | grep . || echo "  note    none"
+  for name in orchestrator "${WORLD_REPOS[@]}"; do
+    note_kg_calls "in all" "$name" 0
+  done
+}
+
+# The step on its own, for a cheaper run than `go`'s (mac.sh: BOSUN_SANDBOX_LIVE_STEP=ontology).
+ontology_alone() {
+  [ "$AGENT" = "claude" ] || {
+    echo "ontology is for claude: the repo window's quotes are only checked in its sessions" >&2
+    exit 2
+  }
+  install_it
+  real_windows
+  ontology
+}
+
+ontology() {
+  echo "the ontology, end to end, with the real agents"
+  ontology_on
+  scenario_pack
+  scenario_retired_environment
+  scenario_routing
+  scenario_capture
+  FAIL_WINDOWS=""
+  wait_for 120 idle orchestrator
+  ontology_costs
+}
+
 source "$(dirname "$0")/live_agy.sh"
 
 case "$STEP" in
@@ -927,12 +1251,16 @@ case "$STEP" in
       real_windows
       hand_over
       show_what_happened
+      [ "$AGENT" != "claude" ] || ontology
       picks_up_commands
       update_with_agents_at_work
       show_what_happened
       connectors
       off_again
     fi
+    ;;
+  ontology)
+    ontology_alone
     ;;
   *)
     echo "unknown step $STEP" >&2
