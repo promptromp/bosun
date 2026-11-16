@@ -413,6 +413,13 @@ class WatchdogEventsCheckTest(unittest.TestCase):
         [finding] = self.check().findings
         self.assertEqual(finding.key, "events:failed:2026-01-05")
         self.assertIn("window is waiting", finding.message)
+        self.assertIn("orchestrator at 12:00: window is waiting", finding.message)
+
+    def test_a_failure_from_an_earlier_day_gives_its_date(self) -> None:
+        earlier = self.utc(NOON - timedelta(days=2, hours=1))
+        self.save(last_tick=self.utc(NOON), last_error={"at": earlier, "error": "window is waiting"})
+        [finding] = self.check().findings
+        self.assertIn("orchestrator at 2026-01-03 11:00: window is waiting", finding.message)
 
 
 if __name__ == "__main__":

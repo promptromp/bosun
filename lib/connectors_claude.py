@@ -9,8 +9,9 @@ Usage: connectors_claude.py --list <value> --cwd <dir> --state-dir <dir> --agent
            a line on stderr per name not found. Runs `claude mcp list` in <dir> only for a name it
            cannot resolve otherwise (never with --kept-only), keeps in <state-dir>/connectors.json
            what that lookup found for the names it was asked about (a name it no longer shows is
-           dropped), for when the listing fails, and says each plain name it does not show (it stays
-           allowed). Whatever else goes wrong, it prints {"allowedMcpServers": []} and exits 1: a window
+           dropped; a claude.ai connector only by a listing that shows claude.ai's, else it counts as
+           failed for those), for when the listing fails, and says each plain name it does not show (it
+           stays allowed). Whatever else goes wrong, it prints {"allowedMcpServers": []} and exits 1: a window
            starts with less, never with more. But when another settings scope of <dir> (mine, the
            folder's project and local settings) allows an entry the settings it would print do not hold
            exactly, it prints nothing, says which file allows what, and exits 2: Claude Code adds those
@@ -271,9 +272,34 @@ def looked_up_targets(
         return load_kept(args.state_dir)
     say_unshown(allowed, targets)
     asked = [name for name in allowed.names if needs_lookup_of(name, plugins)]
-    found = {name: targets[name] for name in asked if name in targets}
-    save_kept(args.state_dir, asked, found)
-    return found
+    return lookup_answer(args.state_dir, asked, targets)
+
+
+def lookup_answer(state_dir: Path, asked: Sequence[str], targets: Mapping[str, str]) -> dict[str, str]:
+    """What a listing that worked answers for the names <asked> about, kept for later launches: their targets,
+    a name it does not show being dropped. But a listing that shows none of claude.ai's connectors did not
+    reach claude.ai (the network was not up yet): for claude.ai names it is a failed lookup, which uses and
+    keeps what was kept."""
+    unanswered = unanswered_names(asked, targets)
+    answered = [name for name in asked if name not in unanswered]
+    found = {name: targets[name] for name in answered if name in targets}
+    save_kept(state_dir, answered, found)
+    if not unanswered:
+        return found
+    say(
+        "claude mcp list shows none of claude.ai's connectors (it may not have reached claude.ai); "
+        f"using the ones kept from the last launch for {', '.join(unanswered)}"
+    )
+    kept = load_kept(state_dir)
+    return {**{name: kept[name] for name in unanswered if name in kept}, **found}
+
+
+def unanswered_names(asked: Iterable[str], targets: Mapping[str, str]) -> list[str]:
+    """The claude.ai connectors among <asked> that a listing showing none of claude.ai's connectors cannot
+    answer for: it says nothing of them, not that they are gone."""
+    if any(claude_state.is_claude_ai_connector(name) for name in targets):
+        return []
+    return [name for name in asked if claude_state.is_claude_ai_connector(name)]
 
 
 def say_unshown(allowed: Allowed, targets: Mapping[str, str]) -> None:

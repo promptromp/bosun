@@ -13,25 +13,35 @@
 #                               quit did not finish). A missing session is judged by the watchdog's own gate:
 #                               an error only when it should be running, ok while resting (outside the
 #                               awake hours) or starting (the morning run is going or about to). A
-#                               warning also lists ERROR lines of the last hour, after the watchdog
-#                               has alerted them, and the watchdog itself not running (its job booted
-#                               out, or no run for three of its intervals of the Mac being awake). A
-#                               level a reader does not know is to be shown as a warning
+#                               warning also lists ERROR lines of the last hour, which the status
+#                               scans itself, at any hour, whether or not the watchdog has alerted
+#                               them, and the watchdog itself not running (its job booted out, or no
+#                               run for three of its intervals of the Mac being awake). A level a
+#                               reader does not know is to be shown as a warning
 #             sentence, detail  the menu's first line, and grey lines under it
 #             windows, waiting  the windows open, and the names of those waiting for you
 #             running           whether the windows are open: false when none is, null when they could
 #                               not be read (with the level it tells a bosun to start, stopped or red
 #                               with none open, from one that runs with an error)
+#             starting          true exactly when the sentence says "bosun is starting (the morning
+#                               run)": no window open, the morning run going or about to, no error
 #             keep_awake_until  HH:MM while the morning's keep-awake holds the Mac up, else null
 #             stopped           {"since": <ISO time>, "morning_paused": <bool>} after a quit (or, with
 #                               the morning not paused, a `bosun stop` today), else null
+#             schedule          {"in_hours": whether now is inside your hours (null when the settings
+#                               did not load), "next_start": the next automatic start, ISO 8601 to the
+#                               minute, or null}
 #             update            {"state": "none"|"running", "waiting_for": [windows], "last": the record
 #                               the last update left, {"id", "started_at" (UTC ISO), "step"}, or null}
 #             console           {"running": <bool>, "url": null} (the address carries the token: it is
 #                               what `bosun console --url` prints)
 #             problems          what is wrong, one line each: the watchdog's findings (a missing session
-#                               among them), ERROR lines logged in the last hour, a part that could
-#                               not be read
+#                               among them; not its log-errors one, which the status's own scan of the
+#                               last hour stands for), ERROR lines logged in the last hour, a part that
+#                               could not be read
+#             attention         the windows that need you, each {"window", "problem"}: a finding about
+#                               one window, in the order of the problems, then a window waiting at a
+#                               prompt that no finding names yet (what `bosun attach <window>` opens)
 #             logs              the log folder
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"

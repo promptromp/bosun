@@ -10,7 +10,9 @@ async hook on Notification, PermissionRequest, Stop, StopFailure, SessionStart a
 event becomes one compact line in $BOSUN_STATE_DIR/signals/<window>.jsonl: the time, the event,
 its kind (notification type, tool, error type, start source or end reason), the session id and a
 short redacted detail. The file is trimmed to its newest half once it passes
-BOSUN_SIGNALS_MAX_KB.
+BOSUN_SIGNALS_MAX_KB. The async hooks may run at once (a PermissionRequest, then its Notification), so the
+append and the trim hold <window>.lock. A problem is one stamped ERROR line on stderr, which `bosun hook`
+writes to the hook log, where the watchdog's log-errors check finds it.
 
 Readers (the watchdog, events) only add to what Claude's session records and transcripts already
 tell them: what a waiting window was asked, which background work kept a window in shell, and a
@@ -21,6 +23,8 @@ earlier Claude) never counts.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import json
 import os
 import re
@@ -37,6 +41,7 @@ from redact import redact
 
 
 SIGNALS_DIR = "signals"
+STAMP = "%Y-%m-%d %H:%M:%S"  # the log lines' stamp, as the watchdog reads them (watchdog.LOG_LINE)
 DEFAULT_MAX_KB = 256
 DETAIL_CHARS = 200
 # A permission request's hook can land a moment before the session record says "waiting".
@@ -138,12 +143,22 @@ def trim(path: Path, max_bytes: int) -> None:
     temporary.replace(path)
 
 
+@contextlib.contextmanager
+def locked(path: Path) -> Iterator[None]:
+    """<path>'s lock held: one hook at a time appends to it or trims it, so neither loses the other's line
+    and two trims never share the temporary file."""
+    with path.with_suffix(".lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
 def append(state_dir: Path, window: str, line: Mapping[str, Any], max_bytes: int) -> Path:
     path = signals_path(state_dir, window)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a") as fh:
-        fh.write(json.dumps(line, separators=(",", ":")) + "\n")
-    trim(path, max_bytes)
+    with locked(path):
+        with path.open("a") as fh:
+            fh.write(json.dumps(line, separators=(",", ":")) + "\n")
+        trim(path, max_bytes)
     return path
 
 
@@ -237,14 +252,15 @@ def max_bytes(env: Mapping[str, str]) -> int:
 
 
 def record(window: str, raw: str, env: Mapping[str, str]) -> None:
-    """Record one hook payload; any problem is reported on stderr, never raised."""
+    """Record one hook payload; any problem is reported on stderr as a stamped log line, never raised."""
     try:
         payload = json.loads(raw)
         line = signal_from(payload, datetime.now(UTC)) if isinstance(payload, dict) else None
         if line:
             append(Path(env["BOSUN_STATE_DIR"]), window, line, max_bytes(env))
     except (OSError, ValueError, KeyError) as exc:
-        print(f"ERROR signals: could not record a {window} hook event: {exc}", file=sys.stderr)
+        problem = f"ERROR: signals: could not record a {window} hook event: {exc}"
+        print(f"{datetime.now():{STAMP}} [hook] {problem}", file=sys.stderr)
 
 
 def show(window: str, last: int, env: Mapping[str, str]) -> None:

@@ -54,7 +54,7 @@ How it avoids false alarms:
   between runs (the Mac slept) starts the observation over.
 - **One message per run:** what a run finds goes out as one alert, the most severe first (at most
   five items, then "and N more"). While something is being confirmed, ready alerts wait one run
-  so they go out together.
+  so they go out together (log lines that wait are read again on the next run, not consumed).
 - **History is not news:** the first run only records where each log ends; it tracks offset and
   inode per file, so a replaced or new file is read from its start.
 - **De-duplication** in `$BOSUN_STATE_DIR/watchdog.json`: the key of every alert sent (kept

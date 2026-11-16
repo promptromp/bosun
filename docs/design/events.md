@@ -227,7 +227,7 @@ toward real time (say "every 5 minutes"), lower the routine debounce and longest
 | What | Effect | Handling |
 |---|---|---|
 | The hook fails or the ledger lock is slow | the prompt is not delayed (the work runs detached) | an `ERROR` line in `hook-<date>.log`, which the watchdog reports |
-| `send` fails (window waiting, gone) | events stay pending, retried each run | `last_error`; the watchdog's `events` check alerts once a day |
+| `send` fails (window waiting, gone) | events stay pending, retried each run | `last_error`, cleared once nothing is pending (delivered, or covered by a check-in); the watchdog's `events` check alerts once a day, with the error's date when it is not today's |
 | Crash between delivery and marking | a summary may come twice | at least once; summaries name ledger ids, so a repeat is harmless |
 | The dispatcher stops (old check-in loop, killed) | events wait for the hourly check-in | the watchdog's `events` check (stalled) |
 | I type into a window while bosun pastes | the combined prompt is recorded as mine | rare; the text shows it |

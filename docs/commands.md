@@ -214,11 +214,13 @@ record now, and launches nothing.
 - **`send --list`** lists the windows with their agent, status and version (`claude:idle`, `codex:busy`,
   `no-agent`).
 - **`send <window> <msg>`** hands work to a running window as a bracketed paste, so multi-line text arrives as one
-  prompt. It is refused while Claude waits at a permission prompt or a question. It waits while someone typed in
+  prompt. It is refused while Claude waits at a permission prompt or a question, also one that opens while `send`
+  waits. It waits while someone typed in
   that window within `BOSUN_SEND_TYPING_MINUTES` or its input line holds unsent text, up to
   `BOSUN_SEND_WAIT_SECONDS`, and fails unless Claude took the prompt, so the caller resends. A message of `-` is read
   from stdin.
-- **`send --new`** opens a new window; **`send --start`** starts Claude in a window that has none, resuming its
+- **`send --new`** opens a new window; **`send --start`** starts Claude in a window that has none, in its folder from
+  the window list (the pane's own folder for a window outside the list, or without a `sessions.yml`), resuming its
   named session (with no message, it gets the drain prompt). Both run `bosun launch` as the pane's own command, with
   the task in a prompt file, and exit 0 only once Claude is running.
 - **`--id <ledger id>`** names the work item (checked, prefixed, noted in its history); the orchestrator must give

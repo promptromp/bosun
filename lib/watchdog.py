@@ -1001,7 +1001,8 @@ def check_events(ctx: Context) -> Result:
     if state.last_error:
         failed_at = local_time(state.last_error["at"])
         error = state.last_error["error"]
-        message = f"Events could not be delivered to the orchestrator at {failed_at:%H:%M}: {error}"
+        when = f"{failed_at:%H:%M}" if failed_at.date() == ctx.today else f"{failed_at:%Y-%m-%d %H:%M}"
+        message = f"Events could not be delivered to the orchestrator at {when}: {error}"
         # Once a day: a failing transport fails on every dispatcher run until it is fixed.
         return Result(findings=[Finding(f"events:failed:{ctx.today}", message)])
     if not (ctx.facts.session_exists and ctx.facts.checkin_loop):
@@ -1721,14 +1722,22 @@ def rearm(state: State, report: Report) -> None:
     state.alerted = {k: at for k, at in state.alerted.items() if k.split(":", 1)[0] not in cleared}
 
 
+def consumed(report: Report, check: Check) -> bool:
+    """Whether this run consumed what <check> read (the log lines): only once what it found went out. Outside
+    the awake window, or while `batch` holds its alert for company, the next run reads the same lines again,
+    since nothing else would find them."""
+    return report.in_window and not any(
+        v.check.name == check.name and v.decision in (HELD, CONFIRMING) for v in report.verdicts
+    )
+
+
 def commit(ctx: Context, report: Report, checks: tuple[Check, ...], full_run: bool) -> None:
     """Record what this run alerts, what it is still confirming and how far it read the logs."""
     record_alerts(ctx.state, report, ctx.now)
     record_pending(ctx.state, report, checks, ctx.now)
     rearm(ctx.state, report)
-    for _check, result in report.results:
-        # Outside the awake window the logs are not consumed, so their errors alert later.
-        if result.offsets is not None and (ctx.state.logs is None or report.in_window):
+    for check, result in report.results:
+        if result.offsets is not None and (ctx.state.logs is None or consumed(report, check)):
             ctx.state.logs = result.offsets
         if result.shells is not None:
             ctx.state.shells = result.shells

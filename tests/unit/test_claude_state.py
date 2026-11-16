@@ -130,6 +130,16 @@ class RecordsTest(ResolveTestCase):
         self.assertEqual(resolve.main(["field", str(os.getpid()), "missing"]), agent_files.NOT_FOUND)
         self.assertEqual(resolve.main(["registered", "1"]), agent_files.NOT_FOUND)
 
+    def test_a_record_a_crashed_claude_left_is_no_agent(self) -> None:
+        # After a crash (or a power loss) the record stays; its pid may now be another process under a pane.
+        mine, dead = str(os.getpid()), str(2**22 + 12345)
+        self.registry(mine, pid=os.getpid(), status="idle", startedAt=1000)  # this process started after 1970
+        self.registry(dead, pid=int(dead), status="idle")
+        self.registry("partial", status="idle")
+        self.assertIsNone(resolve.registered([mine, dead, "partial"]))
+        self.registry(mine, pid=os.getpid(), status="idle", startedAt=int(time.time() * 1000))
+        self.assertEqual(resolve.registered([dead, mine]), mine)
+
 
 class FirstRunScreensTest(ResolveTestCase):
     def test_claude_in_chrome_s_screen_is_read_from_its_flag(self) -> None:

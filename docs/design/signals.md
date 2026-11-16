@@ -4,8 +4,10 @@
 sessions through `repo_session_settings`, the orchestrator through `orchestrator_extra_settings`).
 Each runs `bosun hook signal --window <window>`, which appends one compact line to
 `$BOSUN_STATE_DIR/signals/<window>.jsonl` (`lib/signals.py`). The hooks are `async`, so they
-never delay the session; the recorder always exits 0 and reports problems to the hook log. Each
-file keeps its newest half once it passes `BOSUN_SIGNALS_MAX_KB` (256).
+never delay the session; the recorder always exits 0 and reports problems to the hook log, as stamped
+`ERROR` lines that the watchdog's `log-errors` check alerts. Each file keeps its newest half once it passes
+`BOSUN_SIGNALS_MAX_KB` (256). The hooks may run at once (a PermissionRequest, then its Notification), so an
+append and a trim hold the window's lock (`<window>.lock` beside its file), and neither loses the other's line.
 
 ## What is recorded
 
