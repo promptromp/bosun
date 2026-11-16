@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import agent_state
+import init_plan
 from checkout_work import Checkout, why_kept
 from init_plan import tilde
 
@@ -160,7 +161,7 @@ LINK = "link"
 FILE = "file"
 CHECKOUT = "checkout"
 
-CANCEL_WAKE = "sudo pmset repeat cancel"
+CANCEL_WAKE = init_plan.CANCEL_WAKE  # the one line, which `bosun init` cancels bosun's own wake with too
 INSTALL_LINE = "curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | sh"
 UNREADABLE = -1  # records that are there but cannot be read, so they may hold anything
 AT_HOME = "it is where your home folder is, so it is not touched"

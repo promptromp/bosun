@@ -13,7 +13,8 @@
 #           readable    whether bosun.env could be read (when not, each value is null and not valid)
 #           error       why it could not be read, or why bosun cannot load it; else null
 #           config_dir  the folder of bosun.env
-#           wake        ours (bosun's repeating wake), none, or other (another app's; pmset keeps one)
+#           wake        ours (bosun's repeating wake), none, or other (another app's, pmset keeping one; or
+#                       bosun's own though BOSUN_WAKE=0 says it sets none: not ours to move, and the text says so)
 #           settings    {KEY: {value, default, set, valid, meaning}}
 #   set   check each value as bosun init does (the days and times together), refuse a key it does not offer,
 #         and write bosun.env through bosun init's writer: a backup (bosun.env.pre-init-<stamp>), every other
@@ -87,17 +88,21 @@ plan_change() { # <KEY=VALUE...>
   fail die "could not check the settings: ${said##*$'\n'}"
 }
 
-# wake=1 when the change moves the Mac's repeating wake: it is bosun's, or another app's with --replace-wake,
-# and sudo has said yes; wake_left=1 for another app's that stays (the note says so).
+# wake=1 when the change moves the Mac's repeating wake: it is bosun's, or another app's (or bosun's own that
+# BOSUN_WAKE=0 says it does not set, a leftover) with --replace-wake, and sudo has said yes; wake_left=1 for another
+# app's that stays, wake_left=leftover for bosun's own that stays (the note says which). Whose it is: wake_owner
+# (lib/common.sh), which doctor asks too.
 decide_wake() { # <replace-wake: 0|1>
   local owner
   grep -qx wake <<<"$effects" || return 0
-  owner="$(on_env wake-owner)" || fail die "could not read the Mac's wake schedule"
-  if [ "$owner" = ours ] || { [ "$owner" = other ] && [ "$1" = 1 ]; }; then
+  owner="$(wake_owner "")" || fail die "could not read the Mac's wake schedule" # "": pmset is asked
+  if [ "$owner" = ours ] || { [ "$owner" != none ] && [ "$1" = 1 ]; }; then
     wake=1
     ask_for_sudo
   elif [ "$owner" = other ]; then
     wake_left=1
+  elif [ "$owner" = leftover ]; then
+    wake_left=leftover
   fi
 }
 
@@ -203,6 +208,7 @@ say_changes() { # <changes>
   local -a say=(say)
   [ "$json" = 1 ] && say+=(--json)
   [ "$wake_left" = 1 ] && say+=(--wake-left)
+  [ "$wake_left" = leftover ] && say+=(--wake-leftover)
   printf '%s' "$1" | settings_py "${say[@]}"
 }
 

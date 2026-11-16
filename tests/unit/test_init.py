@@ -89,6 +89,8 @@ class WorldTest(unittest.TestCase):
         real_output = init_detect.output_of
 
         def output_of(*command: str) -> str | None:
+            if command[:3] == ("pmset", "-g", "sched"):
+                return self.pmset_schedule
             return None if command[0] in ("gh", "pmset", "sudo") else real_output(*command)
 
         for tool in (
@@ -105,6 +107,7 @@ class WorldTest(unittest.TestCase):
             self.addCleanup(tool.stop)
 
     servers: dict[str, str] | None = None  # what `claude mcp list` shows; None: it fails
+    pmset_schedule: str | None = None  # what `pmset -g sched` prints; None: it fails
     unavailable = ""  # why there is no signed app to install; "": there is
 
     def mcp_list(self, claude_bin: str, cwd: Path, timeout: float = 30.0) -> dict[str, str]:
@@ -786,6 +789,21 @@ class CommandTest(WorldTest):
         self.assertFalse(self.config.exists())
 
     def test_no_wake_asked_for_means_no_wake_flag(self) -> None:
+        self.bosun_init("--answers", self.answers_file(wake=False, menu_app=False))
+        self.assertEqual(self.calls[-1], ["install.sh"])
+
+    def test_a_no_on_a_rerun_cancels_bosun_s_own_wake(self) -> None:
+        """bosun's wake for the schedule bosun.env has, alone among pmset's repeating events: a no cancels it
+        (install.sh --cancel-wake: sudo pmset repeat cancel), or says to with no terminal; another's stays."""
+        self.bosun_init("--answers", self.answers_file(menu_app=False))
+        self.pmset_schedule = "Repeating power events:\n  wakepoweron at 8:01AM weekdays only\n"
+        self.bosun_init("--answers", self.answers_file(wake=False, menu_app=False))
+        self.assertEqual(self.calls[-1], ["install.sh", "--cancel-wake"])
+        with mock.patch.object(init, "can_ask_for_sudo", return_value=False):
+            _, out, _ = self.bosun_init("--answers", self.answers_file(wake=False, menu_app=False))
+        self.assertIn("run this once yourself: sudo pmset repeat cancel", out)
+        self.assertEqual(self.calls[-1], ["install.sh"])
+        self.pmset_schedule = "Repeating power events:\n  wakepoweron at 6:30AM every day\n"
         self.bosun_init("--answers", self.answers_file(wake=False, menu_app=False))
         self.assertEqual(self.calls[-1], ["install.sh"])
 

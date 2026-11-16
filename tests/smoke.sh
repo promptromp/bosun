@@ -4086,7 +4086,14 @@ for path in sys.argv[1:]:
   check "... and while bosun is quit says it skips its runs, with no warning" contains "$(wd_doctor)" "ok    watchdog agent $BOSUN_LAUNCHD_LABEL.watchdog loaded; it skips its runs while bosun is quit"
   # pmset prints the hour after midnight as 0:01AM, not 12:01AM (seen on a real Mac)
   printf 'Repeating power events:\n  wakepoweron at 0:01AM every day\n' >"$WORK/pmset-sched"
-  check "doctor accepts a wake at 00:01, as pmset prints it (0:01AM)" contains "$(BOSUN_START_TIME=00:00 BOSUN_WAKE_DELAY_MINUTES=1 "$BOSUN" doctor 2>&1)" "ok    pmset repeating wake:"
+  check "doctor accepts a wake at 00:01, as pmset prints it (0:01AM)" contains "$(BOSUN_DAYS=MTWRFSU BOSUN_START_TIME=00:00 BOSUN_WAKE_DELAY_MINUTES=1 "$BOSUN" doctor 2>&1)" "ok    pmset repeating wake:"
+  # Whose the wake is, as bosun settings judges it (settings.py wake-owner), for the settings in force.
+  printf 'Repeating power events:\n  wakepoweron at 8:01AM weekdays only\n' >"$WORK/pmset-sched"
+  ours_env=(BOSUN_DAYS=MTWRF BOSUN_START_TIME=08:00 BOSUN_WAKE_DELAY_MINUTES=1)
+  out="$(env "${ours_env[@]}" BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" 2>&1)"
+  check "install says the wake is bosun's already, and prints no sudo line to set it again" bash -c 'grep -q "repeating wake is bosun'"'"'s already" <<<"$1" && ! grep -q "run once:" <<<"$1"' _ "$out"
+  check "doctor with BOSUN_WAKE=0 and bosun's own wake still set warns that it is left from before, and how to cancel it" contains "$(env "${ours_env[@]}" BOSUN_WAKE=0 "$BOSUN" doctor 2>&1)" "warn  pmset still has bosun's repeating wake:"
+  check "... and with BOSUN_WAKE=1 it is bosun's" contains "$(env "${ours_env[@]}" BOSUN_WAKE=1 "$BOSUN" doctor 2>&1)" "ok    pmset repeating wake:"
   rm -f "$WORK/pmset-sched"
   # A ledger of its own: a link to an item that is gone (an old prune) warns and adds no failure;
   # a damaged journal fails. (Doctor's login check calls the fake claude, which writes the ledger.)

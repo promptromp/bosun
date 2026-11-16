@@ -1870,6 +1870,22 @@ wake_args_for() { # [days] [start HH:MM]
   wake_args=(repeat wakeorpoweron "${1:-$BOSUN_DAYS}" "$(shift_time "${2:-$BOSUN_START_TIME}" "$BOSUN_WAKE_DELAY_MINUTES"):00")
 }
 
+# Whose the Mac's repeating wake is, for the settings in force (bosun.env and the environment): lib/settings.py's
+# wake-owner, which `bosun settings`, doctor and install.sh share. ours, leftover (bosun's, though BOSUN_WAKE=0),
+# other or none. <schedule>: what `pmset -g sched` printed; "": it is asked.
+wake_owner() { # <schedule>
+  python3 "$BOSUN_ROOT/lib/settings.py" wake-owner --config-dir "$BOSUN_CONFIG_DIR" ${1:+--schedule "$1"} \
+    --set "BOSUN_DAYS=$BOSUN_DAYS" --set "BOSUN_START_TIME=$BOSUN_START_TIME" \
+    --set "BOSUN_WAKE_DELAY_MINUTES=$BOSUN_WAKE_DELAY_MINUTES" --set "BOSUN_WAKE=$BOSUN_WAKE"
+}
+
+# Bosun's own repeating wake cancelled, after a no to the wake (`bosun init` asks for it only while bosun's is the
+# only repeating event: pmset cancels them all). Fails, saying so, when sudo or pmset does.
+cancel_wake() {
+  log "cancelling bosun's repeating wake: sudo pmset repeat cancel"
+  sudo pmset repeat cancel
+}
+
 # `set_wake` sets the wake with sudo; `set_wake print` only says the command to run once; `set_wake no-prompt`
 # runs sudo -n, which fails at once instead of asking for a password (with no terminal to ask in).
 set_wake() { # [print|no-prompt]

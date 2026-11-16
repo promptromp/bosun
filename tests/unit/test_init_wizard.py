@@ -527,6 +527,17 @@ class OtherQuestionsTest(unittest.TestCase):
         assert answers is not None
         self.assertTrue(answers.wake)
 
+    def test_a_no_says_it_cancels_bosun_s_own_wake(self) -> None:
+        ours = "wakepoweron at 8:01AM weekdays only"
+        rerun = facts(
+            env={"BOSUN_DAYS": "MTWRF", "BOSUN_START_TIME": "08:00"}, repeating_wake=ours, repeating=(ours,)
+        )
+        options = init_wizard.wake_options(rerun, init_plan.recommend(rerun))
+        no = next(option for option in options if option.key == "n")
+        self.assertIn("bosun's repeating wake is cancelled: sudo pmset repeat cancel", " ".join(no.preview))
+        first = next(o for o in init_wizard.wake_options(facts(), Answers()) if o.key == "n")
+        self.assertNotIn("cancelled", " ".join(first.preview))
+
     def test_the_menu_bar_app_is_asked_after_the_wake_and_recommended(self) -> None:
         answers, ui = run(ALL_RECOMMENDED)
         assert answers is not None

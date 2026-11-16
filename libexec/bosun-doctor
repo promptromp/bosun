@@ -436,25 +436,30 @@ check_console_job() {
   fi
 }
 
-# The Mac's repeating wake: a failure only while it is bosun's to set (BOSUN_WAKE=1) and not what bosun sets; with
-# BOSUN_WAKE=0 (said no to in bosun init, or another app's left on purpose: pmset keeps one) a line that says so.
+# The Mac's repeating wake, whose it is as `bosun settings` judges it (wake_owner, lib/common.sh): a failure only
+# while it is bosun's to set (BOSUN_WAKE=1) and not the one bosun sets; with BOSUN_WAKE=0 (said no to in bosun
+# init, or another app's left on purpose: pmset keeps one) a line that says so, and a warning for bosun's own left
+# from before the no.
 check_wake() {
-  local wake_hm wake_label wake_cmd repeat turn_on="to have bosun wake the Mac: bosun init, answering yes to the wake"
+  local wake_hm wake_label wake_cmd schedule repeat owner
+  local turn_on="to have bosun wake the Mac: bosun init, answering yes to the wake"
   wake_hm="$(shift_time "$BOSUN_START_TIME" "$BOSUN_WAKE_DELAY_MINUTES")"
   wake_label="$(python3 "$BOSUN_ROOT/lib/init_plan.py" pmset-label "$wake_hm")" # pmset prints e.g. 8:01AM, 0:01AM
   wake_cmd="sudo pmset repeat wakeorpoweron $BOSUN_DAYS $wake_hm:00"
-  repeat="$(pmset -g sched | sed -n '/Repeating power events/,/^[A-Z]/p' | grep -iE 'wake' | head -1 || true)"
-  if [ -n "$repeat" ] && grep -q " at $wake_label" <<<"$repeat"; then
-    ok "pmset repeating wake:$repeat ($BOSUN_WAKE_DELAY_MINUTES min after the job, which runs on wake)"
-  elif [ "$BOSUN_WAKE" = "1" ] && [ -z "$repeat" ]; then
-    fail "no repeating pmset wake; run: $wake_cmd"
-  elif [ "$BOSUN_WAKE" = "1" ]; then
-    fail "pmset repeating wake is$repeat, expected $wake_label; run: $wake_cmd"
-  elif [ -z "$repeat" ]; then
-    warn "no repeating pmset wake, and bosun sets none (BOSUN_WAKE=0): the morning run starts the next time the Mac is awake after $BOSUN_START_TIME; $turn_on"
-  else
-    ok "pmset repeating wake:$repeat is another app's, left as it is (BOSUN_WAKE=0; pmset keeps one), so the Mac does not wake for bosun at $wake_label; $turn_on"
+  schedule="$(pmset -g sched)"
+  repeat="$(sed -n '/Repeating power events/,/^[A-Z]/p' <<<"$schedule" | grep -iE 'wake' | head -1 || true)"
+  if ! owner="$(wake_owner "$schedule" 2>&1)"; then
+    warn "could not tell whose the Mac's repeating wake is: $owner"
+    return
   fi
+  case "$BOSUN_WAKE:$owner" in
+    *:ours) ok "pmset repeating wake:$repeat ($BOSUN_WAKE_DELAY_MINUTES min after the job, which runs on wake)" ;;
+    1:none) fail "no repeating pmset wake; run: $wake_cmd" ;;
+    1:*) fail "pmset repeating wake is$repeat, expected $wake_label on $BOSUN_DAYS; run: $wake_cmd" ;;
+    *:none) warn "no repeating pmset wake, and bosun sets none (BOSUN_WAKE=0): the morning run starts the next time the Mac is awake after $BOSUN_START_TIME; $turn_on" ;;
+    *:leftover) warn "pmset still has bosun's repeating wake:$repeat, though BOSUN_WAKE=0 says bosun sets none: sudo pmset repeat cancel cancels it (and every other repeating event); or $turn_on" ;;
+    *) ok "pmset repeating wake:$repeat is another app's, left as it is (BOSUN_WAKE=0; pmset keeps one), so the Mac does not wake for bosun at $wake_label; $turn_on" ;;
+  esac
 }
 
 check_schedule() {

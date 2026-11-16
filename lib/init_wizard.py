@@ -474,7 +474,12 @@ def wake_options(facts: Facts, answers: Answers) -> list[Option]:
         yes.append(init_plan.LAPTOP_WAKE_NOTE)
     if facts.repeating_wake:
         yes.append(f"pmset keeps only one repeating event, so this replaces: {facts.repeating_wake}")
-    no = ("The morning run then happens the next time the Mac is awake after its start time.",)
+    no: tuple[str, ...] = (
+        "The morning run then happens the next time the Mac is awake after its start time.",
+    )
+    cancel = init_plan.cancel_wake_command(facts, replace(answers, wake=False))
+    if cancel:
+        no += (f"bosun's repeating wake is cancelled: {cancel}, which needs your password once.",)
     return [
         Option("y", "Yes, wake the Mac on schedule", {"wake": True}, tuple(yes), recommended=answers.wake),
         Option("n", "No", {"wake": False}, no, recommended=not answers.wake),

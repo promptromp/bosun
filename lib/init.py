@@ -208,14 +208,13 @@ def run_steps(plan: Plan) -> Installed:
     if plan.trust:
         subprocess.run([str(ROOT / "bin" / "bosun"), "trust", "--any", *plan.trust], check=False)
     flags = []
-    if plan.wake_command:
+    for command, flag in ((plan.wake_command, "--with-wake"), (plan.cancel_wake, "--cancel-wake")):
+        if not command:
+            continue
         if can_ask_for_sudo():
-            flags.append("--with-wake")
+            flags.append(flag)
         else:
-            print(
-                f"No terminal to ask for your password, so run this once yourself: {plan.wake_command}",
-                flush=True,
-            )
+            print(f"No terminal to ask for your password, so run this once yourself: {command}", flush=True)
     status, lines = run_shown([str(ROOT / "install.sh"), *flags])
     if status == EXIT_DOCTOR:
         return Installed(status, problems=doctor_problems(lines))

@@ -625,6 +625,27 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(merged["BOSUN_ORCHESTRATOR_MODEL"], "sonnet")
         self.assertEqual(merged["BOSUN_LEARN_AT"], "15:30")
 
+    def test_a_no_cancels_bosun_s_own_wake_alone(self) -> None:
+        """On a re-run, the wake bosun.env's schedule sets is bosun's to cancel on a no, as uninstall cancels
+        it: only when it is the only repeating event, since pmset cancels them all."""
+        ours = "wakepoweron at 9:01AM weekdays only"
+        env = {"BOSUN_DAYS": "MTWRF", "BOSUN_START_TIME": "09:00"}
+        rerun = facts(env=env, repeating_wake=ours, repeating=(ours,))
+        plan = self.plan(rerun, Answers(wake=False))
+        self.assertEqual(plan.cancel_wake, "sudo pmset repeat cancel")
+        steps = "\n".join(init_plan.step_lines(plan, "/Users/me"))
+        self.assertIn("./install.sh --cancel-wake", steps)
+        self.assertIn("sudo pmset repeat cancel   cancels bosun's repeating wake", steps)
+        self.assertIn("is cancelled, since the answer is no", " ".join(plan.notes))
+        for changed, why in (
+            ({"repeating": (ours, "shutdown at 11:00PM every day")}, "another event would go with it"),
+            ({"env": {}}, "a first run cannot tell whose it is"),
+            ({"repeating": ("wakepoweron at 9:01AM every day",)}, "other days: not bosun's"),
+        ):
+            with self.subTest(why=why):
+                self.assertEqual(self.plan(replace(rerun, **changed), Answers(wake=False)).cancel_wake, "")
+        self.assertEqual(self.plan(rerun, Answers(wake=True, start="09:00")).cancel_wake, "")
+
     def test_a_missing_tool_or_folder_blocks(self) -> None:
         plan = self.plan(facts(missing_tools=("tmux", "claude")), Answers(), missing=("~/gone",))
         text = " ".join(plan.blockers)
