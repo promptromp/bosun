@@ -1155,9 +1155,10 @@ def credit_finding(window: str, since: datetime | None) -> Finding:
     message = (
         f"{window}: every prompt gets 'Credit balance too low' since {login.shown(since)}: the API key's "
         "organization has no credit that covers Claude Code (a subscription's promotional credits do "
-        "not). Add credit in the Console's billing, or use your subscription instead: remove the API key "
-        "(ANTHROPIC_API_KEY in your shell profile, or apiKeyHelper in ~/.claude/settings.json), then "
-        f"/login. Then tell the window to carry on (bosun send {window} ...)."
+        f"not). Add credit in the Console's billing, then tell the window to carry on (bosun send {window} "
+        "...); or use your subscription: remove the API key (ANTHROPIC_API_KEY in your shell profile, or "
+        f"apiKeyHelper in ~/.claude/settings.json), restart the window (bosun refresh {window}), then /login "
+        "in it."
     )
     row = f"{naive(since):%Y-%m-%dT%H:%M}" if since else "?"
     return Finding(f"{NO_CREDIT}:{window}:{row}", message, window=window)

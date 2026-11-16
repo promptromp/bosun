@@ -1151,9 +1151,10 @@ class NoCreditTest(TranscriptCase):
         since = login.shown(at(MONDAY, "09:00"))
         self.assertIn(f"orch: every prompt gets 'Credit balance too low' since {since}", sent[0])
         self.assertIn(
-            "Add credit in the Console's billing, or use your subscription instead: remove the API key "
-            "(ANTHROPIC_API_KEY in your shell profile, or apiKeyHelper in ~/.claude/settings.json), "
-            "then /login.",
+            "Add credit in the Console's billing, then tell the window to carry on (bosun send orch ...); or "
+            "use your subscription: remove the API key (ANTHROPIC_API_KEY in your shell profile, or "
+            "apiKeyHelper in ~/.claude/settings.json), restart the window (bosun refresh orch), then /login "
+            "in it.",
             sent[0],
         )
         self.assertIn("bosun send orch", sent[0])

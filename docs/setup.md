@@ -111,7 +111,7 @@ installed. The usual ones:
 | `not logged in: the login keychain is locked` | Claude Code keeps its login in your login keychain, and a session over ssh starts with it locked, even when the Mac's desktop unlocked it | Run `security unlock-keychain ~/Library/Keychains/login.keychain-db` (your login password), then the same line again |
 | `later  Claude in Chrome's screen not seen` | bosun starts windows with Chrome on (`--chrome` in `BOSUN_CLAUDE_FLAGS` and `BOSUN_ORCHESTRATOR_FLAGS`), and some versions of Claude Code first show what it may do in your browser and wait for Enter (newer ones show nothing). Nothing stops for it | Nothing now. If a window does stop at that screen, the watchdog names it (`stalled-start`, and the menu bar app's "Show What's Wrong..."): answer it there once, with `bosun attach <window>` |
 | `not logged in` under Claude Code | It has no login | Run `claude`, and follow what it asks |
-| A window answers "Credit balance too low · Add funds" while `claude -p` still works (the watchdog's `no-credit`, and `no-credit` in `bosun status` and `bosun doctor`) | Claude Code is signed in with an API key whose organization has only subscriber credits ("Promotional credits"), which do not cover Claude Code | Add credit in the Console's billing, or use your subscription instead: remove the API key (`ANTHROPIC_API_KEY` in your shell profile, or `apiKeyHelper` in `~/.claude/settings.json`), then `/login` (see [With an API key](#with-an-api-key-instead-of-a-login)); then tell the window to carry on |
+| A window answers "Credit balance too low · Add funds" while `claude -p` still works (the watchdog's `no-credit`, and `no-credit` in `bosun status` and `bosun doctor`) | Claude Code is signed in with an API key whose organization has only subscriber credits ("Promotional credits"), which do not cover Claude Code | Add credit in the Console's billing, then tell the window to carry on (`bosun send <window> ...`); or use your subscription: remove the API key (`ANTHROPIC_API_KEY` in your shell profile, or `apiKeyHelper` in `~/.claude/settings.json`), restart the window (`bosun refresh <window>`), then `/login` in it (see [With an API key](#with-an-api-key-instead-of-a-login)) |
 | `not logged in` under Codex | It has no login | Run `codex login`. With an API key: `printenv OPENAI_API_KEY \| codex login --with-api-key` |
 | A window is on a screen, and the watchdog reports `stalled-start` | The agent is asking something only you can answer, usually about trusting the folder | `bosun attach <window>` (the finding names it), then read it. Do not just press Return: on several of Claude Code's screens the default is to exit, and on Codex's it says yes |
 | `does not run on <your OS> yet`, or `bosun runs on macOS today` | bosun runs on macOS today, and Linux is next | See the [roadmap](../ROADMAP.md) |
@@ -936,13 +936,13 @@ The key's organization needs purchased credit. The API credits a subscription ad
 Code, so the windows reply "Credit balance too low · Add funds" while `claude -p` and the API still work. The
 watchdog's `no-credit` check alerts on such a window, and `bosun status` and `bosun doctor` name it. Add
 credit in the Console's billing
-([which credits cover what](https://platform.claude.com/docs/en/about-claude/api-credits-for-subscribers)), or
-use your subscription instead: an API key (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `apiKeyHelper`)
-outranks a subscription login
-([authentication precedence](https://code.claude.com/docs/en/authentication#authentication-precedence)), so
-`/login` alone changes nothing. Remove the key (`ANTHROPIC_API_KEY` in your shell profile, or `apiKeyHelper` in
-`~/.claude/settings.json`; a window started with the variable keeps it until it is restarted, `bosun refresh
-<window>`), then `/login`. Then tell the window to carry on (`bosun send <window> ...`).
+([which credits cover what](https://platform.claude.com/docs/en/about-claude/api-credits-for-subscribers)),
+then tell the window to carry on (`bosun send <window> ...`). Or use your subscription: an API key
+(`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `apiKeyHelper`) outranks a subscription login
+([authentication precedence](https://code.claude.com/docs/en/authentication#authentication-precedence)), and a
+running window keeps the key it started with, so `/login` alone changes nothing. Remove the API key
+(`ANTHROPIC_API_KEY` in your shell profile, or `apiKeyHelper` in `~/.claude/settings.json`), restart the window
+(`bosun refresh <window>`), then `/login` in it.
 
 ## AWS SSO
 
