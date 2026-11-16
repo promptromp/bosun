@@ -1032,9 +1032,12 @@ approvals_hook_settings() {
 # BOSUN_EVENTS_ENABLED=1, the UserPromptSubmit hook that records what you type in <window> (`bosun
 # hook`); with BOSUN_COMPACT_CONTEXT=1 the compaction hook (compact_hook_settings); and with
 # BOSUN_HOOK_SIGNALS=1 the signal hooks (signal_hook_settings). The last two are on by default.
-# Nothing when all three are off.
+# Always, the window's repository's parent directory as an additional working directory
+# (repo_parent_settings), so that a worktree beside the repo does not stop it with a question about a read
+# outside its working directories.
 repo_session_settings() { # <window>
   {
+    repo_parent_settings
     if [ "$BOSUN_EVENTS_ENABLED" = "1" ]; then
       jq -cn --arg command "$(printf '%q ' "$BOSUN_CMD" hook user-prompt --window "$1")" \
         '{hooks: {UserPromptSubmit: [{hooks: [{type: "command", command: $command, timeout: 10}]}]}}'
@@ -1042,6 +1045,15 @@ repo_session_settings() { # <window>
     compact_hook_settings --window "$1"
     signal_hook_settings "$1"
   } | merge_settings
+}
+
+# The settings object that adds the parent of the current directory (the window's, where launch runs) as an
+# additional working directory. Nothing when that is / or $HOME itself (too broad) or there is no directory.
+repo_parent_settings() {
+  local parent
+  parent="$(dirname "${PWD:-/}")"
+  case "$parent" in "" | / | "$HOME") return 0 ;; esac
+  jq -cn --arg parent "$parent" '{permissions: {additionalDirectories: [$parent]}}'
 }
 
 # With BOSUN_HOOK_SIGNALS=1, async hooks that record Claude Code's own signals for <window>

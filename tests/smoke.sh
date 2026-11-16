@@ -1467,6 +1467,11 @@ allows() {
 }
 CN=(env BOSUN_CLAUDE_BIN="$WORK/mcp-claude" BOSUN_ALERT_SLACK_USER="")
 ORCH=("${CN[@]}" BOSUN_ORCHESTRATOR=orch BOSUN_ORCHESTRATOR_DIR="$REPO_A")
+check "a repo window's settings add its repository's parent directory as a working directory" bash -c '
+  jq -e --arg d "$2" ".permissions.additionalDirectories == [\$d]" <<<"$1" >/dev/null' _ "$(launch_settings "$(cd "$REPO_A" && "$BOSUN" launch alpha 2>&1)")" "$(dirname "$REPO_A")"
+mkdir -p "$HOME/directly-in-home"
+check "... but none when that parent is the home folder itself" bash -c '
+  ! jq -e ".permissions.additionalDirectories" <<<"$1" >/dev/null 2>&1' _ "$(launch_settings "$(cd "$HOME/directly-in-home" && "$BOSUN" launch alpha 2>&1)")"
 check "a repo window reaches no connector by default" allows "$(cd "$REPO_A" && "${CN[@]}" "$BOSUN" launch alpha 2>&1)" '$a == []'
 check "... and every one with BOSUN_CONNECTORS=all" allows "$(cd "$REPO_A" && "${CN[@]}" BOSUN_CONNECTORS=all "$BOSUN" launch alpha 2>&1)" '$a == "no key"'
 check "... and looked up none of them" test ! -e "$WORK/mcp-claude.calls"

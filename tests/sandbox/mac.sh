@@ -331,15 +331,12 @@ need_key() { # <Keychain item>: without -w, this asks whether it is there and no
 
 # A key only ever goes through a pipe, so it is never in a variable, an argument or a screen, and goes into
 # a file only the VM's user can read: what apiKeyHelper reads, or Codex's own login. Anything coming back
-# that looks like a key is masked. ~/Development is a working directory of every window too: an agent that
-# makes a worktree beside its repo (../repo-fix) reads there, and Claude Code 2.1.308 otherwise stops the
-# window to ask about each read outside its working directories, as a person who said "keep allowing" once
-# would not be asked.
+# that looks like a key is masked.
 keys_into_vm() { # <agent>
   # shellcheck disable=SC2016 # expands in the VM
   security find-generic-password -s "$ANTHROPIC_ITEM" -w | in_vm "$CLONE" 'umask 077; mkdir -p ~/.config/sandbox ~/.claude
     cat >~/.config/sandbox/anthropic-key
-    printf "{\"apiKeyHelper\": \"cat %s/.config/sandbox/anthropic-key\", \"permissions\": {\"additionalDirectories\": [\"%s/Development\"]}}\n" "$HOME" "$HOME" >~/.claude/settings.json' ||
+    printf "{\"apiKeyHelper\": \"cat %s/.config/sandbox/anthropic-key\"}\n" "$HOME" >~/.claude/settings.json' ||
     die "could not put the Anthropic key in the VM"
   [ "$1" = "codex" ] || return 0
   security find-generic-password -s "$OPENAI_ITEM" -w | in_vm "$CLONE" '/opt/homebrew/bin/codex login --with-api-key >/dev/null 2>&1' ||
