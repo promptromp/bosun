@@ -18,13 +18,13 @@
 # the agent to be idle, busy (the message joins the running turn or waits for it) or "shell"; a
 # session waiting at a permission prompt or a question is refused, so a pasted Enter never answers
 # it. It also waits while someone typed in that window within BOSUN_SEND_TYPING_MINUTES or its
-# input line holds unsent text (up to BOSUN_SEND_WAIT_SECONDS), looking at the agent again each
-# time and before the Enter, and fails unless the agent took the prompt (the line emptied, no
-# "Unknown command"), so the caller can send it again. It pastes into the pane whose agent it
-# checked, even if you moved to another pane of the window meanwhile.
-# --start starts the agent in the window's folder from the window list (the pane's current folder for a
-# window outside the list). --new and --start exit 0 only once the agent is running in the window;
-# otherwise they print the window's last output and exit 1.
+# input line holds unsent text (up to BOSUN_SEND_WAIT_SECONDS), looking again each time and before
+# the Enter that the agent still runs there and takes input, and fails unless it took the prompt
+# (the line emptied, no "Unknown command"), so the caller can send it again. It pastes into the
+# pane whose agent it checked, even if you moved to another pane of the window meanwhile.
+# --start starts the agent in the window's folder from the window list (the pane's current folder
+# for a window outside the list). --new and --start exit 0 only once the agent is running in the
+# window; otherwise they print the window's last output and exit 1.
 # With BOSUN_SEND_DRY_RUN=1 (set by `bosun chores --dry-run`), deliveries and new windows
 # are only logged.
 set -uo pipefail
@@ -65,7 +65,7 @@ send_message() {
   [ -n "$pane_id" ] || die "no window '$window' in session '$SESSION'"
   agent_pid="$(agent_pid_under "$pane_pid")" || die "window '$window' is not running an agent"
   harness="$(agent_session_field "$agent_pid" harness)"
-  wait_until_pasteable "$window" "$window_id" "$pane_id" "$agent_pid" "$harness"
+  wait_until_pasteable "$window" "$window_id" "$pane_id" "$pane_pid" "$agent_pid" "$harness"
   note_bosun_prompt "$window" "$message"
   rejected_before="$(rejected_count "$pane_id" "$harness")"
   # A buffer per call, so overlapping sends never swap messages.
@@ -76,22 +76,27 @@ send_message() {
     die "tmux could not paste into window '$window'"
   fi
   sleep "$PASTE_SETTLE_SECONDS"
-  refuse_unless_takes_input "$window" "$pane_id" "$agent_pid" "$harness" "the message is in its input line, not submitted"
+  refuse_unless_takes_input "$window" "$pane_id" "$pane_pid" "$agent_pid" "$harness" \
+    "the message is in its input line, not submitted"
   tmux_cmd send-keys -t "$pane_id" Enter || die "tmux could not press Enter in window '$window'"
   confirm_taken "$window" "$pane_id" "$rejected_before" "$harness"
   log "delivered to $SESSION:$window"
 }
 
-# Dies unless the agent <agent_pid> (on <agent>) in pane <pane_id> of <window> takes a pasted prompt now: its
-# screen asks nothing and its status takes input (agent_takes_input turns down `waiting`), so that an Enter
-# never answers a prompt. <outcome> says what became of the message.
-refuse_unless_takes_input() { # <window> <pane_id> <agent_pid> <agent> <outcome>
+# Dies unless the agent <agent_pid> (on <agent>) of pane <pane_id> (whose process is <pane_pid>) in <window>
+# takes a pasted prompt now: it is still the pane's agent (one that exited leaves a shell in the pane, and its
+# session record behind, still saying idle), its screen asks nothing and its status takes input
+# (agent_takes_input turns down `waiting`), so that neither a shell nor a prompt gets the paste and the Enter.
+# <outcome> says what became of the message.
+refuse_unless_takes_input() { # <window> <pane_id> <pane_pid> <agent_pid> <agent> <outcome>
   local status
-  ! tmux_cmd capture-pane -p -t "$2" 2>/dev/null | screen_reader question "$4" ||
-    die "window '$1' is asking something on its screen, and Enter would answer it; $5 (bosun attach $1)"
-  status="$(agent_session_field "$3" status)"
+  [ "$(agent_pid_under "$3")" = "$4" ] ||
+    die "window '$1' no longer runs the agent it had (it exited, or another took its place); $6"
+  ! tmux_cmd capture-pane -p -t "$2" 2>/dev/null | screen_reader question "$5" ||
+    die "window '$1' is asking something on its screen, and Enter would answer it; $6 (bosun attach $1)"
+  status="$(agent_session_field "$4" status)"
   agent_takes_input "$status" ||
-    die "window '$1' is ${status:-in an unknown state} (a permission prompt or question waits for you there); $5"
+    die "window '$1' is ${status:-in an unknown state} (a permission prompt or question waits for you there); $6"
 }
 
 # Reads a capture on stdin the way the window's agent shows its screen (lib/pane_input.py); with no agent
@@ -110,10 +115,10 @@ rejected_count() { # <pane_id> <agent>: the replies on screen saying a paste ran
 
 # Waits, up to BOSUN_SEND_WAIT_SECONDS, until the pane may take a paste (paste_blocker), and dies once its agent
 # takes no input: on every look, so a prompt that opened while it waited is refused too, not answered.
-wait_until_pasteable() { # <window> <window_id> <pane_id> <agent_pid> <agent>
+wait_until_pasteable() { # <window> <window_id> <pane_id> <pane_pid> <agent_pid> <agent>
   local deadline=$((SECONDS + BOSUN_SEND_WAIT_SECONDS)) why
   while :; do
-    refuse_unless_takes_input "$1" "$3" "$4" "$5" "not pasting into it, nothing sent"
+    refuse_unless_takes_input "$1" "$3" "$4" "$5" "$6" "not pasting into it, nothing sent"
     why="$(paste_blocker "$2" "$3")" || return 0
     [ "$SECONDS" -lt "$deadline" ] ||
       die "not pasting into window '$1': $why, still after ${BOSUN_SEND_WAIT_SECONDS}s; nothing sent, try again later"

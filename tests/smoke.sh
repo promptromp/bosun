@@ -2675,7 +2675,8 @@ check "send fails when the paste ran as an unknown command" fails_with "ran the 
   env BOSUN_SEND_CONFIRM_SECONDS=2 "$BOSUN" send --no-item clearing "/clearLedger item x"
 # A fake Claude at an input box holding unsent text, so send waits; once $WORK/flip.$1 exists, with $1=waiting
 # its status turns to waiting (a permission prompt opened meanwhile), with $1=clear its box empties and it takes
-# the next line.
+# the next line, with $1=exit its box empties and it exits, its record left behind still saying idle (as a
+# Claude that crashed leaves it).
 cat >"$WORK/flip-claude" <<FAKE
 #!/bin/bash
 record() {
@@ -2689,6 +2690,7 @@ until [ -e "$WORK/flip.\$1" ]; do sleep 0.2; done
 if [ "\$1" = waiting ]; then record waiting; exec sleep 600; fi
 clear
 box ""
+[ "\$1" = exit ] && exit 0
 read -r line
 printf '%s\n' "\$line" >"$WORK/flip.received"
 exec sleep 600
@@ -2719,7 +2721,17 @@ waiting_rc=$?
 check "send that waited delivers into the pane whose agent it checked" test "$waiting_rc" -eq 0
 check "... (its agent got the message)" wait_for 30 grep -qx hello "$WORK/flip.received"
 check "... never into the pane you moved to meanwhile" test ! -s "$WORK/paned.shell"
-for w in halftyped emptybox clearing flipping paned; do tmux -L "$SOCKET" kill-window -t "=smoke:$w"; done
+: >"$WORK/exiting.shell"
+tmux -L "$SOCKET" new-window -d -t "=smoke:" -n exiting "$WORK/flip-claude exit; exec cat >'$WORK/exiting.shell'"
+wait_for 30 claude_in exiting
+send_waiting exiting "$WORK/exiting.out"
+touch "$WORK/flip.exit" # its agent exits and leaves a shell (here a cat) in the pane
+wait "$waiting_send"
+waiting_rc=$?
+check "send refuses a window whose agent exited while send waited, though its record still says idle" bash -c '
+  [ "$1" -ne 0 ] && grep -q "no longer runs the agent it had" "$2"' _ "$waiting_rc" "$WORK/exiting.out"
+check "... and the shell left in its pane ran nothing" test ! -s "$WORK/exiting.shell"
+for w in halftyped emptybox clearing flipping paned exiting; do tmux -L "$SOCKET" kill-window -t "=smoke:$w"; done
 message="$(printf 'first line\nsecond line')"
 "$BOSUN" send echo "$message" >/dev/null 2>&1
 check "send delivers the whole multi-line message" wait_for 30 bash -c '[ "$(cat "$1")" = "$2" ]' _ "$WORK/received.txt" "$message"
