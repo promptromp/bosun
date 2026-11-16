@@ -86,7 +86,8 @@ You need macOS, [Homebrew](https://brew.sh) and [Claude Code](https://claude.com
 anything is missing, it says what, gives you the lines to run, and stops; run the same line again once
 they are done. Then it asks a few questions, one key each. Bosun works out your repos and hours from how
 you already use your agents and recommends a setup; nothing changes until you have seen the plan, and it
-asks for `sudo` once, for the wake schedule.
+asks for `sudo` once, for the wake schedule. Its last question offers to start bosun now; after that it starts on its own, on
+your schedule.
 
 To run the repo sessions on [Codex](https://developers.openai.com/codex/cli), with the orchestrator on
 Claude Code, end the line with `| BOSUN_HARNESS=codex sh`, or pick it in the questions if Codex is already
@@ -128,8 +129,8 @@ The guides, design notes and roadmap are also a website, with search:
 
 | Guide | What it covers |
 |---|---|
-| [Setup](docs/setup.md) | Requirements, install, updating and going back, uninstall, configuration, sessions, Codex, Claude Code login, AWS SSO |
-| [How a day runs](docs/day.md) | What runs when: the morning, check-ins, the watchdog, the evening |
+| [Setup](docs/setup.md) | Requirements, install, the menu bar app, updating and going back, uninstall, configuration, Codex and Antigravity, logins |
+| [How a day runs](docs/day.md) | What runs when: the morning, check-ins, the watchdog, the evening, and how windows are resumed and refreshed |
 | [Commands](docs/commands.md) | Every `bosun` command |
 | [Orchestrator](docs/orchestrator.md) | Chores, delegated tasks, the ledger, outreach, tasks, tickets, workstreams |
 | [The ledger](docs/ledger.md) | The record of every piece of work: kinds, states, rules, links, trackers |

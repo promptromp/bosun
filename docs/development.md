@@ -601,6 +601,14 @@ change to what one prints needs `uv run python tools/contract_samples.py` to wri
 decode. What the real app does on a real desktop is `tests/sandbox.sh mac app` (see
 [Which sandbox for what](#which-sandbox-for-what)).
 
+`bosun app install --build`, for a checkout without a publisher (developing bosun), builds the app on this Mac with
+`app/build.sh` (the first build takes minutes), ad hoc signed, and installs it without the team or Gatekeeper
+check, saying it is a development build. If it fails with exit 1 and no output on the first run of a fresh copy, run
+it again: it says "app/build.sh exited 1 and said nothing: run it again (the first run of a fresh copy can fail
+before the script starts; see docs/design/menu-bar.md, the Mac VM run of the app)". macOS can stop the first direct
+run of a copied `app/build.sh` before the script starts, and only that one; the second run builds. What was seen is
+in [the design note](design/menu-bar.md#the-mac-vm-run-of-the-app-2026-11-13).
+
 ## Releasing bosun.app
 
 The menu bar app is released apart from bosun: a tag `app-v<version>` on `main`, where `<version>` is what

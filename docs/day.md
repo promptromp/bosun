@@ -15,7 +15,7 @@ Every morning bosun:
    On later days the session is usually still there. It is then **refreshed** window by window:
    idle sessions on an outdated agent, or with a changed model or effort, are restarted, and the
    drain prompt goes only to windows with work in flight. Busy ones are left alone. See
-   [Steady state](setup.md#steady-state-the-session-already-exists).
+   [Steady state](#steady-state-the-session-already-exists).
 4. Runs an **orchestrator** session that does the daily chores: Slack mentions (PR and tech-design
    review requests, other asks) and your own open PRs (reviewed? comments to address? needs a
    nudge? ready to merge?). It hands tasks to the repo sessions on its own, each with rules for what
@@ -85,3 +85,82 @@ pmset wake 08:01 ─> launchd runs the 08:00 job it missed during sleep ──> 
   run at any hour (`--background` has launchd start it: what the menu bar app's Start runs). `bosun status
   --json` says in one object how bosun is, including whether it is stopped. See [Commands](commands.md) for each
   one's options.
+
+## How sessions are resumed
+
+`claude --resume <name>` opens a picker when several sessions share a name or prefix. That would
+block an unattended start. `bosun launch` instead reads the session transcripts in
+`~/.claude/projects/`, picks the **most recently active session whose name is exactly `<name>`**,
+and resumes it by UUID. If none exists it starts a new session with that name. If the session is
+already open in another terminal (per `~/.claude/sessions/<pid>.json`), it refuses rather than
+running two copies on one transcript.
+
+Every repo window on Claude Code gets `--name <name> --remote-control <name>` plus `BOSUN_CLAUDE_FLAGS`.
+Codex has no session names, so a [Codex window](setup.md#running-repo-sessions-on-codex) resumes from bosun's own
+table, `codex-sessions.json`.
+
+## Steady state: the session already exists
+
+After the first day the tmux session normally survives the night, because the Mac only sleeps.
+Re-attach any time with `bosun attach`. The morning run never duplicates the session.
+It runs `bosun refresh`, which handles each window on its own:
+
+| Window | Action |
+|---|---|
+| its folder gone (moved or deleted) | skip it, as `bosun start` does, and say so in the log, which the watchdog alerts on: never open it in another folder |
+| missing | create it and launch its agent |
+| agent not running | relaunch in the manifest directory (resume by UUID, drain prompt) |
+| agent `busy` (mid-turn) | leave alone |
+| agent `waiting` (a permission prompt or a question to you) | leave alone: a pasted Enter could answer it |
+| window split into several panes | leave alone and report it (relaunching could kill the other pane's process) |
+| agent `idle` at least `BOSUN_RESTART_MIN_IDLE_SECONDS`, and on a different version than that agent's installed one (usually older), or launched by bosun with a model or effort other than the configured one; for the orchestrator also when it is still on yesterday's conversation | restart: SIGTERM (Claude exits cleanly in about 2s), then relaunch on the installed version with the configured model and effort. Same session UUID, so the conversation is intact (the orchestrator's new-day restart starts today's conversation instead), plus, on Claude Code, a fresh Remote Control connection. |
+| anything else (idle and current, idle too briefly, or `shell`: turn over but a background shell still running) | send the drain prompt |
+
+The drain prompt, also the one a relaunch or restart sends, goes only to a window with something in
+flight: the orchestrator, a Claude in `shell`, or a window holding a handed-over item whose work is
+not done (`bosun ledger in-flight <window>` lists them: awaiting a report, or being worked on).
+Any other window is resumed or left idle without a prompt (`left idle: nothing in flight`), since
+every prompt re-reads the whole conversation; it costs nothing until it gets work.
+
+With `BOSUN_FRESH_CONVERSATIONS=1` (off by default), refresh, and so the morning run, also
+starts a fresh conversation for a repo window that is idle for `BOSUN_RESTART_MIN_IDLE_SECONDS`,
+holds nothing in flight, and whose conversation grew past `BOSUN_FRESH_CONTEXT_TOKENS` (200000;
+the size its latest turn read, `agent_state.py context <pid>`). The new conversation is named
+`<window>-<date>-<n>` (kept in the state dir's `conversations/<window>`, which `launch` resumes from
+then on) and starts with a short prompt pointing at its memory notes and `bosun ledger list
+--open`. `refresh --dry-run` names the windows that would get one, also with the flag off.
+
+Fresh conversations only start at a refresh. In between, every Claude Code window is launched with
+`claude --autocompact BOSUN_AUTOCOMPACT_TOKENS` (300000; the orchestrator:
+`BOSUN_ORCHESTRATOR_AUTOCOMPACT_TOKENS`; a sessions.yml entry can set its own `autocompact`;
+empty or 0 leaves Claude Code's default, `auto` is accepted): once a conversation passes that size,
+Claude Code compacts it by itself, mid-task, into a summary, so no window re-reads 300k-900k tokens
+a turn for the rest of the day. On Codex bosun sets no compaction: `BOSUN_AUTOCOMPACT_TOKENS`, `autocompact:`
+and `BOSUN_COMPACT_CONTEXT` do nothing there. Claude Code's own idle compaction (200k+ tokens idle about an hour)
+still applies. A summary can drop which ledger items the window holds, so with
+`BOSUN_COMPACT_CONTEXT=1` launch also installs a SessionStart hook (matcher `compact`,
+`bosun hook compact-context`) that adds them back, in at most
+`BOSUN_COMPACT_CONTEXT_MAX_CHARS` (1500) characters, from `bosun ledger compact-context`:
+for a repo window its items (in flight first) and how to report; for the orchestrator the proposals
+waiting for my approval and the open items per window. Both are read at launch, so a running window
+picks them up at its next restart. The fresh conversation stays as the backstop: a window still over
+`BOSUN_FRESH_CONTEXT_TOKENS` at the morning refresh starts a new one.
+
+Status and version come from Claude Code's own `~/.claude/sessions/<pid>.json`, and on Codex from its
+session files. The status is
+re-read just before a restart. With `BOSUN_HOOK_SIGNALS=1` (the default) launch also installs
+async hooks (`bosun hook signal`) on Notification, PermissionRequest, Stop, StopFailure,
+SessionStart and SessionEnd that record Claude Code's own signals per window in
+`$BOSUN_STATE_DIR/signals/<window>.jsonl` (`BOSUN_SIGNALS_MAX_KB`, 256): the watchdog's
+`waiting` alert and the events' waiting line then say what the window was asked (`Bash: make
+deploy`), `long-shell` names what is still running, and `spend-limit` also sees a stop only the
+StopFailure hook reported. They add to the session records and transcripts, never replace them;
+design: [design/signals.md](design/signals.md). Claude Code installs updates automatically but keeps running the old
+version until restarted. `refresh` is how sessions pick up updates without losing work.
+
+The morning run passes `--unless-active`: if someone typed in an attached tmux client within the
+last `BOSUN_ACTIVE_CLIENT_MINUTES`, it leaves the windows alone instead of pasting into your
+draft. Run `bosun refresh` by hand any time; add `--dry-run` to preview it.
+
+`BOSUN_ON_EXISTING` picks the behaviour: `refresh` (default), `drain` (never restart) or
+`restart` (kill the whole session and start fresh).
