@@ -1004,7 +1004,19 @@ def check_events(ctx: Context) -> Result:
         return Result(findings=[Finding(f"events:failed:{ctx.today}", message)])
     if not (ctx.facts.session_exists and ctx.facts.checkin_loop):
         return Result("the check-in loop is not running (see checkin-missing)")
-    return events_stalled(ctx, state)
+    held = events_held(ctx)
+    return Result(held) if held else events_stalled(ctx, state)
+
+
+def events_held(ctx: Context) -> str:
+    """Why the check-in loop runs no dispatcher on purpose, or "": while the orchestrator needs a login
+    (the gate the loop itself keeps in login.json) it holds events back, and its last tick ages."""
+    since = login.State.load(ctx.config.state_dir).gated.get(ctx.config.orchestrator)
+    if since is None:
+        return ""
+    when = login.shown(login.parse_stamp(since))
+    who = ctx.config.orchestrator
+    return f"the check-in loop holds events back while {who} needs /login (since {when}; see login-expired)"
 
 
 # The Slack watcher has stalled when no run started for this many of its intervals (at least

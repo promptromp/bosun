@@ -890,7 +890,8 @@ What happens then:
   check-in loop logs `<window> needs /login: ...` once and sends it no more check-ins or events
   (events stay pending) until it works again: a normal reply (run `/login` in any Claude window,
   then talk to it) or a login check that succeeds. After each delivery it waits up to 15 seconds
-  for the reply, so a check-in that just failed is logged as such.
+  for the reply, so a check-in that just failed is logged as such. While it holds them back, the
+  watchdog's `events` check does not call the dispatcher stalled.
 - **One login for every window:** the login is the Mac's, so once a login check works, or any
   window gets a normal reply, after the last login error of every window, `bosun status`, the
   watchdog and the console count all the windows as working again, an idle one too, which gets no
