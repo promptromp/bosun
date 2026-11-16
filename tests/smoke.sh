@@ -3106,6 +3106,7 @@ rm -f "$BOSUN_STATE_DIR/keep-awake-smoke.pid"
 write_quit paused
 "$BOSUN" start >/dev/null 2>&1
 check "bosun start clears it, paused or not" test ! -e "$BOSUN_STATE_DIR/quit.json"
+check "... and stamps when it made the session (the watchdog's gate on a day no morning run is owed)" grep -qE "^$(date +%F) [0-9:]{8}$" "$BOSUN_STATE_DIR/started-smoke"
 check "... and the watchdog runs again" not_contains "$("$BOSUN" watchdog --dry-run 2>&1)" "bosun is stopped"
 check "... and with BOSUN_CONSOLE_ALWAYS off it leaves no marker for the console job" test ! -e "$BOSUN_STATE_DIR/console/wanted"
 "$BOSUN" stop >/dev/null 2>&1

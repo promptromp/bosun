@@ -106,6 +106,7 @@ RUN_COMPLETE = "] morning run complete"
 RUN_PROBLEMS = "] morning run finished with problems"
 RUN_SKIPPED = "] morning run skipped"  # bosun was quit: paused, or quit while the run set up
 LOADED = "loaded-{role}"  # reload_job's stamp: when a job (morning, learn, watchdog) was last loaded
+STARTED = "started-{session}"  # when `bosun start` last made the session (start_marker in lib/common.sh)
 MORNING_PROBLEM = re.compile(
     r"\] (?:ERROR|FAIL):|finished with problems|could not open the window|skipping the window"
 )
@@ -746,10 +747,19 @@ def session_gate_kind(ctx: Context) -> tuple[str, str] | None:
     return day_gate_kind(ctx)
 
 
+def started_since(ctx: Context, since: datetime) -> datetime | None:
+    """When `bosun start` last made the session, if that was at or after <since> (and not later than now)."""
+    started = stop_marker.read_stamp(ctx.config.state_dir / STARTED.format(session=ctx.config.session))
+    return started if started is not None and since <= started <= ctx.now else None
+
+
 def morning_gate_kind(ctx: Context) -> tuple[str, str] | None:
-    """day_gate_kind's part of the morning run, inside the awake window: none is coming today (bosun was set
-    up after its time), it is not due yet, there was none, or it is still going; None once it ended."""
+    """day_gate_kind's part of the morning run, inside the awake window: none is coming today (its job was
+    loaded after its time), it is not due yet, there was none, or it is still going; None once it ended, or,
+    on a day none is coming, once `bosun start` made the session (the wizard's Start, say): it is expected."""
     loaded = morning_loaded_after(ctx) if ctx.morning_run is None else None
+    if loaded and started_since(ctx, loaded):
+        return None
     if loaded:  # no run is coming today: not "not due yet", which the menu shows as starting
         return (
             GATE_NO_MORNING,

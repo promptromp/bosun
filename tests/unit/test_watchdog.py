@@ -267,6 +267,22 @@ class MorningMissingTest(WatchdogCase):
         )
         self.assertEqual(len(self.runs(at(TUESDAY, "08:20"), 2)), 1)
 
+    def test_on_install_day_a_session_started_after_the_load_is_watched(self) -> None:
+        """No run is owed today, but the wizard's Start (`bosun start`) made the session after the job was
+        loaded: the session, check-in and orchestrator checks expect it from then on, and a crash alerts."""
+        self.installed(at(MONDAY, "14:00"))
+        (self.state_dir / "started-main").write_text(f"{MONDAY} 14:01:00\n")
+        ctx = self.inputs(at(MONDAY, "14:10")).context(watchdog.State())
+        self.assertIsNone(watchdog.session_gate_kind(ctx))
+        self.assertEqual(watchdog.check_morning_missing(ctx).findings, [])  # still no run owed
+        gone = Facts(morning_job_state="not running", morning_job_exit="0")
+        sent = self.runs(at(MONDAY, "15:00"), 2, facts=gone)
+        self.assertEqual(len(sent), 1)
+        self.assertIn("tmux session 'main' is not running", sent[0])
+        (self.state_dir / "started-main").write_text(f"{MONDAY} 13:59:00\n")  # before the load: not today's
+        ctx = self.inputs(at(MONDAY, "14:10")).context(watchdog.State())
+        self.assertEqual(watchdog.session_gate_kind(ctx)[0], watchdog.GATE_NO_MORNING)  # type: ignore[index]
+
     def test_set_up_after_the_start_time_but_before_the_run_is_due_is_not_starting(self) -> None:
         """At 08:05, between the start time and when the run is due: no run is coming today, so the gate is
         not "not due yet", which the menu would show as a run starting."""

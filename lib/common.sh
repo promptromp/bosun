@@ -746,6 +746,10 @@ release_keep_awake() {
 # expect the session on a day you stopped it.
 stop_marker() { echo "$BOSUN_STATE_DIR/stopped-$BOSUN_SESSION_NAME"; }
 
+# When `bosun start` last made the session (`date '+%F %T'`): on a day no morning run is owed, its job loaded after
+# its time (an install after the start time), the watchdog expects the session once one was started after that.
+start_marker() { echo "$BOSUN_STATE_DIR/started-$BOSUN_SESSION_NAME"; }
+
 # Whether `bosun quit` left bosun stopped until it is started (lib/quit_state.py, quit.json in the state
 # folder): succeeds and prints the time of the quit (HH:MM). The watchdog's and learning's scheduled runs
 # skip while it does; quit_paused is the same for the morning run, when the quit also paused it.

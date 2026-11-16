@@ -105,6 +105,7 @@ STATE_FILES = (
     ("signals", WORKING),
     ("slack-watch", WORKING),
     ("stopped-*", WORKING),
+    ("started-*", WORKING),  # when `bosun start` last made the session (the watchdog's gate on install day)
     ("wake-test.env", WORKING),
     ("watchdog.json", WORKING),
     ("watchdog.json.tmp", WORKING),
