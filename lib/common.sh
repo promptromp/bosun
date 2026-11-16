@@ -35,7 +35,7 @@ set_harness_defaults() {
   BOSUN_AGY_MODEL=""
 }
 
-# What each window may reach (docs/setup.md, "Connectors"): a comma-separated list of MCP servers and
+# What each window may reach (docs/configuration.md, "Connectors"): a comma-separated list of MCP servers and
 # connectors, by the name `claude mcp list` shows (claude.ai Acme Mail, plugin:acme-tracker:tracker,
 # acme-local) or a URL pattern (https://mcp.example.com/*). Empty: none; all: no limit. Read at launch.
 set_connector_defaults() {
