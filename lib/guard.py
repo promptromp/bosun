@@ -14,6 +14,19 @@ through. This hook is the catch-all:
   that change pages (javascript_tool, form_input) are `ask` rules in orchestrator/settings.json.
 - `git push` with any force form (-f, --force*, +refspec) or `gh pr merge --admin`, anywhere in
   a compound command -> deny
+- a gated outward command (GATED_COMMANDS: `git push`, `gh pr merge`, `gh issue comment`, ...) in a
+  form the settings' `ask` rules, prefixes of a command as written, do not see -> ask you, so it
+  never runs on auto mode's judgement alone, and an approved one still reaches the PermissionRequest
+  hook, which uses its approval up
+- what `bash|sh|zsh -c` or `eval` runs, when the guard cannot read it (a command named by a variable
+  or a substitution, quotes that do not close) -> ask you
+
+A Bash command is read as the shell would split it (parse): each simple command by its name's last
+path part (/usr/bin/git is git), git's subcommand past git's own options (`git -C <dir> push` is a
+push), with the commands in its substitutions ($(...) and backticks, outside single quotes, and in
+unquoted heredoc bodies) and what `bash -c '...'` and `eval ...` run, read again. Best effort, as
+docs/permissions.md says: a script file or stdin given to a shell, a git alias, flags in a variable
+and `find -exec` stay unseen.
 - `bosun delegate`, `bosun send` or `bosun ledger
   reach-out|ask|replied|propose|approve|spawn|link|unlink|fold|ticket-sync` with a command
   substitution ($(...) or backticks) that the shell would run: outside single quotes, or in an
@@ -213,6 +226,20 @@ WRAPPERS: dict[str, tuple[frozenset[str], int]] = {
     "sudo": (frozenset({"-u", "-g", "-C", "-h", "-p", "-U"}), 0),
     "xargs": (frozenset({"-n", "-I", "-J", "-L", "-P", "-R", "-S", "-s", "-d", "-E", "-a"}), 0),
 }
+# Shells whose -c runs its argument, and their options that take a separate value (bash -o pipefail -c ...).
+SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh"})
+SHELL_VALUE_OPTIONS = frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"})
+EVAL = "eval"
+# git's global options that take a separate value (git -C <dir> push, git -c k=v push, ...).
+GIT_VALUE_OPTIONS = frozenset(
+    {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env", "--attr-source"}
+)
+# How deep the guard reads commands inside commands (a substitution in a bash -c in an eval ...).
+MAX_NESTING = 5
+# What a substitution the shell would run stands as in the text around it, once its command is taken out.
+SUBSTITUTED = "$__substitution__"
+DYNAMIC = "$"
+SHOWN_CHARS = 120  # of a command the guard cannot read, in what it says
 
 
 def name_words(tool_name: str) -> list[str]:
@@ -238,28 +265,6 @@ def chrome_action_changes(tool_name: str, tool_input: Mapping[str, Any]) -> str 
         return None
     action = str(tool_input.get("action") or "")
     return None if action in CHROME_PASSIVE_ACTIONS else action or "(no action)"
-
-
-def simple_commands(command: str) -> list[list[str]]:
-    """Split a shell command line into simple commands (word lists), one per line, `;`, `&&`,
-    `|`, etc., leaving out heredoc bodies (data, not commands) and leading keywords (`do`,
-    `then`, `{`) and variable assignments, so every list starts with the command it runs."""
-    lexer = shlex.shlex(heredoc_scan(command)[0], posix=True, punctuation_chars=";&|()\n")
-    lexer.whitespace = " \t\r"  # a newline ends a command, like `;`
-    lexer.whitespace_split = True
-    commands: list[list[str]] = []
-    current: list[str] = []
-    try:
-        for token in lexer:
-            if token in COMMAND_SEPARATORS or set(token) <= set(";&|()\n"):
-                commands.append(current)
-                current = []
-            else:
-                current.append(token)
-    except ValueError:  # unbalanced quotes: judge what was parsed
-        pass
-    commands.append(current)
-    return [words for words in map(without_prefix, commands) if words]
 
 
 def without_prefix(words: list[str]) -> list[str]:
@@ -320,23 +325,64 @@ def line_runs_substitution(line: str, quotes: QuoteState) -> bool:
     return found
 
 
-def skip_heredoc(lines: list[str], index: int, delimiter: str, quoted: bool) -> tuple[bool, int]:
-    """Skip a heredoc body starting at <index>. Returns whether an unquoted body runs a
-    substitution, and the index after the closing delimiter."""
-    found = False
-    while index < len(lines) and lines[index].strip() != delimiter:
-        found = found or (not quoted and any(marker in lines[index] for marker in SUBSTITUTIONS))
-        index += 1
-    return found, index + 1
+@dataclass(frozen=True)
+class Scan:
+    """A command line read for what it runs: its text without heredoc bodies (data), the bodies of its
+    unquoted heredocs (where $(...) and backticks run), and whether the shell would run a substitution."""
+
+    text: str
+    expanding: tuple[str, ...]
+    runs_in_text: bool  # a $(...) or `...` outside single quotes in <text>
+
+    @property
+    def runs(self) -> bool:
+        return self.runs_in_text or any(marker in body for body in self.expanding for marker in SUBSTITUTIONS)
 
 
-def heredoc_scan(command: str) -> tuple[str, bool]:
-    """<command> without its heredoc bodies, and whether the shell would run a $(...) or `...` in
-    it: outside single quotes, or in the body of an unquoted heredoc (bodies of quoted heredocs,
-    <<'EOF', are literal)."""
+@dataclass(frozen=True)
+class Part:
+    """Simple commands, each from its command's name on, and the text they were written in: the command
+    line itself, or the command a substitution or a shell wrapper in it runs."""
+
+    text: str
+    commands: list[list[str]]
+
+
+@dataclass(frozen=True)
+class Parsed:
+    """What a Bash command line runs, as far as the guard reads it: its parts (the line itself first),
+    its own simple commands as written (keywords, assignments and wrappers kept: what a settings rule's
+    prefix sees), and why the guard cannot read a command a wrapper runs, if it cannot."""
+
+    parts: list[Part]
+    written: list[list[str]]
+    unread: str = ""
+
+    @property
+    def commands(self) -> list[list[str]]:
+        """Every simple command it runs: its own, and what its substitutions and wrappers run."""
+        return [words for part in self.parts for words in part.commands]
+
+    def with_inner(self, inner: Parsed) -> Parsed:
+        return Parsed([*self.parts, *inner.parts], self.written, self.unread or inner.unread)
+
+
+def heredoc_body(lines: list[str], index: int, delimiter: str) -> tuple[list[str], int]:
+    """The body of a heredoc that starts at <index>, and the index after its closing delimiter."""
+    end = index
+    while end < len(lines) and lines[end].strip() != delimiter:
+        end += 1
+    return lines[index:end], end + 1
+
+
+def heredoc_scan(command: str) -> Scan:
+    """<command> without its heredoc bodies, the bodies of its unquoted heredocs, and whether the shell
+    would run a $(...) or `...` in it: outside single quotes, or in the body of an unquoted heredoc
+    (bodies of quoted heredocs, <<'EOF', are literal)."""
     lines = command.split("\n")
     quotes = QuoteState()
     kept: list[str] = []
+    expanding: list[str] = []
     runs = False
     index = 0
     while index < len(lines):
@@ -345,14 +391,177 @@ def heredoc_scan(command: str) -> tuple[str, bool]:
         heredoc = None if quotes.single or quotes.double else HEREDOC.search(lines[index])
         index += 1
         if heredoc:
-            delimiter, quoted = heredoc.group(2) or heredoc.group(3), bool(heredoc.group(1))
-            found, index = skip_heredoc(lines, index, delimiter, quoted)
-            runs = runs or found
-    return "\n".join(kept), runs
+            body, index = heredoc_body(lines, index, heredoc.group(2) or heredoc.group(3))
+            expanding += [] if heredoc.group(1) else ["\n".join(body)]
+    return Scan("\n".join(kept), tuple(expanding), runs)
+
+
+def matching_paren(text: str, start: int) -> int:
+    """The index of the ")" that closes a "$(" whose command starts at <start> (the end when none does)."""
+    depth = 0
+    for index in range(start, len(text)):
+        if text[index] == "(":
+            depth += 1
+        elif text[index] == ")":
+            if depth == 0:
+                return index
+            depth -= 1
+    return len(text)
+
+
+def substitution_at(text: str, position: int) -> tuple[str, int] | None:
+    """The command of a substitution that starts at <position> ($(...) or `...`), and where the text goes
+    on after it; None if none starts there."""
+    if text.startswith("$(", position):
+        close = matching_paren(text, position + 2)
+        return text[position + 2 : close], close + 1
+    if text.startswith("`", position):
+        close = text.find("`", position + 1)
+        close = len(text) if close < 0 else close
+        return text[position + 1 : close], close + 1
+    return None
+
+
+def take_substitutions(text: str, shell_quotes: bool = True) -> tuple[str, list[str]]:
+    """<text> with each substitution the shell would run put as SUBSTITUTED, and the commands they hold:
+    $(...) and `...` outside single quotes, inside double quotes too (<shell_quotes> False: a heredoc
+    body, whose quotes are text)."""
+    kept: list[str] = []
+    held: list[str] = []
+    quotes = QuoteState()
+    position = 0
+    while position < len(text):
+        if text[position] == "\\" and not quotes.single:
+            kept.append(text[position : position + 2])
+            position += 2
+            continue
+        found = None if quotes.single else substitution_at(text, position)
+        if found:
+            held.append(found[0])
+            kept.append(SUBSTITUTED)
+            position = found[1]
+            continue
+        if shell_quotes:
+            quotes.toggle(text[position])
+        kept.append(text[position])
+        position += 1
+    return "".join(kept), held
+
+
+def split_simple(text: str) -> tuple[list[list[str]], bool]:
+    """<text>'s simple commands as written (one per line, `;`, `&&`, `|`, ...), and whether its quotes
+    close (when they do not, what was read up to there)."""
+    lexer = shlex.shlex(text, posix=True, punctuation_chars=";&|()\n")
+    lexer.whitespace = " \t\r"  # a newline ends a command, like `;`
+    lexer.whitespace_split = True
+    commands: list[list[str]] = []
+    current: list[str] = []
+    try:
+        for token in lexer:
+            if token in COMMAND_SEPARATORS or set(token) <= set(";&|()\n"):
+                commands.append(current)
+                current = []
+            else:
+                current.append(token)
+    except ValueError:  # unbalanced quotes: what was parsed
+        commands.append(current)
+        return [words for words in commands if words], False
+    commands.append(current)
+    return [words for words in commands if words], True
+
+
+def shell_command_at(words: list[str]) -> int | None:
+    """Where the command string of `bash|sh|zsh -c <command>` is in <words> (the first argument after the
+    shell's options, one of which holds c: -c, -lc, -ec); None when no option says -c (a script file or
+    stdin, which the guard cannot see)."""
+    index, command = 1, False
+    while index < len(words) and words[index].startswith(("-", "+")) and words[index] != "--":
+        command = command or says_c(words[index])
+        index += 2 if words[index] in SHELL_VALUE_OPTIONS else 1
+    index += 1 if words[index : index + 1] == ["--"] else 0
+    return index if command else None
+
+
+def says_c(option: str) -> bool:
+    """Whether a shell's option (a cluster of short ones: -lc) holds -c."""
+    return option.startswith("-") and not option.startswith("--") and "c" in option[1:]
+
+
+def wrapped(words: list[str]) -> str | None:
+    """What a shell wrapper runs, to be read again: the command string of `bash|sh|zsh|dash|ksh -c ...`
+    ("" when it lacks one: it runs nothing), or eval's arguments joined; None for any other command."""
+    name = command_name(words[0])
+    if name == EVAL:
+        return " ".join(words[1:])
+    at = shell_command_at(words) if name in SHELLS else None
+    if at is None:
+        return None
+    return words[at] if at < len(words) else ""
+
+
+def unreadable(wrapper: str, command: str, commands: list[list[str]], closed: bool) -> str:
+    """Why the guard cannot read what the wrapper <wrapper> runs (<command>, split into <commands>), or "":
+    its quotes do not close, or a command in it is named by a variable or a substitution, which decide
+    what runs only when it runs. Not a wrapper's (<wrapper> ""): nothing to say."""
+    named = any(words[0].startswith(DYNAMIC) for words in commands)
+    if not wrapper or (closed and not named):
+        return ""
+    shown = " ".join(command.replace(SUBSTITUTED, "$(...)").split())
+    return f"{wrapper} runs a command bosun guard cannot read ({shown[:SHOWN_CHARS]})"
+
+
+def parse(command: str, wrapper: str = "", depth: int = 0) -> Parsed:
+    """What a Bash command line runs (Parsed): its own simple commands, and those its substitutions and
+    shell wrappers run, read again as far as MAX_NESTING. <wrapper>: the wrapper (eval, bash -c) whose
+    argument <command> is, which the guard must be able to read (unreadable)."""
+    if depth > MAX_NESTING:
+        return Parsed([], [], f"commands nested more than {MAX_NESTING} deep")
+    scan = heredoc_scan(command)
+    text, held = take_substitutions(scan.text)
+    held += [inner for body in scan.expanding for inner in take_substitutions(body, shell_quotes=False)[1]]
+    written, closed = split_simple(text)
+    commands = [words for words in map(without_prefix, written) if words]
+    parsed = Parsed([Part(command, commands)], written, unreadable(wrapper, command, commands, closed))
+    for inner in held:
+        parsed = parsed.with_inner(parse(inner, depth=depth + 1))
+    for words in commands:
+        argument = wrapped(words)
+        if argument is not None:
+            parsed = parsed.with_inner(parse(argument, command_name(words[0]), depth + 1))
+    return parsed
+
+
+def simple_commands(command: str) -> list[list[str]]:
+    """Every simple command a shell command line runs (word lists, each from its command's name on):
+    one per line, `;`, `&&`, `|`, etc., leaving out heredoc bodies (data, not commands), leading keywords
+    (`do`, `then`, `{`), variable assignments and wrappers (`timeout 120`); with those its substitutions
+    ($(...), `...`) and shell wrappers (`bash -c '...'`, `eval ...`) run."""
+    return parse(command).commands
 
 
 def runs_substitution(command: str) -> bool:
-    return heredoc_scan(command)[1]
+    return heredoc_scan(command).runs
+
+
+def command_name(word: str) -> str:
+    """A command word as the guard compares it: its last path part (/usr/bin/git is git)."""
+    return word.rsplit("/", 1)[-1]
+
+
+def git_subcommand(arguments: list[str]) -> int:
+    """Where git's subcommand is in <arguments> (what follows `git`): after its global options."""
+    index = 0
+    while index < len(arguments) and arguments[index].startswith("-"):
+        index += 2 if arguments[index] in GIT_VALUE_OPTIONS else 1
+    return min(index, len(arguments))
+
+
+def compared(words: list[str]) -> list[str]:
+    """A simple command as the gates and denials compare it: its command's last path part, and for git
+    the subcommand right after it (`/usr/bin/git -C <dir> push` is `git push`)."""
+    name = command_name(words[0])
+    rest = words[1:]
+    return [name, *rest[git_subcommand(rest) :]] if name == "git" else [name, *rest]
 
 
 def is_force_flag(arg: str) -> bool:
@@ -362,7 +571,7 @@ def is_force_flag(arg: str) -> bool:
 
 
 def is_bosun(words: list[str], command: str) -> bool:
-    return words[0].rsplit("/", 1)[-1] == "bosun" and words[1] == command
+    return command_name(words[0]) == "bosun" and words[1] == command
 
 
 def send_without_item(words: list[str]) -> str | None:
@@ -408,6 +617,7 @@ def text_command_risk(words: list[str], command: str) -> str | None:
 
 
 def force_push(words: list[str]) -> str | None:
+    words = compared(words)
     pushes = words[0] == "git" and "push" in words[1:]
     if pushes and any(is_force_flag(arg) for arg in words[words.index("push") + 1 :]):
         return "git push with force (-f, --force*, or a +refspec) is never allowed"
@@ -415,35 +625,67 @@ def force_push(words: list[str]) -> str | None:
 
 
 def admin_merge(words: list[str]) -> str | None:
-    if words[:3] == ["gh", "pr", "merge"] and "--admin" in words:
+    if compared(words)[:3] == ["gh", "pr", "merge"] and "--admin" in words:
         return "gh pr merge --admin is never allowed"
+    return None
+
+
+def forbidden(parsed: Parsed) -> str | None:
+    """Why what <parsed> runs is never allowed, or None (each command judged with the text it was
+    written in, so a substitution inside `bash -c '...'` counts as the inner shell would run it)."""
+    for part in parsed.parts:
+        for words in part.commands:
+            if len(words) < MIN_COMMAND_WORDS:
+                continue
+            reason = (
+                text_command_risk(words, part.text)
+                or send_without_item(words)
+                or force_push(words)
+                or admin_merge(words)
+            )
+            if reason:
+                return reason
     return None
 
 
 def forbidden_bash(command: str) -> str | None:
     """Why a Bash command is never allowed, or None."""
-    for words in simple_commands(command):
-        if len(words) < MIN_COMMAND_WORDS:
-            continue
-        reason = (
-            text_command_risk(words, command)
-            or send_without_item(words)
-            or force_push(words)
-            or admin_merge(words)
-        )
-        if reason:
-            return reason
+    return forbidden(parse(command))
+
+
+def unseen_gate(parsed: Parsed) -> str | None:
+    """A gated outward command (GATED_COMMANDS) that the settings' `ask` rules do not see, as they match
+    a command as written by its first words (a full path, git's options before its subcommand, a wrapper,
+    a substitution, bash -c or eval): what it is, or None."""
+    for words in parsed.commands:
+        gate = gate_of(words, GATED_COMMANDS)
+        if gate and not any(tuple(written[: len(gate[0])]) == gate[0] for written in parsed.written):
+            return gate[1]
     return None
+
+
+def bash_decision(command: str) -> dict[str, str] | None:
+    """The plain guard's answer to a Bash command: deny what is never allowed; ask before a gated
+    outward command the permission rules do not see, and before a command a wrapper runs that the
+    guard cannot read; else no decision."""
+    parsed = parse(command)
+    reason = forbidden(parsed)
+    if reason:
+        return {"permissionDecision": "deny", "permissionDecisionReason": f"bosun guard: {reason}"}
+    unseen = unseen_gate(parsed)
+    if unseen:
+        return ask(
+            f"this runs {unseen}, an outward action, in a form the permission rules do not see (a full path, "
+            "git's options before its subcommand, a wrapper, a substitution, bash -c or eval); confirm it"
+        )
+    return ask(f"{parsed.unread}; confirm it") if parsed.unread else None
 
 
 def decide(event: dict[str, Any]) -> dict[str, str] | None:
     tool = event.get("tool_name", "")
     tool_input = event.get("tool_input") or {}
     if tool == "Bash":
-        reason = forbidden_bash(str(tool_input.get("command", "")))
-        if reason:
-            return {"permissionDecision": "deny", "permissionDecisionReason": f"bosun guard: {reason}"}
-        return None
+        return bash_decision(str(tool_input.get("command", "")))
     verb = mcp_write_verb(tool)
     if verb:
         return ask(f"{tool} can change things ('{verb}'); confirm it")
@@ -462,9 +704,10 @@ def ask(reason: str) -> dict[str, str]:
 # Outward calls the approvals hooks gate. The orchestrator settings' `ask` rules name the Slack and
 # gh ones; the rest (CI builds, tracker and wiki writes) get their prompt from the plain guard's
 # write verbs. Either prompt stays as the backstop (a hook that fails or decides nothing leaves
-# Claude Code's prompt). MCP
-# tools by their tool part (any server), Bash commands by their leading words anywhere in a
-# compound command.
+# Claude Code's prompt); for a gated command in a form those rules do not see, the plain guard asks
+# (unseen_gate). MCP tools by their tool part (any server), Bash commands by their leading words
+# (compared: the command's name, git's subcommand past its options) anywhere in what the call runs
+# (parse).
 GATED_MCP = {
     "slack_send_message": "a Slack message",
     "slack_schedule_message": "a scheduled Slack message",
@@ -490,6 +733,14 @@ GATED_COMMANDS = (
     (("gh", "pr", "comment"), "a PR comment"),
     (("gh", "pr", "review"), "a PR review"),
     (("gh", "pr", "close"), "closing a PR"),
+    (("gh", "pr", "create"), "a new PR"),
+    (("gh", "issue", "comment"), "an issue comment"),
+    (("gh", "issue", "create"), "a new issue"),
+    (("gh", "issue", "edit"), "an issue edit"),
+    (("gh", "issue", "close"), "closing an issue"),
+    (("gh", "release", "create"), "a new release"),
+    (("gh", "workflow", "run"), "starting a workflow"),
+    (("gh", "run", "rerun"), "running a workflow run again"),
     (("gh", "api"), "a GitHub API call"),
     (("git", "push"), "a push"),
 )
@@ -525,12 +776,15 @@ def extra_gates(setting: str) -> tuple[Gate, ...]:
     return tuple((prefix, f"a site-gated command ({' '.join(prefix)})") for prefix in prefixes if prefix)
 
 
+def gate_of(words: list[str], gates: tuple[Gate, ...]) -> Gate | None:
+    """The gate a simple command falls under, compared by its command's name (compared), or None."""
+    seen = compared(words)
+    return next(((prefix, what) for prefix, what in gates if tuple(seen[: len(prefix)]) == prefix), None)
+
+
 def gated_bash(commands: list[list[str]], extra: tuple[Gate, ...] = ()) -> str | None:
-    for words in commands:
-        for prefix, what in (*GATED_COMMANDS, *extra):
-            if tuple(words[: len(prefix)]) == prefix:
-                return what
-    return None
+    gates = (*GATED_COMMANDS, *extra)
+    return next((gate[1] for words in commands if (gate := gate_of(words, gates))), None)
 
 
 def outward_call(event: dict[str, Any], extra: tuple[Gate, ...] = ()) -> tuple[approvals.Call, str] | None:

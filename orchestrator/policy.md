@@ -295,7 +295,8 @@ goes out, not against a report or an earlier draft:
 ### Outward calls: propose the exact call, record my approval
 
 A Slack message, reaction or canvas, a Jira or Confluence change, `gh pr
-merge|ready|edit|comment|review|close|update-branch`, `gh api` and `git push` are outward calls:
+merge|ready|edit|comment|review|close|update-branch|create`, `gh issue comment|create|edit|close`,
+`gh release create`, `gh workflow run`, `gh run rerun`, `gh api` and `git push` are outward calls:
 - Propose each with the exact call: `bosun ledger propose '<id>' --send slack --channel
   '<channel id>' [--thread '<ts>'] --text - <<'EOF'` (the exact text in the heredoc), `--run '<the
   exact command>'` for a command, or `--tool <tool name> --args-json - <<'EOF'` (its arguments as

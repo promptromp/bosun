@@ -6,7 +6,10 @@ Status: built (2026-10-21), off by default (`BOSUN_APPROVALS_ENABLED=0`). Tracke
 ## Why
 
 The orchestrator's settings have `ask` rules for Slack sends, reactions and canvases,
-`gh pr merge|ready|edit|comment|review|close|update-branch`, `gh api` and `git push`. Other MCP tools
+`gh pr merge|ready|edit|comment|review|close|update-branch|create`, `gh issue comment|create|edit|close`,
+`gh release create`, `gh workflow run`, `gh run rerun` (gated since 2026-11-16), `gh api` and `git push`; the
+plain guard asks for those in a form the rules' prefixes do not see (`git -C <dir> push`, a full path, a
+wrapper, a substitution, `bash -c`, `eval`). Other MCP tools
 with a write verb in their name (Jira and Confluence writes, CI builds) get an `ask` from the plain
 `bosun guard` hook, which the launch adds (`guard_hook_settings`, `lib/common.sh`). Either `ask` beats auto mode, so each such call opens a Claude Code
 permission prompt.

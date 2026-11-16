@@ -271,6 +271,23 @@ class GatedTest(unittest.TestCase):
             "gh pr view 1 && gh pr comment 1 --body hi",
             "timeout 120 gh pr merge https://github.com/acme/exporter/pull/1 --squash 2>&1 | tail -2",
             "env GH_DEBUG=1 nohup git push origin main",
+            # git's own options before the subcommand, a full path, a substitution, a shell wrapper
+            "git -C /Users/me/Development/exporter push origin HEAD:main",
+            "git -c core.sshCommand=ssh --git-dir=/x/.git push origin main",
+            "/usr/bin/git push origin main",
+            "echo `gh pr merge 1 --squash`",
+            'echo "$(gh pr comment 1 --body hi)"',
+            "bash -c 'gh pr merge 1 --squash'",
+            'eval "git push origin main"',
+            # the other outward gh commands
+            "gh pr create --fill",
+            "gh issue comment 3 --body hi",
+            "gh issue create --title t --body b",
+            "gh issue edit 3 --add-label bug",
+            "gh issue close 3",
+            "gh release create v1.2.0",
+            "gh workflow run ci.yml",
+            "gh run rerun 12345",
         ]:
             with self.subTest(command=command):
                 self.assertTrue(self.gated("Bash", command=command))
@@ -283,7 +300,18 @@ class GatedTest(unittest.TestCase):
         ]:
             with self.subTest(tool=tool):
                 self.assertFalse(self.gated(tool))
-        for command in ["gh pr view 1 --json state", "bosun ledger list", "echo 'gh pr merge 1'"]:
+        for command in [
+            "gh pr view 1 --json state",
+            "bosun ledger list",
+            "echo 'gh pr merge 1'",
+            "gh issue view 3",
+            "gh issue list --state open",
+            "gh run view 12345 --log-failed",
+            "gh workflow list",
+            "gh release view v1.2.0",
+            "git -C /Users/me/Development/exporter log --oneline -3",
+            "bash -c 'git status'",
+        ]:
             with self.subTest(command=command):
                 self.assertFalse(self.gated("Bash", command=command))
 
@@ -411,6 +439,21 @@ class ChatApprovalTest(ApprovalsTestCase):
         reason = self.denial(self.event("Bash", command=f"timeout 120 {TOUCH}")) or ""
         self.assertIn("needs the user's approval first", reason)
         self.assertNotIn("Run exactly", reason)
+
+    def test_a_push_past_gits_options_is_gated_and_once_approved_asks_so_it_is_used_up(self) -> None:
+        """`git -C <dir> push` is a push (review-launch 3): denied without an approval; approved, the plain
+        guard asks, as the settings' `git push` rule cannot see it, so the PermissionRequest hook allows it
+        and uses the approval up."""
+        push = "git -C /Users/me/Development/exporter push origin HEAD:main"
+        self.assertIn("a push, an outward action", self.denial(self.event("Bash", command=push)) or "")
+        self.propose_touch(command=push)
+        self.say(typed(QUOTE, self.now()))
+        run("approve", PR, "--quote", QUOTE)
+        call = self.event("Bash", command=push)
+        self.assertIsNone(self.denial(call))
+        self.assertEqual(self.respond("", call)["permissionDecision"], "ask")  # type: ignore[index]
+        self.assertTrue(self.allowed(call))
+        self.assertIn("used_at", self.item(PR)["proposal"]["approval"])
 
     def test_an_approved_ci_build_restart_is_allowed(self) -> None:
         restart = "mcp__acme-ci__restart_build"
