@@ -406,13 +406,17 @@ def running(pid: int) -> bool:
     return True
 
 
+def alive(entry: dict[str, Any]) -> bool:
+    """Whether <entry> is a running Claude's record: its pid runs, and is not a reused one (is_stale)."""
+    pid = entry.get("pid")
+    return isinstance(pid, int) and running(pid) and not is_stale(entry)
+
+
 def live_records(key: str, value: str) -> Iterator[dict[str, Any]]:
     """The records of running Claudes whose <key> (sessionId, name) is <value>."""
     for registry in LIVE_SESSIONS_DIR.glob("*.json"):
         entry = read_object(registry)
-        if entry is None or entry.get(key) != value or not isinstance(entry.get("pid"), int):
-            continue
-        if running(entry["pid"]) and not is_stale(entry):
+        if entry is not None and entry.get(key) == value and alive(entry):
             yield entry
 
 
@@ -1487,8 +1491,9 @@ def cmd_list(args: list[str]) -> int:
 
 
 def registered(pids: Iterable[str]) -> str | None:
-    """The first of <pids> that is a Claude with a session."""
-    return next((pid for pid in pids if (LIVE_SESSIONS_DIR / f"{pid}.json").is_file()), None)
+    """The first of <pids> that is a Claude with a session: a live record, not one a Claude that crashed left
+    behind for a pid another process has since (as live_records)."""
+    return next((pid for pid in pids if (entry := record(pid)) is not None and alive(entry)), None)
 
 
 def cmd_registered(args: list[str]) -> int:
