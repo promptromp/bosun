@@ -41,7 +41,10 @@ KEY_LENGTH = 16  # hex digits of a file's opaque key
 KEY_FORMAT = re.compile(rf"^[0-9a-f]{{{KEY_LENGTH}}}$")
 MASK = "<masked>"
 WEBHOOK_MASK = "<webhook URL>"
-SECRET_NAME = re.compile(r"TOKEN|SECRET|KEY|PASSWORD|PASSWD|CREDENTIAL|COOKIE|PRIVATE", re.IGNORECASE)
+# A config key whose name holds a secret: lib/redact.py's words, and any KEY or PRIVATE, which in a
+# config key's name (SSH_KEY, LICENSE_KEY) mean a secret far more often than in prose, and a masked
+# config value hides nothing anyone needs.
+SECRET_NAME = re.compile(rf"{redact.CREDENTIAL_WORD}|KEY|PRIVATE", re.IGNORECASE)
 # NAME=value, export NAME=value, NAME: value, "NAME": "value" (with the value's own quoting kept out)
 ASSIGNMENT = re.compile(
     r"""^(?P<head>\s*(?:-\s+)?(?:export\s+)?["']?(?P<name>[A-Za-z_][A-Za-z0-9_.-]*)["']?\s*[=:]\s*)(?P<value>.*?)(?P<tail>,?\s*)$"""

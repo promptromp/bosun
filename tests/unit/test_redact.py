@@ -5,12 +5,15 @@ from pieces so that no scanner reads them as real."""
 from __future__ import annotations
 
 import sys
+import time
 import unittest
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "lib"))
+import claude_state  # noqa: E402
+import redact as redact_module  # noqa: E402
 from redact import redact  # noqa: E402
 
 
@@ -59,6 +62,58 @@ class SecretNamesTest(unittest.TestCase):
     def test_an_empty_value_does_not_take_the_next_line(self) -> None:
         self.check('GH_TOKEN_FILE=\nREPOS_DIR="$HOME/src"', 'GH_TOKEN_FILE=\nREPOS_DIR="$HOME/src"')
 
+    def test_a_quoted_value_cut_short_ends_with_its_line_or_text(self) -> None:
+        self.check(f'export GH_TOKEN="{FAKE}', 'export GH_TOKEN="<redacted>')
+        self.check(f'TOKEN="{FAKE}\nnext line', 'TOKEN="<redacted>\nnext line')
+
+    def test_a_bare_value_leaves_the_punctuation_that_closes_it(self) -> None:
+        self.check('{"token": 1234567890}', '{"token": <redacted>}')
+        self.check("`TOKEN=abc123`", "`TOKEN=<redacted>`")
+        self.check("TOKEN=abc123, next", "TOKEN=<redacted>, next")
+        self.check("[token=abc123]", "[token=<redacted>]")
+
+    def test_a_bare_value_that_looks_like_a_secret(self) -> None:
+        self.check("password: hunter2hunter2", "password: <redacted>")  # pragma: allowlist secret
+        passphrase = "correct" + "horse" + "battery" + "staple" + "ok"  # 25 letters, no digit
+        self.check(f"password: {passphrase}", "password: <redacted>")
+        self.check("Cookie: session=abc123def", "Cookie: <redacted>")
+
+    def test_a_password_in_a_connection_url(self) -> None:
+        self.check(
+            f"postgres://admin:{FAKE}@localhost:5432/app", "postgres://admin:<redacted>@localhost:5432/app"
+        )
+        self.check(f"redis://:{FAKE}@cache.internal:6379", "redis://:<redacted>@cache.internal:6379")
+
+
+class SerializedToolCallsTest(unittest.TestCase):
+    """What lib/claude_state.py keeps of a tool call: its input as JSON, cut at 200 characters, so a
+    quoted value is escaped and may be cut short."""
+
+    def test_a_write_of_an_env_file(self) -> None:
+        summary = claude_state.tool_summary(
+            "Write", {"file_path": "/Users/me/src/app/.env", "content": f'export GH_TOKEN="{FAKE}"\nX=1\n'}
+        )
+        self.assertIn(FAKE, summary)
+        self.assertEqual(
+            redact(summary),
+            '{"content": "export GH_TOKEN=\\"<redacted>\\"\\nX=1\\n", "file_path": "/Users/me/src/app/.env"}',
+        )
+
+    def test_an_edit_of_a_json_config(self) -> None:
+        config = '{"password": "hunter2hunter2", "user": "x"}'  # pragma: allowlist secret
+        summary = claude_state.tool_summary(
+            "Edit", {"file_path": "/Users/me/src/app/conf.json", "old_string": "{}", "new_string": config}
+        )
+        self.assertIn("hunter2hunter2", summary)
+        self.assertIn('\\"password\\": \\"<redacted>\\", \\"user\\"', redact(summary))
+        self.assertNotIn("hunter2hunter2", redact(summary))
+
+    def test_a_value_the_summary_cut_short(self) -> None:
+        content = "x: " + "y" * 150 + f'\npassword: "{FAKE}"'
+        summary = claude_state.tool_summary("Write", {"file_path": "/Users/me/a.yml", "content": content})
+        self.assertTrue(summary.endswith("..."))
+        self.assertTrue(redact(summary).endswith('password: \\"<redacted>'))
+
 
 class TokenPrefixesTest(unittest.TestCase):
     def test_tokens_without_a_name(self) -> None:
@@ -102,8 +157,20 @@ class PrivateKeysTest(unittest.TestCase):
         self.assertEqual(redact(text), "key:\n<key>\n\nthanks")
 
     def test_a_key_cut_short_in_json(self) -> None:
-        text = f'{{"private_key": "{marker("BEGIN", "")}\\n{self.BODY}\\n{self.BODY[:10]}'
+        text = f'{{"private_key": "{marker("BEGIN", "")}\\n{self.BODY}\\n{self.BODY[:20]}'
         self.assertEqual(redact(text), '{"private_key": "<key>')
+
+    def test_an_encrypted_key_cut_short_loses_its_headers_and_body(self) -> None:
+        headers = "Proc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,00000000\n\n"
+        self.assertEqual(redact(f"{marker('BEGIN')}\n{headers}{self.BODY}\n{self.BODY}"), "<key>")
+
+    def test_prose_after_a_marker_with_no_key_stays(self) -> None:
+        text = f"the file starts with {marker('BEGIN')} and thanks for the help"
+        self.assertEqual(redact(text), "the file starts with <key> and thanks for the help")
+
+    def test_a_pgp_key_block(self) -> None:
+        block = "PGP PRIVATE" + " KEY BLOCK-----"
+        self.assertEqual(redact(f"-----BEGIN {block}\n{self.BODY}\n-----END {block}"), "<key>")
 
 
 class ProseTest(unittest.TestCase):
@@ -116,9 +183,62 @@ class ProseTest(unittest.TestCase):
             "the api key lives in the keychain",
             "PWD=/Users/me/src",
             "sha " + "a" * 40,
+            "Password: required for staging",
+            "access token: rotate weekly",
+            "secretary: Danielle",
+            "lookup(max_tokens=LOOKUP_TOKENS)",
+            '{"token": null}',
+            "GITHUB_TOKEN=$(gh auth token)",
         ):
             with self.subTest(text=text):
                 self.assertEqual(redact(text), text)
+
+
+class TimingTest(unittest.TestCase):
+    """Every rule takes time in proportion to its text: 100 KB built to make a regex backtrack (long
+    runs of name characters, a secret word over and over, many markers or @ signs) stays far under
+    the bound, which is generous so that a loaded machine cannot fail it (each took 1-50 ms)."""
+
+    SIZE = 100_000
+    BOUND_SECONDS = 0.5
+
+    def adversarial(self) -> dict[str, str]:
+        n = self.SIZE
+        begin = marker("BEGIN")
+        return {
+            "a=": "a=" * (n // 2),
+            "one long word": "a" * n,
+            "base64": "Ab+/" * (n // 4),
+            "a marker and a body": f"{begin}\n" + "MIIEowIBAAKCAQEA\n" * (n // 17),
+            "a marker and spaced words": f"{begin} " + "MIIE owIB " * (n // 10),
+            "many markers": f"{begin} x " * (n // 34),
+            "token over and over": "token" * (n // 5),
+            "token over and over, then =": "token" * (n // 5) + "=abc123",
+            "secret_ over and over": "secret_" * (n // 7),
+            "x_api_key_ over and over": "x_api_key_" * (n // 10),
+            "access-key- over and over": "access-key-" * (n // 11),
+            "password= over and over": "password=" * (n // 9),
+            'password=" over and over': 'password="' * (n // 10),
+            "an unclosed quote": 'password: "' + "a" * n,
+            "backslashes": 'password: "' + "\\" * n,
+            "escaped quotes": 'token=\\"' * (n // 9),
+            "quotes": '"' * n,
+            "a long query": "https://x.example.com/p?" + "a=b&" * (n // 4),
+            "many URLs": "https://x.example.com/p?a " * (n // 26),
+            "a long local part": "a" * n + "@",
+            "dots before an @": "a." * (n // 2) + "@",
+            "many @": "a@" * (n // 2),
+            "many connection URLs": "postgres://u:" * (n // 13),
+            "bearer": "bearer " * (n // 7),
+        }
+
+    def test_every_rule_is_linear(self) -> None:
+        for name, text in self.adversarial().items():
+            for pattern, replacement in redact_module.REDACTIONS:
+                with self.subTest(text=name, rule=pattern.pattern[:60]):
+                    start = time.process_time()
+                    pattern.sub(replacement, text)
+                    self.assertLess(time.process_time() - start, self.BOUND_SECONDS)
 
 
 if __name__ == "__main__":
