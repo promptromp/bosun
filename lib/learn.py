@@ -943,14 +943,15 @@ def propose(
 def keep_finding(learn_dir: Path, key: str, recorded: dict[str, Any], entry: dict[str, Any]) -> None:
     """What a proposal <recorded> of finding <key> (status, item, digests), saved in learn's state at
     once: a run that fails later saves nothing else of what it found (finish reloads the state), and
-    an item learn does not know it cannot apply. Only a new finding is saved whole (<entry>); a known
-    one keeps its stored counts, since the next run reads the same window again and counts it then."""
+    an item learn does not know it cannot apply. This run's sighting is not saved: the run's own
+    final save counts it, or, when the run fails, the next run that reads the same window. So a known
+    finding keeps its stored counts, and a new one (<entry>) is saved as seen 0 times."""
 
     def change(state: State) -> None:
         if key in state.findings:
             state.findings[key].update(recorded)
         else:
-            state.findings[key] = dict(entry)
+            state.findings[key] = {**entry, "times_seen": 0}
 
     update_state(learn_dir, change)
 
