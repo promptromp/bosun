@@ -766,7 +766,17 @@ def remove_facts(kb: KB, fact_ids: set[str]) -> None:
     kb.restart_history = True
 
 
-def forget(kb: KB, ref: str) -> dict[str, int]:
+@dataclass(frozen=True)
+class Forgotten:
+    """What a forget deleted, and where the person's name or aliases still occur as free text, which
+    it does not reach (it names those places; it never edits them)."""
+
+    facts: int
+    identifiers: int
+    still_named: list[str]
+
+
+def forget(kb: KB, ref: str) -> Forgotten:
     """Delete a person on request: the entity, every fact naming them and their identifiers. What
     is kept is only a hash of the id (so a re-import is noticed) and the counts."""
     entity_id = ref.strip() if ref.strip() in kb.entities else resolve(kb, ref)
@@ -779,7 +789,7 @@ def forget(kb: KB, ref: str) -> dict[str, int]:
     kb.identifiers = [i for i in kb.identifiers if i.get("entity") != entity_id]
     counts = {"facts": len(fact_ids), "identifiers": before - len(kb.identifiers)}
     remove_facts(kb, fact_ids)
-    kb.entities.pop(entity_id, None)
+    terms = name_terms(entity_id, kb.entities.pop(entity_id, {}))
     kb.entities_changed = kb.identifiers_changed = True
     kb.new_forgotten.append(
         {
@@ -790,7 +800,54 @@ def forget(kb: KB, ref: str) -> dict[str, int]:
             **counts,
         }
     )
-    return counts
+    return Forgotten(counts["facts"], counts["identifiers"], still_named(kb, terms))
+
+
+MIN_NAME_TERM = 3  # a shorter alias would match everywhere
+
+
+def name_terms(entity_id: str, entity: Record) -> list[str]:
+    """What a person is called: their name, aliases and the slug of their id."""
+    aliases = entity.get("aliases") or {}
+    slug = entity_id.partition("/")[2].replace("-", " ")
+    found = [entity.get("name"), slug, *(aliases.get("strong") or []), *(aliases.get("weak") or [])]
+    return sorted({str(t).strip() for t in found if t and len(str(t).strip()) >= MIN_NAME_TERM})
+
+
+def entity_texts(entity: Record) -> list[tuple[str, str]]:
+    aliases = entity.get("aliases") or {}
+    named = [*(aliases.get("strong") or []), *(aliases.get("weak") or [])]
+    return [
+        ("name", entity.get("name") or ""),
+        ("summary", entity.get("summary") or ""),
+        *(("aliases", str(alias)) for alias in named),
+    ]
+
+
+def fact_texts(fact: Record) -> list[tuple[str, str]]:
+    sources = [f"{s.get('ref', '')} {s.get('quote', '')}" for s in fact.get("sources") or []]
+    return [
+        ("value", fact.get("value") or ""),
+        ("note", fact.get("note") or ""),
+        *(("source", text) for text in sources),
+        *(("history", str(h.get("note") or "")) for h in fact.get("history") or []),
+    ]
+
+
+def still_named(kb: KB, terms: list[str]) -> list[str]:
+    """Where <terms> still occur as words: other entities' names, summaries and aliases, and facts'
+    values, notes, sources (quotes too) and history notes."""
+    if not terms:
+        return []
+    pattern = re.compile(r"(?<!\w)(?:" + "|".join(map(re.escape, terms)) + r")(?!\w)", re.IGNORECASE)
+    places = [(f"entity {i}", entity_texts(e)) for i, e in sorted(kb.entities.items())]
+    places += [(f"fact {i}", fact_texts(f)) for i, f in kb.facts.items()]
+    found = []
+    for place, texts in places:
+        parts = sorted({part for part, text in texts if pattern.search(str(text))})
+        if parts:
+            found.append(f"{place} ({', '.join(parts)})")
+    return found
 
 
 def past_retention(kb: KB) -> list[Record]:

@@ -1133,8 +1133,10 @@ def decision_note(note: str, words: Record | None) -> str:
 
 
 def batch_quote_names(quote: str, refs: list[str]) -> bool:
-    """Whether <quote> holds every group number of <refs>, or the word all when they say all."""
+    """Whether <quote> holds every group number of <refs> (a range in it, 1-3, holds each), or the
+    word all when they say all."""
     words = set(re.findall(r"[a-z]+|\d+", quote.casefold()))
+    words |= {n for word in kr.RANGE_WORDS.findall(quote) for n in kr.range_numbers(word) or []}
     if kr.ALL in refs and kr.ALL in words:
         return True
     numbers = {match.group(1) for ref in refs if (match := kr.REF.match(ref))}
@@ -1270,10 +1272,14 @@ def cmd_supersede(args: argparse.Namespace) -> str:
 
 def cmd_forget(args: argparse.Namespace) -> str:
     with opened(True, "forget: a person deleted on request", dry_run=args.dry_run) as kb:
-        counts = km.forget(kb, args.entity)
+        gone = km.forget(kb, args.entity)
     done = "would delete" if args.dry_run else "deleted"
     history = "" if args.dry_run or not SETTINGS.git else "; the knowledge history was restarted without it"
-    return f"ok: {done} the person, {counts['facts']} facts and {counts['identifiers']} identifiers{history}"
+    said = f"ok: {done} the person, {gone.facts} facts and {gone.identifiers} identifiers{history}"
+    if gone.still_named:
+        said += "\ntheir name or an alias still occurs where forget does not reach; edit these yourself:"
+        said += "".join(f"\n  {place}" for place in gone.still_named)
+    return said
 
 
 def cmd_expire(args: argparse.Namespace) -> str:

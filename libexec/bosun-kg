@@ -50,11 +50,13 @@
 #   batch apply '<decision>' | --confirm 1,3 --reject 2b [--skip 4]  [--from-user --quote Q]
 #               [--dry-run]
 #                                      answer the last batch in one line: 'confirm all except 2b'
-#                                      (2b stays proposed), 'confirm 1,3 reject 2b', 'skip 4';
-#                                      unanswered facts stay proposed for a later batch. From an
-#                                      agent's session, only with a quote of my words, as confirm,
-#                                      that holds each group number the decision names (or all,
-#                                      when it says all)
+#                                      (2b stays proposed), 'confirm 1,3 reject 2b', 'confirm 1-3',
+#                                      'skip 4' (anything but words, commas, spaces and semicolons
+#                                      is refused); unanswered facts stay proposed for a later
+#                                      batch. From an agent's session, only with a quote of my
+#                                      words, as confirm, that holds each group number the decision
+#                                      names (a range such as 1-3 holds each in it; or all, when it
+#                                      says all)
 #   import <file> [--dry-run | --apply] [--auto-confirm]
 #                                      entities and facts from a JSON or JSON-lines file, all as
 #                                      proposals (--auto-confirm: apply the rules above); a dry run
@@ -63,7 +65,10 @@
 #                                      a restricted identifier for mentions (never in context packs)
 #   forget person/<slug> [--dry-run]   delete a person on request: entity, facts, identifiers, their
 #                                      changes in the journal (placeholders) and the git history
-#                                      (restarted); only a hash and counts are kept
+#                                      (restarted); of those only a hash and counts are kept. Their
+#                                      name as free text elsewhere (another entity's summary or
+#                                      aliases, a fact's value or note, a quote) it does not reach:
+#                                      it lists where it still occurs, for you to edit
 #   expire [--dry-run]                 record expired proposals (unreviewed for 30 days) and delete
 #                                      person facts not re-observed for 12 months
 #
