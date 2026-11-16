@@ -664,7 +664,6 @@ window_knowledge_prompt() { # <harness>
   knowledge_rules
 }
 
-# The keep-awake (caffeinate) pid file that `morning` writes and `stop` releases.
 # Whether `bosun update` holds bosun's own background work (docs/design/update.md): its record in
 # the state folder says a step before "released" within the hour, and an update is running (holds
 # update.lock): a hold left by an update that died lapses at once. The agents keep working.
@@ -680,6 +679,7 @@ update_windows_pending() {
   python3 "$BOSUN_ROOT/lib/update_state.py" windows-pending --state-dir "$BOSUN_STATE_DIR"
 }
 
+# The keep-awake (caffeinate) pid file that `morning` writes and `stop` releases.
 keep_awake_pidfile() { echo "$BOSUN_STATE_DIR/keep-awake-$BOSUN_SESSION_NAME.pid"; }
 
 # Beside the pid file, what `bosun status --json` reads: {"until": "<ISO time>", "pid": N}, when the
@@ -1322,7 +1322,6 @@ conversations_today() { # <name>: how many fresh conversations it started today
   esac
 }
 
-# Seconds from now until HH:MM today (0 if already past).
 # Seconds from now until BOSUN_AWAKE_UNTIL, the end of the current awake window. An end at or
 # before BOSUN_START_TIME is past midnight (01:00 = 1 am): the coming one, so tonight's when it
 # has passed today, or today's when yesterday's window is still running.
@@ -1345,6 +1344,7 @@ awake_seconds_left() {
   python3 "$BOSUN_ROOT/lib/awake.py" remaining --days "$BOSUN_DAYS" --start "$BOSUN_START_TIME" --until "$BOSUN_AWAKE_UNTIL"
 }
 
+# Seconds from now until HH:MM today (0 if already past).
 seconds_until() {
   local target now
   target="$(date -j -f '%Y-%m-%d %H:%M:%S' "$(date +%F) $1:00" +%s)" || return 1
