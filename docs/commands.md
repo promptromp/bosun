@@ -449,7 +449,8 @@ proposals whose approved call ran before the PostToolUse hook, by the transcript
   inside an agent session is the one that ran `kg`, so `--transcript` may be left out; `confirm`, `reject` and `batch
   apply` need the same from a session), `confirm`, `reject`, `supersede`, `batch` and `batch apply` (the daily
   review), `import` (proposals only, a dry run unless `--apply`), `identify`, `forget`, `expire`.
-- **Reading:** `lookup`, `facts` (`--as-of`), `search`, `neighbors`, `context --for` (repeatable: one pack, one
+- **Reading:** `lookup` (with where each of its reviewers, owners and approvers prefers to be asked), `facts`
+  (`--as-of`), `search` (by words too), `neighbors`, `context --for` (repeatable: one pack, one
   budget), `lint`, `validate` (the files against the journal they are the rebuild of), `stats`, `schema`.
 
 See [Ontology](knowledge.md#ontology).

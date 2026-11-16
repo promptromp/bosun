@@ -153,9 +153,11 @@ Examples, in the fictional acme world:
 ## How it is used (retrieval)
 
 - **CLI:**
-  - `kg lookup <entity> [--max-tokens N]` (current facts with sources, at most 800 tokens, then `(N more: kg facts <entity>)`; at most 5 waiting facts, then a count; `--json` is complete)
+  - `kg lookup <entity> [--max-tokens N]` (current facts with sources and the links to it, each person or team
+    that reviews, owns or approves it with where they prefer to be asked, at most 800 tokens, then `(N more: kg
+    lookup <entity> --max-tokens <4N>)`; at most 5 waiting facts, then a count; `--json` is complete)
   - `kg facts <subject> [--predicate] [--as-of]`
-  - `kg search <text>` (10 hits by default)
+  - `kg search <text>` (10 hits by default; the whole text as a phrase, then, for several words, by its words)
   - `kg neighbors <entity> [--hops 2]`
 - **Context packs:** `kg context --for <repo|process|topic>` returns at most about 1.5k tokens of
   cited, current, confirmed facts. `bosun delegate` appends the pack for the task's repo and
@@ -331,7 +333,9 @@ Where the design was silent (plan: [ontology-mvp3](../plans/ontology-mvp3.md)):
    `reviewed_by`, which keep that record in the local journal (`knowledge_changes.quotes_me`). A supersede given
    `--from-user` in any form checks it the same way; a correction with only a `--source` needs no words.
 4. **A pack leaves out people's own profile facts** (timezone, hours, preferences, title) and keeps facts that link
-   a person to the target ("Dana reviews the invoice exporter"). Identifiers and unconfirmed facts stay out.
+   a person to the target ("Dana reviews the invoice exporter"). Identifiers and unconfirmed facts stay out. A
+   person is the target only when `--for` names them: a topic's search leaves people out (2026-11-16, a review
+   finding: a person's fact that matched the topic made them the target, their profile with them).
 5. **The rules reach agents whose transcripts bosun can check** (`Profile.verifies_quotes`: Claude). Codex and
    Antigravity windows get packs in their briefs only.
 6. **Bounded output:** a pack is 1500 tokens at most, first line included; `kg lookup` 800, `kg search` 10 hits;
@@ -341,6 +345,19 @@ Where the design was silent (plan: [ontology-mvp3](../plans/ontology-mvp3.md)):
 9. **A site's own `--append-system-prompt`** in `BOSUN_CLAUDE_FLAGS` plus bosun's gives two; how Claude Code combines
    them is not checked.
 10. **The fictional world** reconciles the names in use: `repo/invoice-exporter` has the strong alias `acme/exporter`.
+11. **One lookup answers "who reviews it, and where do I ask?"** (2026-11-16: in the VM's live run the orchestrator
+    took 5 to 7 `kg` calls for it, since a search of several words matched nothing and the reviewer's channel was
+    a second lookup away). For each person or team that reviews, owns or approves the entity, its `reviews` line
+    (else its first `owns` or `approves` line: who reviews is the usual question) adds their own confirmed
+    `prefers_channel` facts, in the predicate's sentence and with their ids, within the lookup's budget; never a
+    team's preference for its member. `kg search` keeps its phrase matching and scores, and then matches by words:
+    each of 3 or more characters and no stop word (one short list, `STOP_WORDS`), at the start of a word, in the
+    fields the phrase reads but an id's type. A word in a name, strong alias or the id's slug weighs 4, one only in
+    a related term, summary or fact value 1, and each further name word in a row ("pdf renderer") adds 2, capped
+    below every phrase hit; so the question's "review" and "change" (a process name and a fact) no longer tie with
+    its "pdf renderer". Word rarity is not weighed. A pack's topic and the console's search stay phrase-only, so a
+    brief never gains loosely related entities, and the console's entity and fact lists agree. `--json` of a lookup
+    is unchanged. The real-Claude case K1 fails above 3 ontology reads.
 
 Measured with real Claude (`tests/llm/free_text.py`, cases K1-K6): 12 of 12 runs with the rules; with them off K2,
 K3, K5 and K6 fail, at about the same cost and turns. The VM's `ontology` step runs it end to end.

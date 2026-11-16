@@ -4,7 +4,9 @@ the auto-confirm rules (my quote verified in a transcript, never from a tool res
 text; two trusted sources; profile sources), re-observation and expiry, contradictions and the
 other lint findings, retention and delete on request, the review batch (grouping, cap, priority,
 one-line decisions), import (dry run first, refusals), context packs (size, citations, nothing
-unconfirmed or restricted), locking across processes and the git history.
+unconfirmed or restricted), search (by phrase, and by word for several words), lookups (their budget,
+where the people who answer for an entity prefer to be asked), locking across processes and the git
+history.
 Fictional data: acme's invoice exporter (tests/fixtures/knowledge/acme-import.jsonl)."""
 
 from __future__ import annotations
@@ -1165,6 +1167,34 @@ class ContextTest(KnowledgeTestCase):
         self.assertIn("staging 2", self.run_kg("context", "--for", "retired environment"))
         self.assertIn("No knowledge recorded", self.run_kg("context", "--for", "quantum"))
 
+    def test_a_topic_is_found_by_its_phrase_never_by_its_words(self) -> None:
+        kb = self.kb()
+        self.assertEqual(kq.search(kb, "pdf renderer review")[0][1], "repo/pdf-renderer")  # search: by words
+        self.assertEqual(kq.pack_targets(kb, "pdf renderer review"), [])  # a pack: by phrase only
+        self.assertIn("No knowledge recorded", self.run_kg("context", "--for", "pdf renderer review"))
+        self.assertEqual(kq.pack_targets(kb, "retired environment"), ["lesson/retired-env"])
+
+    def test_a_topic_never_makes_a_person_the_target(self) -> None:
+        said = "wants invoice exports reviewed before noon"
+        self.run_kg(
+            "propose", "person/dana", "stated_preference", "--value", said,
+            "--authority", "stakeholder_said", "--source", "slack:D0000000003/1700000004.000004",
+        )  # fmt: skip
+        self.confirm_people()
+        kb = self.kb()
+        self.assertIn("person/dana", [e for _, e, _ in kq.search(kb, "invoice exports", words=False)])
+        self.assertEqual(kq.pack_targets(kb, "invoice exports"), [])  # found by search only: not a target
+        self.assertIn("No knowledge recorded", self.run_kg("context", "--for", "invoice exports"))
+        hits = [e for _, e, _ in kq.search(kb, "invoice", kq.PACK_TOPIC_ENTITIES, words=False)]
+        self.assertEqual(hits, ["repo/invoice-exporter", "person/dana"])
+        self.assertEqual(kq.pack_targets(kb, "invoice"), ["repo/invoice-exporter"])  # the person left out
+        pack = self.run_kg("context", "--for", "invoice")
+        self.assertIn("Dana Example reviews invoice exporter", pack)  # who reviews the topic stays
+        for profile in ("(person/dana)", "before noon", "Lisbon"):
+            self.assertNotIn(profile, pack)
+        for named in ("person/dana", "Dana Example"):  # naming her makes her the target: her own facts
+            self.assertIn("before noon", self.run_kg("context", "--for", named))
+
     def test_a_repo_is_found_by_its_last_path_segment(self) -> None:
         kb = self.kb()
         for target in (
@@ -1330,6 +1360,175 @@ class QueryTest(KnowledgeTestCase):
         out = self.run_kg("search", "exporter").splitlines()
         self.assertTrue(out[0].startswith("repo/invoice-exporter"))
         self.assertIn("lesson/retired-env", self.run_kg("search", "follow-up"))
+
+    # Search by words: a routing question in a few words finds what it is about.
+
+    def test_several_words_match_each_at_the_start_of_a_word(self) -> None:
+        self.run_kg("add-entity", "process/review", "--name", "Review process")
+        for text in ("pdf renderer review", "who reviews the pdf renderer", "renderer reviewer"):
+            with self.subTest(text=text):
+                self.assertEqual(kq.search(self.kb(), text, words=False), [])  # no phrase matches it
+                self.assertEqual(kq.search(self.kb(), text)[0][1], "repo/pdf-renderer")
+        out = self.run_kg("search", "pdf renderer review").splitlines()
+        self.assertEqual(out[0], "repo/pdf-renderer  pdf renderer  (words: pdf, renderer)")
+        self.assertIn("process/review  Review process  (words: review)", out)  # fewer words: lower
+        self.assertNotIn("process/review", self.run_kg("search", "pdf renderer reviews"))  # a word's start
+
+    def test_a_phrase_hit_outranks_every_word_hit(self) -> None:
+        words = "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima"
+        self.run_kg("add-entity", "system/every-word", "--name", " ".join(reversed(words.split())))
+        self.run_kg("add-entity", "system/the-phrase", "--name", "holder")
+        self.run_kg(
+            "propose", "system/the-phrase", "caveat", "--value", f"says {words}", "--source", "memory:a.md"
+        )
+        hits = kq.search(self.kb(), words)
+        self.assertEqual([entity for _, entity, _ in hits], ["system/the-phrase", "system/every-word"])
+        self.assertEqual(hits[0][0], kq.SCORE_FACT)  # the lowest phrase score
+        self.assertLess(hits[1][0], kq.SCORE_FACT)
+        self.assertTrue(hits[1][2].startswith("words: alpha, bravo, charlie"))
+
+    def test_the_phrase_scores_stay_and_word_hits_come_after_them(self) -> None:
+        for text in ("smoke tests", "release flow", "credit note"):
+            with self.subTest(text=text):
+                phrase = kq.search(self.kb(), text, words=False)
+                both = kq.search(self.kb(), text)
+                self.assertTrue(phrase)
+                self.assertEqual(both[: len(phrase)], phrase)
+                self.assertTrue(all(why.startswith("words: ") for _, _, why in both[len(phrase) :]))
+
+    def test_stop_words_and_short_words_alone_find_nothing(self) -> None:
+        self.assertEqual(kq.query_words("who should we ask about it"), [])
+        self.assertEqual(self.run_kg("search", "who should we ask about it"), "no matches")
+
+    def test_a_single_word_is_matched_as_before(self) -> None:
+        for text in ("renderer", "release", "exporter", "smoke"):  # its phrase finds all its word finds
+            with self.subTest(text=text):
+                self.assertEqual(kq.search(self.kb(), text), kq.search(self.kb(), text, words=False))
+        for text in ("follow-up", "acme/pdf-renderer"):  # the phrase's hits first, as they were
+            with self.subTest(text=text):
+                phrase = kq.search(self.kb(), text, words=False)
+                self.assertEqual(kq.search(self.kb(), text)[: len(phrase)], phrase)
+
+    def test_punctuation_never_hides_a_word(self) -> None:
+        for text in ("renderer?", "renderer's reviewer", '"pdf renderer"'):
+            with self.subTest(text=text):
+                self.assertEqual(kq.search(self.kb(), text, words=False), [])
+                self.assertEqual(kq.search(self.kb(), text)[0][1], "repo/pdf-renderer")
+
+    # Where a word hits counts: a word of the name over several elsewhere, the name's words in a row,
+    # never an id's type.
+
+    def test_a_question_finds_what_its_name_words_name_before_a_decoy(self) -> None:
+        question = "Who should review a change to the pdf renderer, and where do I ask them?"
+        self.run_kg("add-entity", "process/review", "--name", "Review process", "--alias", "code review")
+        rule = "A change to exporter/tax.py needs a second review."
+        self.run_kg(
+            "propose", "process/review", "rule", "--value", rule,
+            "--source", "memory:review.md", "--source", "report:task:2026-10-01/1",
+        )  # fmt: skip
+        self.run_kg("add-entity", "system/decoy", "--name", "decoy", "--summary", "reviews every pdf change")
+        hits = kq.search(self.kb(), question)
+        self.assertEqual(hits[0][1:], ("repo/pdf-renderer", "words: pdf, renderer"))
+        ranked = [entity for _, entity, _ in hits]
+        self.assertLess(ranked.index("process/review"), ranked.index("system/decoy"))  # a name word first
+        self.assertEqual({e: s for s, e, _ in hits}["system/decoy"], 3 * kq.SCORE_WORD_OTHER)
+
+    def test_the_name_s_words_in_a_row_count_more(self) -> None:
+        self.run_kg("add-entity", "system/pdf-tools", "--name", "pdf tools for the renderer")
+        scores = {entity: score for score, entity, _ in kq.search(self.kb(), "renderer pdf")}
+        apart = 2 * kq.SCORE_WORD_NAMED
+        self.assertEqual(scores, {"repo/pdf-renderer": apart + kq.SCORE_WORD_RUN, "system/pdf-tools": apart})
+
+    def test_a_word_never_matches_an_id_s_type(self) -> None:
+        hits = kq.search(self.kb(), "who is the person that reviews exporter")
+        self.assertEqual(hits[0][1], "repo/invoice-exporter")
+        self.assertFalse([entity for _, entity, _ in hits if entity.startswith("person/")])
+
+    # Where to ask: a lookup of what someone reviews, owns or approves says where they prefer to be asked.
+
+    def fact_of(self, subject: str, predicate: str) -> str:
+        return next(
+            str(f["id"])
+            for f in self.kb().facts.values()
+            if (f["subject"], f["predicate"]) == (subject, predicate)
+        )
+
+    def test_a_lookup_says_where_a_reviewer_prefers_to_be_asked(self) -> None:
+        reviews = self.fact_of("person/lee", "reviews")
+        channel = self.fact_of("person/lee", "prefers_channel")
+        self.run_kg("confirm", reviews)
+        self.assertNotIn("prefers to be asked", self.run_kg("lookup", "exporter"))  # not confirmed yet
+        self.run_kg("confirm", channel)
+        out = self.run_kg("lookup", "exporter")
+        line = f"  {reviews} Lee Sample reviews invoice exporter [ledger:review:acme/invoice-exporter#101]"
+        self.assertIn(f"{line}; prefers to be asked in #acme-prs [{channel}]\n", out)
+        lee = self.run_kg("lookup", "person/lee")  # a person's own lookup lists it as one of her facts
+        self.assertIn(f"  {channel} Lee Sample prefers_channel #acme-prs", lee)
+        self.assertNotIn("; prefers to be asked", lee)
+
+    def test_only_the_person_s_own_confirmed_preference_counts(self) -> None:
+        self.run_kg(
+            "confirm", self.fact_of("person/dana", "reviews"), self.fact_of("person/dana", "member_of")
+        )
+        self.run_kg("propose", "person/dana", "prefers_channel", "channel/deploys", "--source", "ledger:x")
+        self.run_kg("propose", "team/billing", "prefers_channel", "channel/acme-prs", "--source", "ledger:y")
+        self.run_kg("confirm", self.fact_of("team/billing", "prefers_channel"))
+        (dana,) = [line for line in self.run_kg("lookup", "exporter").splitlines() if "Dana Example" in line]
+        self.assertNotIn("prefers", dana)  # hers waits for review, and her team's is not hers
+
+    def test_a_team_that_owns_it_says_where_it_prefers_to_be_asked(self) -> None:
+        for predicate, target in (("owns", "repo/invoice-exporter"), ("prefers_channel", "channel/acme-prs")):
+            self.run_kg("propose", "team/billing", predicate, target, "--source", f"ledger:{predicate}")
+            self.run_kg("confirm", self.fact_of("team/billing", predicate))
+        self.run_kg("propose", "team/billing", "approves", "repo/invoice-exporter", "--source", "ledger:a")
+        self.run_kg("confirm", self.fact_of("team/billing", "approves"))
+        out = self.run_kg("lookup", "exporter")
+        approves, channel = (
+            self.fact_of("team/billing", "approves"),
+            self.fact_of("team/billing", "prefers_channel"),
+        )
+        # once a team, on its first line, since it reviews nothing
+        self.assertRegex(out, rf"\n  {approves} Billing team approves invoice exporter \[[^]]*\]; prefers")
+        self.assertIn(f"; prefers to be asked in #acme-prs [{channel}]", out)
+        self.assertEqual(out.count("prefers to be asked"), 1)
+
+    def test_where_to_ask_is_on_the_reviews_line_of_one_who_also_owns_it(self) -> None:
+        for predicate, target in (("owns", "repo/invoice-exporter"), ("prefers_channel", "channel/acme-prs")):
+            self.run_kg("propose", "person/lee", predicate, target, "--source", f"ledger:{predicate}")
+        self.run_kg(
+            "confirm", *[self.fact_of("person/lee", p) for p in ("owns", "reviews", "prefers_channel")]
+        )
+        lines = self.run_kg("lookup", "exporter").splitlines()
+        (owns,) = [line for line in lines if " Lee Sample owns invoice exporter " in line]
+        (reviews,) = [line for line in lines if " Lee Sample reviews invoice exporter " in line]
+        self.assertLess(lines.index(owns), lines.index(reviews))  # owns sorts first
+        self.assertNotIn("prefers", owns)
+        self.assertTrue(
+            reviews.endswith(
+                f"; prefers to be asked in #acme-prs [{self.fact_of('person/lee', 'prefers_channel')}]"
+            )
+        )
+
+    def test_where_to_ask_counts_toward_the_lookup_s_budget(self) -> None:
+        for n in range(40):
+            person = f"person/reviewer-{n}"
+            self.run_kg("add-entity", person, "--name", f"Reviewer {n}")
+            self.run_kg("propose", person, "reviews", "repo/pdf-renderer", "--source", f"ledger:r{n}")
+            self.run_kg("propose", person, "prefers_channel", "channel/acme-prs", "--source", f"ledger:c{n}")
+        waiting = [f["id"] for f in self.kb().facts.values() if f["subject"].startswith("person/reviewer-")]
+        self.run_kg("confirm", *waiting)
+        out = self.run_kg("lookup", "pdf-renderer")
+        self.assertLessEqual(kq.estimate_tokens(out), kq.LOOKUP_TOKENS)
+        self.assertRegex(
+            out.splitlines()[-1], r"^\(\d+ more: kg lookup repo/pdf-renderer --max-tokens 3200\)$"
+        )
+        shown = [line for line in out.splitlines() if " reviews pdf renderer " in line]
+        self.assertTrue(shown)
+        self.assertTrue(
+            all(re.search(r"; prefers to be asked in #acme-prs \[f-\w{6}\]$", line) for line in shown)
+        )
+        fuller = self.run_kg("lookup", "pdf-renderer", "--max-tokens", "100000")
+        self.assertEqual(fuller.count("prefers to be asked in #acme-prs"), 40)
 
     def many(self, facts: int, status: str = "confirmed") -> Path:
         """An import of <facts> rules about repo/pdf-renderer (a file in the scratch folder)."""

@@ -1,15 +1,17 @@
-"""Reading the knowledge base (design: docs/design/knowledge.md, "How it is used"): lookup,
-facts with --as-of (valid time), search over names, aliases and text, neighbours over entity links,
-and context packs: at most about 1.5k tokens of confirmed, current, cited facts for an entity, a
-repo or a topic. Identifiers (restricted) are never shown here.
+"""Reading the knowledge base (design: docs/design/knowledge.md, "How it is used"): lookup (with
+where the people who answer for an entity prefer to be asked), facts with --as-of (valid time),
+search over names, aliases and text (by phrase, then by word), neighbours over entity links, and
+context packs: at most about 1.5k tokens of confirmed, current, cited facts for an entity, a repo
+or a topic. Identifiers (restricted) are never shown here.
 
 Pure over a knowledge_model.KB.
 """
 
 from __future__ import annotations
 
+import re
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -29,6 +31,13 @@ PACK_TOPIC_ENTITIES = 3
 MORE_LINE_RESERVE = 80  # room for the "(N more: ...)" line
 # Context packs try these types when --for names neither an entity nor an alias.
 PACK_TYPES = ("repo", "service", "process", "feature", "system", "channel", "team")
+# Who answers for an entity (the subject of a link to it: a person or team, as the schema has it),
+# and where each prefers to be asked: a lookup of the entity says both.
+ANSWERS_FOR = frozenset({"reviews", "owns", "approves"})
+ASKED_ON = (
+    "reviews"  # the line that says where to ask them, when they have one: who reviews is the usual question
+)
+ASKED_IN = "prefers_channel"
 
 
 def fact_line(kb: KB, fact: Record, *, sources: bool = True, status: bool = False) -> str:
@@ -93,10 +102,39 @@ def waiting_lines(kb: KB, entity_id: str) -> list[str]:
     return lines
 
 
+def asking_links(links: list[Record]) -> set[str]:
+    """The ids of the links that say where to ask their subject: for each person or team that answers
+    for the entity, its ASKED_ON link, else its first."""
+    chosen: dict[str, Record] = {}
+    for fact in links:
+        held = chosen.get(fact["subject"])
+        better = held is None or (fact["predicate"] == ASKED_ON and held["predicate"] != ASKED_ON)
+        if fact["predicate"] in ANSWERS_FOR and better:
+            chosen[fact["subject"]] = fact
+    return {fact["id"] for fact in chosen.values()}
+
+
+def link_lines(kb: KB, links: list[Record]) -> list[str]:
+    """The links to an entity, a line each; for each person or team that reviews, owns or approves it,
+    one of its lines (asking_links) also says where they prefer to be asked: their own confirmed,
+    current preferences with their ids (never their team's)."""
+    asked_in: dict[str, list[Record]] = {}
+    for fact in by_order([f for f in km.confirmed_current(kb) if f["predicate"] == ASKED_IN]):
+        asked_in.setdefault(fact["subject"], []).append(fact)
+    asking = asking_links(links)
+    lines = []
+    for fact in links:
+        line = f"  {fact_line(kb, fact)}"
+        if fact["id"] in asking:
+            line += "".join(f"; {kr.saying(kb, f)} [{f['id']}]" for f in asked_in.get(fact["subject"], []))
+        lines.append(line)
+    return lines
+
+
 def lookup(kb: KB, ref: str, max_tokens: int = LOOKUP_TOKENS) -> str:
-    """An entity's current confirmed facts with sources, what links to it, and what waits: the facts
-    and links within <max_tokens> (then how many more, and the command that shows them), at most
-    LOOKUP_PENDING waiting ones."""
+    """An entity's current confirmed facts with sources, what links to it (with where the people who
+    answer for it prefer to be asked), and what waits: the facts and links within <max_tokens> (then
+    how many more, and the command that shows them), at most LOOKUP_PENDING waiting ones."""
     entity = kb.entities[km.resolve(kb, ref)]
     entity_id = entity["id"]
     own, links = outgoing(kb, entity_id), incoming(kb, entity_id)
@@ -104,7 +142,7 @@ def lookup(kb: KB, ref: str, max_tokens: int = LOOKUP_TOKENS) -> str:
     tail = waiting_lines(kb, entity_id)
     body = [f"  {fact_line(kb, f)}" for f in own]
     if links:
-        body += ["linked from:", *[f"  {fact_line(kb, f)}" for f in links]]
+        body += ["linked from:", *link_lines(kb, links)]
     fixed = sum(len(line) + 1 for line in head + tail)
     shown, left = within(body, max_tokens * CHARS_PER_TOKEN - fixed)
     if left:
@@ -145,6 +183,19 @@ SCORE_NAME = 60
 SCORE_RELATED = 50
 SCORE_SUMMARY = 30
 SCORE_FACT = 20
+# A text also matches by its words, below every phrase match (at most SCORE_FACT - 1): each word
+# counts by where it begins a word: in a name, a strong alias or the id's slug (never its type, such
+# as person/), or only in a related term, the summary or a fact's value; and the most matched words
+# in a row in one name or alias ("pdf renderer") add SCORE_WORD_RUN for each after the first.
+SCORE_WORD_NAMED = 4
+SCORE_WORD_OTHER = 1
+SCORE_WORD_RUN = 2
+WORD_MIN = 3  # shorter words never count on their own
+STOP_WORDS = frozenset(
+    {"about", "and", "are", "ask", "can", "could", "does", "for", "from", "how", "should", "that", "the"}
+    | {"them", "they", "this", "what", "when", "where", "which", "who", "whom", "why", "with", "would"}
+)
+WORD = re.compile(r"\w+")
 
 
 def entity_score(entity: Record, wanted: str) -> tuple[int, str]:
@@ -162,23 +213,25 @@ def entity_score(entity: Record, wanted: str) -> tuple[int, str]:
     return next(((score, why) for hit, score, why in checks if hit), (0, ""))
 
 
-def fact_text_hits(kb: KB, wanted: str) -> list[tuple[Record, str]]:
-    """Current confirmed or proposed facts whose value contains <wanted>, with why they match."""
-    hits = []
+def searchable_facts(kb: KB) -> Iterator[tuple[Record, str]]:
+    """The current confirmed or proposed facts, with their status: what search reads."""
     for fact in kb.facts.values():
         status = km.effective_status(fact, kb.now)
-        searchable = status in (km.CONFIRMED, km.PROPOSED) and km.is_current(fact)
-        if searchable and wanted in km.norm(fact.get("value") or ""):
-            hits.append((fact, f"fact {fact['id']}" + ("" if status == km.CONFIRMED else " (unconfirmed)")))
-    return hits
+        if status in (km.CONFIRMED, km.PROPOSED) and km.is_current(fact):
+            yield fact, status
 
 
-def search(kb: KB, text: str, limit: int = SEARCH_HITS) -> list[tuple[int, str, str]]:
-    """(score, entity id, why) for entities matching <text> in a name, alias, summary or the value
-    of a fact about them (current facts only; unconfirmed ones count too, marked as such)."""
-    wanted = km.norm(text)
-    if not wanted:
-        return []
+def fact_text_hits(kb: KB, wanted: str) -> list[tuple[Record, str]]:
+    """Current confirmed or proposed facts whose value contains <wanted>, with why they match."""
+    return [
+        (fact, f"fact {fact['id']}" + ("" if status == km.CONFIRMED else " (unconfirmed)"))
+        for fact, status in searchable_facts(kb)
+        if wanted in km.norm(fact.get("value") or "")
+    ]
+
+
+def phrase_hits(kb: KB, wanted: str) -> dict[str, tuple[int, str]]:
+    """Entity id: (score, why) for the entities <wanted> is a part of, as one phrase."""
     found: dict[str, tuple[int, str]] = {}
     for entity in kb.entities.values():
         score, why = entity_score(entity, wanted)
@@ -186,6 +239,103 @@ def search(kb: KB, text: str, limit: int = SEARCH_HITS) -> list[tuple[int, str, 
             found[entity["id"]] = (score, why)
     for fact, why in fact_text_hits(kb, wanted):
         found.setdefault(fact["subject"], (SCORE_FACT, why))
+    return found
+
+
+def query_words(wanted: str) -> list[str]:
+    """The words a text is also searched by, each once: WORD_MIN characters or more, no stop word."""
+    return list(dict.fromkeys(w for w in WORD.findall(wanted) if len(w) >= WORD_MIN and w not in STOP_WORDS))
+
+
+def words_of(text: str) -> list[str]:
+    return WORD.findall(km.norm(text))
+
+
+def starts_a_word(word: str, words: Iterable[str]) -> bool:
+    return any(other.startswith(word) for other in words)
+
+
+def longest_run(words: list[str], names: list[list[str]]) -> int:
+    """The most words in a row of one of <names> (each a list of words) that each begin with one of
+    <words>."""
+    best = 0
+    for name in names:
+        run = 0
+        for part in name:
+            run = run + 1 if any(part.startswith(word) for word in words) else 0
+            best = max(best, run)
+    return best
+
+
+@dataclass(frozen=True)
+class WordHits:
+    """Where the words of a text begin a word of an entity: in its names (a name, a strong alias, the
+    id's slug), or only elsewhere (a related term, the summary, a fact's value)."""
+
+    names: list[list[str]]  # the words of each name
+    named: list[str]
+    elsewhere: list[str]
+
+
+def other_words(entity: Record, values: list[str]) -> set[str]:
+    """The words of an entity's related terms, its summary and <values>, the facts about it."""
+    texts = [*entity["aliases"]["weak"], entity.get("summary") or "", *values]
+    return {part for text in texts for part in words_of(text)}
+
+
+def word_hits_in(entity: Record, words: list[str], values: list[str]) -> WordHits:
+    names = [words_of(name) for name in km.names_of(entity)[1:]]  # not the id, whose type is no word
+    named = [w for w in words if any(starts_a_word(w, name) for name in names)]
+    other = other_words(entity, values)
+    return WordHits(names, named, [w for w in words if w not in named and starts_a_word(w, other)])
+
+
+def word_score(entity: Record, words: list[str], values: list[str]) -> tuple[int, str]:
+    """An entity's score for the <words> that begin a word of it, and which ones; (0, "") for none.
+    A word in its names counts SCORE_WORD_NAMED, one only elsewhere (the <values> of the facts
+    about it included) SCORE_WORD_OTHER, and a run of matched words in one name adds SCORE_WORD_RUN
+    for each word after its first: so a word in the name outweighs several elsewhere, and "pdf
+    renderer" in a name outweighs "pdf" and "renderer" apart. Every score stays below SCORE_FACT,
+    a cap that a long text matching many words can reach, where they tie."""
+    hits = word_hits_in(entity, words, values)
+    if not hits.named and not hits.elsewhere:
+        return 0, ""
+    score = SCORE_WORD_NAMED * len(hits.named) + SCORE_WORD_OTHER * len(hits.elsewhere)
+    score += SCORE_WORD_RUN * max(0, longest_run(hits.named, hits.names) - 1)
+    matched = [w for w in words if w in hits.named or w in hits.elsewhere]
+    return min(SCORE_FACT - 1, score), "words: " + ", ".join(matched)
+
+
+def word_hits(kb: KB, words: list[str]) -> dict[str, tuple[int, str]]:
+    """Entity id: (score, why) for the entities that match any of <words> (word_score)."""
+    if not words:
+        return {}
+    values: dict[str, list[str]] = {}
+    for fact, _ in searchable_facts(kb):
+        if fact.get("value"):
+            values.setdefault(fact["subject"], []).append(str(fact["value"]))
+    found: dict[str, tuple[int, str]] = {}
+    for entity in kb.entities.values():
+        score, why = word_score(entity, words, values.get(entity["id"], []))
+        if score:
+            found[entity["id"]] = (score, why)
+    return found
+
+
+def search(kb: KB, text: str, limit: int = SEARCH_HITS, *, words: bool = True) -> list[tuple[int, str, str]]:
+    """(score, entity id, why) for entities matching <text> in a name, alias, summary or the value
+    of a fact about them (current facts only; unconfirmed ones count too, marked as such). With
+    <words> (not for a pack's topic, which must not pull in what is only loosely related), the text
+    also matches by its words (query_words, word_score), each at the start of a word, an entity found
+    by the phrase keeping that score, every word match below a phrase match. For a single plain word
+    that adds nothing (its phrase finds all of it); it finds "renderer?" or "pdf renderer review"."""
+    wanted = km.norm(text)
+    if not wanted:
+        return []
+    found = phrase_hits(kb, wanted)
+    if words:
+        for entity_id, hit in word_hits(kb, query_words(wanted)).items():
+            found.setdefault(entity_id, hit)
     ranked = sorted(((s, e, w) for e, (s, w) in found.items()), key=lambda r: (-r[0], r[1]))
     return ranked[:limit]
 
@@ -245,7 +395,9 @@ def named_entity(kb: KB, target: str) -> str:
 
 def pack_targets(kb: KB, target: str, *, topics: bool = True) -> list[str]:
     """The entities a pack is for: the one <target> names (or <type>/<target> for the usual types;
-    for owner/repo, repo/<repo>), else, with <topics>, the best search matches for it as a topic.
+    for owner/repo, repo/<repo>), else, with <topics>, the best search matches for it as a topic
+    (by phrase only: no word search), never a person: a person is the target only when <target>
+    names them, so a fact of theirs that matches a topic never puts their own profile in the pack.
     Without <topics> (a brief's repo or area), a target that names a person is none: a person's own
     profile is nothing to put in a brief."""
     named = named_entity(kb, target)
@@ -259,9 +411,13 @@ def pack_targets(kb: KB, target: str, *, topics: bool = True) -> list[str]:
     repo = repo_by_last_segment(kb, slug)
     if repo:
         return [repo]
-    if not topics:
-        return []
-    return [entity_id for _, entity_id, _ in search(kb, target, PACK_TOPIC_ENTITIES)]
+    return topic_targets(kb, target) if topics else []
+
+
+def topic_targets(kb: KB, topic: str) -> list[str]:
+    """The best PACK_TOPIC_ENTITIES search matches for <topic>, by phrase only, leaving out people."""
+    found = [entity_id for _, entity_id, _ in search(kb, topic, len(kb.entities), words=False)]
+    return [entity_id for entity_id in found if not ks.is_person(entity_id)][:PACK_TOPIC_ENTITIES]
 
 
 def cite(fact: Record) -> str:

@@ -126,6 +126,11 @@ class OverviewTest(KnowledgeWorld):
         self.assertEqual({e["id"] for e in people["entities"]}, {"person/dana", "person/lee"})
         self.assertIsNone(self.overview()["search"])
 
+    def test_search_matches_the_whole_text_for_entities_as_for_facts(self) -> None:
+        # kg search would find the pdf renderer by these words; the console's two lists agree on none
+        search = self.overview(q="pdf renderer review")["search"]
+        self.assertEqual((search["entities"], search["facts"]), ([], []))
+
     def test_a_query_it_cannot_use_is_refused(self) -> None:
         with self.assertRaises(QueryError):
             self.overview(type="planet")

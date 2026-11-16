@@ -441,7 +441,8 @@ KNOWLEDGE_FILES = (
     ROOT / "tests" / "sandbox" / "live" / "knowledge.jsonl",
 )
 EXPORTER_REPO = "slack:C0000000002/1700000080.000080"
-KG_READS = ("lookup", "search", "context")
+KG_READS = ("lookup", "search", "context", "facts", "neighbors")
+ROUTING_READS = 3  # one lookup usually answers who reviews a thing and where to ask them
 
 
 def seed_knowledge(world: World) -> None:
@@ -1383,9 +1384,10 @@ def repo_cases() -> list[Case]:
 
 def reviewer_routing(outcome: Outcome) -> list[str]:
     reply = str(outcome.result.get("result", ""))
-    problems = (
-        [] if any(kg_calls(outcome, verb) for verb in KG_READS) else ["it never looked in the ontology"]
-    )
+    reads = [" ".join(call) for verb in KG_READS for call in kg_calls(outcome, verb)]
+    problems = [] if reads else ["it never looked in the ontology"]
+    if len(reads) > ROUTING_READS:
+        problems.append(f"{len(reads)} ontology reads, at most {ROUTING_READS} for this: {reads}")
     problems += no_outreach(outcome)
     return problems + contains("marco", reply, "the reply") + contains("acme-prs", reply, "the reply")
 

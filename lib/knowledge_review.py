@@ -236,15 +236,20 @@ def sentence_parts(kb: KB, fact: Record) -> list[Part]:
     return [part for part in parts if part[1]]
 
 
-def sentence(kb: KB, fact: Record, limit: int | None = VALUE_LIMIT) -> str:
-    """The fact as a sentence: its subject, then what it says (values shortened to <limit>)."""
+def saying(kb: KB, fact: Record, limit: int | None = VALUE_LIMIT) -> str:
+    """What the fact says after its subject, in its predicate's sentence (values shortened to <limit>)."""
     words = []
     for kind, text in sentence_parts(kb, fact):
         if kind == ENTITY:
             words.append(km.label(kb, text))
         else:
             words.append(text if kind == TEXT or limit is None else short(text, limit))
-    return f"{km.label(kb, fact['subject'])} {''.join(words)}"
+    return "".join(words)
+
+
+def sentence(kb: KB, fact: Record, limit: int | None = VALUE_LIMIT) -> str:
+    """The fact as a sentence: its subject, then what it says (values shortened to <limit>)."""
+    return f"{km.label(kb, fact['subject'])} {saying(kb, fact, limit)}"
 
 
 def statement(kb: KB, fact: Record, limit: int | None = VALUE_LIMIT) -> str:
