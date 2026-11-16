@@ -12,6 +12,7 @@ from typing import ClassVar
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import agent_state
 import journal as jr
+import log_files
 import uninstall_plan as up
 import update_backups as ub
 from checkout_work import Checkout
@@ -236,9 +237,16 @@ class Folders(unittest.TestCase):
             "watchdog.launchd.err",
             "hook-2026-11-02.log.1",
             "launch-2026-11-02.log",
+            # every command's own day file (lib/common.sh's log)
+            "install-2026-11-02.log",
+            "watchdog-2026-11-02.log",
+            "slack-watch-2026-11-02.log",
+            "settings-2026-11-02.log",
         ):
             self.assertEqual(up.kind_of(name, up.LOG_FILES), up.WORKING, name)
-        for name in ("Zoom.log", "vpn-client.log"):
+            if name.endswith(".log"):
+                self.assertIsNotNone(log_files.day_of(name), name)  # what the morning run prunes, too
+        for name in ("Zoom.log", "vpn-client.log", "Install-2026-11-02.log", "report-2026-11.log"):
             self.assertEqual(up.kind_of(name, up.LOG_FILES), up.UNKNOWN, name)
 
     def test_an_unsafe_folder_is_left_whole_and_named(self) -> None:

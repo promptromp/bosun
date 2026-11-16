@@ -377,23 +377,22 @@ check_models() {
     warn "your login shell sets ANTHROPIC_MODEL / CLAUDE_CODE_EFFORT_LEVEL ($login_env); they override bosun's model and effort in every session"
 }
 
-# The watchdog's launchd agent: loaded, and when it last ran (it runs every few minutes while the
-# Mac is awake, so a stale time means it is failing; see watchdog.launchd.err in the log dir).
+# The watchdog's launchd agent: loaded, and whether it runs (every few minutes while the Mac is awake), judged as
+# `bosun status --json` judges it (lib/menu_status_live.py --doctor-watchdog): a run it skipped while bosun is quit
+# or an update holds it counts, and so do the Mac's last wake and boot.
 check_watchdog() {
-  local label last last_epoch age
+  local label said
   label="$(watchdog_label)"
   if ! launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; then
     warn "watchdog agent $label not loaded: nothing alerts you when the morning run or the session fails; run install.sh"
     return
   fi
-  last="$(jq -r '.last_run // empty' "$BOSUN_STATE_DIR/watchdog.json" 2>/dev/null)"
-  last_epoch="$(date -j -f '%Y-%m-%d %H:%M:%S' "$last" +%s 2>/dev/null)"
-  age=$(($(date +%s) - ${last_epoch:-0}))
-  if [ -z "$last_epoch" ] || [ "$age" -gt $((3 * WATCHDOG_INTERVAL_SECONDS)) ]; then
-    warn "watchdog agent $label loaded, but its last full run was ${last:-never}; see $BOSUN_LOG_DIR/watchdog.launchd.err"
-  else
-    ok "watchdog agent $label loaded; last full run $last (bosun watchdog --status shows its checks)"
-  fi
+  said="$(python3 "$BOSUN_ROOT/lib/menu_status_live.py" --doctor-watchdog --state-dir "$BOSUN_STATE_DIR" --log-dir "$BOSUN_LOG_DIR" </dev/null 2>&1)"
+  case "$said" in
+    "ok"$'\t'*) ok "watchdog agent $label loaded; ${said#*$'\t'} (bosun watchdog --status shows its checks)" ;;
+    "warn"$'\t'*) warn "${said#*$'\t'}" ;;
+    *) warn "watchdog agent $label loaded, but whether it runs could not be told: $said" ;;
+  esac
 }
 
 # The learning agent, only with BOSUN_LEARN_ENABLED=1 (install.sh removes it otherwise).

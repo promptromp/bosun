@@ -132,13 +132,10 @@ CONFIG_FILES = (
 LOG_FILES = tuple(
     (pattern, WORKING)
     for pattern in (
-        "morning-*.log",
-        "checkin-*.log",
-        "learn-*.log",
+        # A day's file, `<command>-YYYY-MM-DD.log`: every command's (lib/common.sh's log), the morning run's,
+        # the check-in loop's, learning's... (lib/log_files.py's DAY_FILE, which the morning run prunes)
+        "[a-z]*-[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].log",
         "hook-*.log*",
-        "delegate-*.log",
-        "impact-*.log",
-        "launch-*.log",
         "launchd.out",
         "launchd.err",
         "*.launchd.out",

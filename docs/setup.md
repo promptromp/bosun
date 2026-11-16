@@ -249,8 +249,8 @@ menu is yellow at once. If it is loaded but has not run, it is yellow only when 
 its five-minute intervals since its last run (counted from the latest of that run, the Mac's last wake and its
 boot, so neither a morning wake nor the first minutes after a restart are yellow; a time later than now, after the
 clock was moved back, is left out). A checkout with no watchdog job is no problem, and a quit is grey whatever the
-watchdog does. `bosun doctor` has the plain rule: a job that is not loaded, or whose last full run is older than
-three intervals by the clock, is a warning there, with no allowance for sleep, a restart or a run that skipped.
+watchdog does. `bosun doctor` judges it the same way (a job that is not loaded warns there whether or not it is
+installed), and while bosun is quit says that the watchdog skips its runs.
 
 The items:
 

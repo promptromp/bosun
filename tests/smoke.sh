@@ -4022,7 +4022,7 @@ INSTALL_CFG="$WORK/install-config"
 PLIST="$HOME/Library/LaunchAgents/$BOSUN_LAUNCHD_LABEL.plist"
 # Never let a test touch the real launchd, pmset or sudo: only run if the fakes come first on PATH.
 if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pmset; command -v sudo' _ "$ROOT" | tr '\n' ' ')" = "$HOME/.local/bin/launchctl $HOME/.local/bin/pmset $HOME/.local/bin/sudo " ]; then
-  section install "install and uninstall (fake launchctl and pmset, test label)" needs ledger,knowledge covers 'install.sh,templates/**,examples/**,tests/fixtures/knowledge/**,libexec/bosun-console,libexec/bosun-doctor,libexec/bosun-kg,libexec/bosun-morning,libexec/bosun-ledger'
+  section install "install and uninstall (fake launchctl and pmset, test label)" needs ledger,knowledge covers 'install.sh,templates/**,examples/**,tests/fixtures/knowledge/**,libexec/bosun-console,libexec/bosun-doctor,libexec/bosun-kg,libexec/bosun-morning,libexec/bosun-ledger,lib/menu_status_live.py'
   touch "$WORK/launchctl-fails"
   check "an install that stops at the launchd jobs fails" fails_with "could not load the launchd jobs" env BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" --example generic
   check "... and leaves ~/.local/bin/bosun unlinked, so the install line takes the install for unfinished and runs init again" test ! -e "$HOME/.local/bin/bosun"
@@ -4052,6 +4052,16 @@ sys.exit(abs((datetime.datetime.now() - stamp).total_seconds()) > 600)' "$BOSUN_
   check "doctor checks the learning agent once it is enabled" contains "$doctor_said" "ok    learning agent $BOSUN_LAUNCHD_LABEL.learn loaded"
   check "doctor checks the job that runs --now, which the app's Start kickstarts" contains "$doctor_said" "ok    launchd job $BOSUN_LAUNCHD_LABEL.now loaded"
   check "doctor checks the ledger against its journal" contains "$doctor_said" "ok    the ledger and its journal: ledger is valid"
+  # The watchdog's line, judged as bosun status judges it, in a state folder of its own: its last full run is long
+  # past, but a run it skipped (an update's hold, a quit) is a run; while bosun is quit it says it skips them.
+  wdstate="$WORK/doctor-watchdog-state"
+  mkdir -p "$wdstate/logs"
+  printf '{"last_run": "2026-01-05 05:00:00"}' >"$wdstate/watchdog.json"
+  echo "update in progress: skipping this watchdog run" >"$wdstate/logs/watchdog.launchd.out"
+  wd_doctor() { BOSUN_STATE_DIR="$wdstate" BOSUN_LOG_DIR="$wdstate/logs" "$BOSUN" doctor 2>&1; }
+  check "doctor counts a run the watchdog skipped as a run, as bosun status does" contains "$(wd_doctor)" "ok    watchdog agent $BOSUN_LAUNCHD_LABEL.watchdog loaded; last ran at "
+  BOSUN_STATE_DIR="$wdstate" write_quit paused
+  check "... and while bosun is quit says it skips its runs, with no warning" contains "$(wd_doctor)" "ok    watchdog agent $BOSUN_LAUNCHD_LABEL.watchdog loaded; it skips its runs while bosun is quit"
   # pmset prints the hour after midnight as 0:01AM, not 12:01AM (seen on a real Mac)
   printf 'Repeating power events:\n  wakepoweron at 0:01AM every day\n' >"$WORK/pmset-sched"
   check "doctor accepts a wake at 00:01, as pmset prints it (0:01AM)" contains "$(BOSUN_START_TIME=00:00 BOSUN_WAKE_DELAY_MINUTES=1 "$BOSUN" doctor 2>&1)" "ok    pmset repeating wake:"

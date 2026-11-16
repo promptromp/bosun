@@ -1311,6 +1311,63 @@ class WatchdogJobFactsTestCase(unittest.TestCase):
         self.assertIsNone(found.watchdog_job)
 
 
+class DoctorWatchdogTestCase(unittest.TestCase):
+    """`bosun doctor`'s watchdog line: the status's own judgement, never the last full run alone."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.state = Path(tmp.name)
+        self.logs = self.state / "logs"
+        self.logs.mkdir()
+        (self.state / "watchdog.json").write_text(json.dumps({"last_run": "2026-11-11 05:00:00"}))
+
+    def said(self, woke: datetime | None = None) -> tuple[str, str]:
+        times = {menu_status_live.WAKETIME: woke}
+        return menu_status_live.doctor_watchdog(self.state, self.logs, NOW, times.get)
+
+    def ran(self, minutes_ago: int) -> None:
+        out = self.logs / "watchdog.launchd.out"
+        out.write_text("update in progress: skipping this watchdog run\n")
+        stamp = (NOW - timedelta(minutes=minutes_ago)).timestamp()
+        os.utime(out, (stamp, stamp))
+
+    def test_a_watchdog_whose_runs_stopped_warns_as_the_status_does(self) -> None:
+        level, text = self.said()
+        self.assertEqual(level, "warn")
+        self.assertIn("bosun's watchdog last ran at 05:00", text)
+        self.assertIn(str(self.logs), text)
+
+    def test_runs_it_skipped_for_an_update_or_a_quit_count(self) -> None:
+        self.ran(2)
+        self.assertEqual(self.said(), ("ok", "last ran at 09:58"))
+
+    def test_a_mac_that_just_woke_is_no_stale_watchdog(self) -> None:
+        self.assertEqual(self.said(woke=NOW - timedelta(minutes=3))[0], "ok")
+
+    def test_while_bosun_is_quit_it_says_the_runs_are_skipped(self) -> None:
+        quit_state.write(self.state, True, now=GONE_AT)
+        level, text = self.said()
+        self.assertEqual(level, "ok")
+        self.assertIn("skips its runs while bosun is quit", text)
+
+    def test_while_an_update_runs_it_says_so(self) -> None:
+        with mock.patch.object(update_state, "running", return_value=True):
+            self.assertEqual(self.said()[1], "an update runs, and it skips its runs until the update ends")
+
+    def test_a_job_that_never_ran_is_a_new_one(self) -> None:
+        (self.state / "watchdog.json").unlink()
+        self.assertEqual(self.said(), ("ok", "it has not run yet"))
+
+    def test_the_command_prints_the_line(self) -> None:
+        self.ran(1)
+        out = io.StringIO()
+        argv = ["--doctor-watchdog", "--state-dir", str(self.state), "--log-dir", str(self.logs)]
+        with contextlib.redirect_stdout(out):
+            status = menu_status_live.main(argv, now=NOW, kernel_time=lambda _name: None)
+        self.assertEqual((status, out.getvalue()), (0, "ok\tlast ran at 09:59\n"))
+
+
 class WatchdogWakeTestCase(unittest.TestCase):
     """A Mac that slept runs no watchdog: awake time counts from the later of its last run and its wake."""
 

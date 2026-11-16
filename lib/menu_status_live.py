@@ -13,6 +13,9 @@ The command always prints one JSON object with its `contract` and exits 0, whate
 part that failed becomes a problems line and at least a warning, and a bug in here an object that says so.
 
     menu_status_live.py [--config-error TEXT]   --config-error: bosun.env could not be read; say so
+    menu_status_live.py --doctor-watchdog --state-dir D --log-dir L
+        `bosun doctor`'s line on the watchdog's loaded job, judged as this command judges it: "ok" or "warn",
+        a tab and the text
 """
 
 from __future__ import annotations
@@ -233,13 +236,46 @@ def watchdog_job_of(
     job = (watchdog_facts or {}).get("watchdog_job")
     if not isinstance(job, dict):
         return None
-    last = (checks or {}).get("last_run")
+    ran = last_ran((checks or {}).get("last_run"), launched)
+    return WatchdogJob(bool(job.get("installed")), bool(job.get("state")), ran, woke, booted)
+
+
+def last_ran(last: object, launched: datetime | None) -> datetime | None:
+    """When the watchdog last ran: its last full run (<last>, its saved state's text) or when launchd last
+    started it (<launched>), whichever is later, a run that skipped being a run."""
     try:
         last_run = datetime.strptime(last, watchdog.STAMP) if isinstance(last, str) else None
     except ValueError:
         last_run = None
-    ran = max((t for t in (last_run, launched) if t is not None), default=None)
-    return WatchdogJob(bool(job.get("installed")), bool(job.get("state")), ran, woke, booted)
+    return max((t for t in (last_run, launched) if t is not None), default=None)
+
+
+def doctor_watchdog(
+    state_dir: Path, log_dir: Path, now: datetime, kernel_time: KernelTime = read_kernel_time
+) -> tuple[str, str]:
+    """`bosun doctor`'s line on the watchdog's job, which it found loaded: ("ok" or "warn", the text), judged
+    as the status judges it (menu_status.watchdog_problem, over the same inputs: the later of its last full
+    run and launchd's last start of it, the Mac's last wake and boot, an update running). In a quit it skips
+    its runs, which is no problem (the status says stopped then)."""
+    quit_record = quit_state.read(state_dir)
+    if quit_record is not None:
+        return (
+            "ok",
+            f"it skips its runs while bosun is quit (since {quit_state.clock(quit_record)}; bosun start)",
+        )
+    state, _note = load_state(state_dir)
+    ran = last_ran(state.last_run, launched_at(log_dir))
+    job = WatchdogJob(True, True, ran, kernel_time(WAKETIME), kernel_time(BOOTTIME))
+    updating = update_state.running(state_dir)
+    facts = StatusFacts(
+        None, None, None, None, update_running=updating, log_dir=str(log_dir), watchdog_job=job
+    )
+    problem = menu_status.watchdog_problem(facts, now)
+    if problem:
+        return "warn", problem
+    if updating:
+        return "ok", "an update runs, and it skips its runs until the update ends"
+    return "ok", f"last ran at {menu_status.when(ran, now)}" if ran else "it has not run yet"
 
 
 def watchdog_parts(
@@ -310,11 +346,19 @@ def main(
 ) -> int:
     parser = argparse.ArgumentParser(prog="bosun status --json", allow_abbrev=False)
     parser.add_argument("--config-error", metavar="TEXT", help="bosun.env could not be read: say so")
+    parser.add_argument("--doctor-watchdog", action="store_true", help="bosun doctor's line on the watchdog")
+    parser.add_argument("--state-dir", type=Path)
+    parser.add_argument("--log-dir", type=Path)
     args = parser.parse_args(argv)
     if args.config_error is not None:
         print(json.dumps(menu_status.unreadable_config(args.config_error)))
         return 0
     moment = now or watchdog.current_time(None)
+    if args.doctor_watchdog:
+        if args.state_dir is None or args.log_dir is None:
+            parser.error("--doctor-watchdog needs --state-dir and --log-dir")
+        print("\t".join(doctor_watchdog(args.state_dir, args.log_dir, moment, kernel_time)))
+        return 0
     try:
         # Whatever anything prints while the facts are gathered (the watchdog's state loading says
         # what it could not read) goes to stderr: stdout is the one object
