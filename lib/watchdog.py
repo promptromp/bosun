@@ -492,8 +492,15 @@ class Context:
         return self.now.date()
 
     @property
+    def workday(self) -> date:
+        """The day the morning run, the session and the day's findings belong to: the day the awake window
+        that now is in began (yesterday, in a window that runs past midnight), else today."""
+        current = self.config.awake.current(self.now)
+        return current[0].date() if current else self.today
+
+    @property
     def morning_log(self) -> Path:
-        return self.config.log_dir / f"morning-{self.today:%Y-%m-%d}.log"
+        return self.config.log_dir / f"morning-{self.workday:%Y-%m-%d}.log"
 
 
 def window_signals(ctx: Context, window: str, record: dict[str, Any] | None) -> signals.Signals:
@@ -511,12 +518,12 @@ def set_up_after(ctx: Context, due: datetime) -> datetime | None:
 
 
 def morning_set_up_after(ctx: Context) -> datetime | None:
-    """set_up_after today's morning run: bosun was set up after the morning job's time (BOSUN_START_TIME)."""
-    return set_up_after(ctx, datetime.combine(ctx.today, ctx.config.start))
+    """set_up_after the workday's morning run: bosun was set up after its job's time (BOSUN_START_TIME)."""
+    return set_up_after(ctx, datetime.combine(ctx.workday, ctx.config.start))
 
 
 def check_morning_missing(ctx: Context) -> Result:
-    day = ctx.today
+    day = ctx.workday
     if not scheduled(ctx.config, day):
         return Result("not a scheduled day")
     due = morning_due(ctx.config, day)
@@ -553,7 +560,7 @@ def unfinished_run(ctx: Context, run: MorningRun) -> Result:
     message = (
         f"The morning run that started at {run.started:%H:%M} {how} without finishing; see {ctx.morning_log}."
     )
-    return Result(findings=[Finding(f"morning-failed:{ctx.today}", message, confirm=True)])
+    return Result(findings=[Finding(f"morning-failed:{ctx.workday}", message, confirm=True)])
 
 
 def check_morning_failed(ctx: Context) -> Result:
@@ -570,7 +577,7 @@ def check_morning_failed(ctx: Context) -> Result:
         f"The morning run at {run.started:%H:%M} reported problems: {listed(run.problems)}. "
         f"Log: {ctx.morning_log}"
     )
-    return Result(findings=[Finding(f"morning-failed:{ctx.today}", message)])
+    return Result(findings=[Finding(f"morning-failed:{ctx.workday}", message)])
 
 
 def attach_hint(window: str) -> str:
@@ -708,9 +715,10 @@ def check_log_errors(ctx: Context) -> Result:
 
 
 def stopped_today(ctx: Context) -> datetime | None:
-    """When you stopped the session today with `bosun stop`, if you did."""
+    """When you stopped the session today with `bosun stop`, if you did: today, or since the workday began (in
+    a window past midnight, a stop before midnight counts until the window ends)."""
     stopped = stop_marker.read(ctx.config.state_dir, ctx.config.session)
-    return stopped if stopped is not None and stopped.date() == ctx.today else None
+    return stopped if stopped is not None and ctx.workday <= stopped.date() <= ctx.today else None
 
 
 # Why the session is not expected to run now (gate_kind): the awake window is not on, the morning is not
@@ -739,7 +747,7 @@ def morning_gate_kind(ctx: Context) -> tuple[str, str] | None:
     installed = morning_set_up_after(ctx) if ctx.morning_run is None else None
     if installed:  # no run is coming today: not "not due yet", which the menu shows as starting
         return GATE_NO_MORNING, f"no morning run today: bosun was set up at {installed:%H:%M}, after its time"
-    due = morning_due(ctx.config, ctx.today)
+    due = morning_due(ctx.config, ctx.workday)
     if ctx.now < due:
         return GATE_NOT_DUE, f"not expected before {due:%H:%M}"
     if ctx.morning_run is None:
@@ -780,7 +788,7 @@ def check_session(ctx: Context) -> Result:
         if ctx.morning_run
         else f"The tmux session '{ctx.config.session}' is not running."
     )
-    return Result(findings=[Finding(f"session-missing:{ctx.today}", message, confirm=True)])
+    return Result(findings=[Finding(f"session-missing:{ctx.workday}", message, confirm=True)])
 
 
 def check_checkin(ctx: Context) -> Result:
@@ -802,7 +810,7 @@ def check_checkin(ctx: Context) -> Result:
         problem, fix = "is missing", "run bosun refresh checkin"
     gets = "check-ins" if ctx.config.checkin_minutes > 0 else "events"
     message = f"The checkin window {problem}, so the orchestrator gets no {gets}: {fix}."
-    return Result(findings=[Finding(f"checkin-missing:{ctx.today}", message, confirm=True)])
+    return Result(findings=[Finding(f"checkin-missing:{ctx.workday}", message, confirm=True)])
 
 
 # The orchestrator's Claude not running inside the awake window: nothing reads the events, the

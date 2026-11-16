@@ -530,6 +530,55 @@ class SessionTest(WatchdogCase):
         self.assertEqual(self.runs(at(MONDAY, "20:00"), 3, facts=self.gone), [])
 
 
+class PastMidnightTest(WatchdogCase):
+    """An awake window that runs past midnight (BOSUN_AWAKE_UNTIL at or before the start): from 00:00 to its
+    end the day is still the one the window began on: for the gate, the morning's due time, log and keys."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.config = replace(self.config, awake_until=time(1, 0))
+        self.gone = Facts(morning_job_state="not running", morning_job_exit="0")
+
+    def gate(self, now: datetime) -> tuple[str, str] | None:
+        return watchdog.session_gate_kind(self.inputs(now, self.gone).context(watchdog.State()))
+
+    def test_the_workday_is_the_day_the_window_began(self) -> None:
+        def workday(now: datetime) -> date:
+            return self.inputs(now).context(watchdog.State()).workday
+
+        self.assertEqual(workday(at(TUESDAY, "00:30")), MONDAY)
+        self.assertEqual(workday(at(TUESDAY, "01:00")), TUESDAY)  # the window is over
+        self.assertEqual(workday(at(MONDAY, "23:30")), MONDAY)
+        self.assertEqual(workday(at(SATURDAY, "00:30")), FRIDAY)
+
+    def test_after_midnight_the_session_is_still_expected(self) -> None:
+        self.morning_run(MONDAY)
+        self.assertIsNone(self.gate(at(TUESDAY, "00:30")))  # not "not expected before 08:16" of Tuesday
+        ctx = self.inputs(at(TUESDAY, "00:30")).context(watchdog.State())
+        self.assertEqual(ctx.morning_log.name, f"morning-{MONDAY}.log")
+        self.assertEqual(watchdog.check_morning_missing(ctx).note, "ran at 08:01 (launchd)")
+
+    def test_a_crash_before_midnight_is_confirmed_after_it(self) -> None:
+        self.morning_run(MONDAY)
+        self.assertEqual(self.watch(at(MONDAY, "23:57"), facts=self.gone), [])  # seen once: confirming
+        sent = self.watch(at(TUESDAY, "00:02"), facts=self.gone)
+        self.assertEqual(len(sent), 1)
+        self.assertIn("tmux session 'main' is not running", sent[0])
+        self.assertIn(f"session-missing:{MONDAY}", self.state()["alerted"])
+
+    def test_a_stop_before_or_after_midnight_counts_until_the_window_ends(self) -> None:
+        self.morning_run(MONDAY)
+        for stopped in (f"{MONDAY} 23:50:00", f"{TUESDAY} 00:10:00"):
+            with self.subTest(stopped=stopped):
+                (self.state_dir / "stopped-main").write_text(f"{stopped}\n")
+                self.assertEqual(self.gate(at(TUESDAY, "00:30"))[0], watchdog.GATE_STOPPED)  # type: ignore[index]
+        self.morning_run(TUESDAY)
+        (self.state_dir / "stopped-main").write_text(f"{MONDAY} 23:50:00\n")
+        self.assertIsNone(self.gate(at(TUESDAY, "10:00")))  # Monday's stop is over by Tuesday's window
+        (self.state_dir / "stopped-main").write_text(f"{TUESDAY} 00:10:00\n")
+        self.assertEqual(self.gate(at(TUESDAY, "10:00"))[0], watchdog.GATE_STOPPED)  # type: ignore[index]
+
+
 class CheckinTest(WatchdogCase):
     def setUp(self) -> None:
         super().setUp()

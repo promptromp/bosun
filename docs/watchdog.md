@@ -43,7 +43,8 @@ How it avoids false alarms:
   `session_gate_kind`).
 - **Only in the awake window:** alerts go out on scheduled days (`BOSUN_DAYS`) between
   `BOSUN_START_TIME` and `BOSUN_AWAKE_UNTIL` (an end at or before the start runs past
-  midnight: 08:00 to 01:00 ends at 1 am the next day). Anything found outside it is held: a prompt
+  midnight: 08:00 to 01:00 ends at 1 am the next day, and until then the day is still the one it began on, for the
+  morning run, the session and their alerts). Anything found outside it is held: a prompt
   left open overnight alerts when the window opens, and log lines are not consumed until then. A session that is
   missing outside the window is no finding: the gate says "outside the awake window", which `bosun status` and the
   menu bar app show as "Resting: outside your hours · next start <day> <time>", with a grey dot.

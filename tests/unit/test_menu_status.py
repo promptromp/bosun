@@ -953,6 +953,23 @@ class GatherTestCase(unittest.TestCase):
             (early["level"], early["sentence"], early["starting"]), ("ok", "bosun is not running", False)
         )
 
+    def test_past_midnight_in_a_window_that_runs_past_it_the_day_is_the_one_it_began(self) -> None:
+        """08:00 to 01:00: at 00:30 the session missing since the evening is still expected (an error, with
+        Start shown), never "starting (the morning run)" of the new day."""
+        self.env["BOSUN_AWAKE_UNTIL"] = "01:00"
+        (self.state / "logs" / "morning-2026-11-11.log").write_text(
+            "2026-11-11 08:00:30 [morning] === morning run (trigger=launchd, session=acme, dry_run=0) ===\n"
+            "2026-11-11 08:03:00 [morning] morning run complete\n"
+        )
+        facts_json = {**WATCHDOG_FACTS, "session_exists": False, "windows": []}
+        run = FakeCommands({"sessions --json": json.dumps(GONE), "watchdog --facts": json.dumps(facts_json)})
+        night = datetime(2026, 11, 12, 0, 30)
+        found = menu_status_live.gather(self.env, night, run, kernel_time=lambda _name: None)
+        self.assertEqual(found.gate, SessionGate(menu_status.EXPECTED))
+        out = menu_status.snapshot(found, night)
+        self.assertEqual((out["level"], out["starting"]), ("error", False))
+        self.assertIn("tmux session 'acme' is not running", " ".join(out["problems"]))
+
     def test_a_morning_that_crashed_is_not_called_starting(self) -> None:
         # No end line, the launchd job not running with exit 1: outcome stays "running"
         header = (
