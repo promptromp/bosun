@@ -192,7 +192,7 @@ ROUND_TWO_QUOTES: tuple[tuple[str, str, bool], ...] = (
     ("ok \u2014 actually no", "ok \u2014 actually no", False),
     ("ok", "ok \u2014 actually no", False),
     ("yes?", "yes?", False),
-    ("approve 2", "approve 2", False),
+    ("approve 2", "approve 2", True),  # round 3: a verb that picks a bare choice
     ("1", "1", True),
     ("all", "all", True),
     ("go ahead and tell me what's pending", "go ahead and tell me what's pending", True),
@@ -264,6 +264,92 @@ ROUND_TWO_QUOTES: tuple[tuple[str, str, bool], ...] = (
     ("yes sir", "yes sir", True),
 )
 
+# The review's round-3 quotes (scratchpad rv3/q.py, q2.py), (quote, prompt, counts). Those that count and
+# should not are docs/design/approvals.md's list: a yes with a limit ("ok for all except 2", "yes, but only
+# 1"), with a time or a condition, someone's words passed on, a quoted no (`yes "no"`), a homoglyph.
+ROUND_THREE_QUOTES: tuple[tuple[str, str, bool], ...] = (
+    ("yes", "yes", True),
+    ("ok", "ok", True),
+    ("1 and 3", "1 and 3", True),
+    ("all", "all", True),
+    ("go ahead with 1 and 3", "go ahead with 1 and 3", True),
+    ("yes please", "yes please", True),
+    ("ok, send it", "ok, send it", True),
+    ("Yes!", "Yes!", True),
+    ("yes", "Yes!", True),
+    ("sure, do it", "sure, do it", True),
+    ("approved", "approved", True),
+    ("lgtm", "lgtm", True),
+    ("LGTM", "LGTM", True),
+    ("1 and 3 yes", "1 and 3 yes", True),
+    ("Ok.", "Ok.", True),
+    ("yes", "yes.", True),
+    ("ok \U0001f44d", "ok \U0001f44d", True),
+    ("yes, 1 and 3", "yes, 1 and 3", True),
+    ("1 and 3 yes", "1 and 3 yes, 2 later", False),
+    ("1 and 3, not 2", "1 and 3, not 2", False),
+    ("approve 1 and 3", "approve 1 and 3", True),
+    ("send 1 and 3", "send 1 and 3", True),
+    ("do 1 and 3", "do 1 and 3", True),
+    ("1 and 3 please", "1 and 3 please", True),
+    ("go with 1 and 3", "go with 1 and 3", True),
+    ("merge it", "merge it", False),
+    ("yes, merge it", "yes, merge it", True),
+    ("1, 3", "1, 3", True),
+    ("both", "both", True),
+    ("all of them", "all of them", True),
+    ("2", "2", True),
+    ("yes to all", "yes to all", True),
+    ("yep", "yep", True),
+    ("okay go ahead", "okay go ahead", True),
+    ("Yes, go ahead. Thanks!", "Yes, go ahead. Thanks!", True),
+    ("Yes, go ahead", "Yes, go ahead. Thanks!", True),
+    ("yes, no rush", "yes, no rush", False),
+    ("send it now", "send it now", True),
+    ("ship it", "ship it", True),
+    ("y", "y", False),
+    ("approve", "approve", False),
+    ("confirmed", "confirmed", True),
+    ("fine", "fine", False),
+    ("yes for mypr:acme/x#12", "yes for mypr:acme/x#12", True),
+    ("all good, send them", "all good, send them", True),
+    ("ok do 1 and 3", "ok do 1 and 3", True),
+    ("1+3", "1+3", True),
+    ("1 & 3", "1 & 3", True),
+    ("1 and 3.", "1 and 3.", True),
+    ("ok!!", "ok!!", True),
+    ("yes - go ahead", "yes - go ahead", True),
+    ("Yes \u2014 go ahead", "Yes \u2014 go ahead", True),
+    ("ok, send it", "ok, send it. I'll check later", False),
+    ("Sure thing", "Sure thing", True),
+    ("yes, but only 1", "yes, but only 1", True),
+    ("ok, it's fine, send it", "ok, it's fine, send it", True),
+    ("ok for all except 2", "ok for all except 2", True),
+    ("go", "go", False),
+    ("do it", "do it", True),
+    ("go ahead and tell me what's pending", "go ahead and tell me what's pending", True),
+    ("Dana wrote: ok, ship it", "Dana wrote: ok, ship it", True),
+    ("ok, ship it", "Dana wrote: ok, ship it", True),
+    ("yes, after lunch", "yes, after lunch", True),
+    ("yes, n\u03bf", "yes, n\u03bf", True),
+    ("ok, but you mustnt merge", "ok, but you mustnt merge", False),
+    ("ok, you neednt merge", "ok, you neednt merge", False),
+    ("yes", "yes, dont", False),
+    ("yes", "yes \u201cno\u201d", True),
+    ("yes", "yes \u2018no\u2019", True),
+    ("yes", "yes 'no'", True),
+    ("yes", "yes \xabno\xbb", False),
+    ("yes", "yes \u201eno\u201c", False),
+    ("yes", "yes\u200b", True),
+    ("yes", "n\u200bo, yes", False),
+    ("yes", "yes \uff1f", False),
+    ("yes", "yes \xbf", False),
+    ("ok", "ok. nope.", False),
+    ("Yes for 2", "Yes for 2, NO for 3", False),
+    ("yes, merge it once ci is green", "yes, merge it once ci is green", True),
+    ("yes, after the standup", "yes, after the standup", True),
+)
+
 
 class QuoteRuleTest(unittest.TestCase):
     """What counts as my approval of a proposal (approvals.approval_quote_in, QUOTE_RULE): in a prompt with no
@@ -273,8 +359,8 @@ class QuoteRuleTest(unittest.TestCase):
     def counts(self, quote: str, *prompts: str) -> bool:
         return approvals.approval_quote_in(quote, prompts)
 
-    def test_round_two_quotes(self) -> None:
-        for quote, prompt, wanted in ROUND_TWO_QUOTES:
+    def test_round_two_and_three_quotes(self) -> None:
+        for quote, prompt, wanted in (*ROUND_TWO_QUOTES, *ROUND_THREE_QUOTES):
             with self.subTest(quote=quote, prompt=prompt):
                 self.assertEqual(self.counts(quote, prompt), wanted)
 
@@ -302,7 +388,8 @@ class QuoteRuleTest(unittest.TestCase):
             "no",
             "hold on",
             "go with option 2",  # not a bare choice
-            "approve 2",  # a bare verb
+            "approve",  # a bare verb
+            "merge 1 and 3",  # a merge asks again
             "the build is fine",
             PR,  # the id alone
             f"approve {PR}",

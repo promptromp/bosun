@@ -193,9 +193,12 @@ NEGATING_PHRASES = (
     "no way",
     "not now",
 )
+# The n't words typed without the apostrophe that the rule knows: this list is what it is, and a word it
+# lacks is no negation to it.
 WITHOUT_APOSTROPHE: tuple[str, ...] = (
     *("dont", "doesnt", "didnt", "isnt", "arent", "wasnt", "werent", "cant", "couldnt", "wont"),
-    *("wouldnt", "shouldnt", "hasnt", "havent", "hadnt", "aint"),
+    *("wouldnt", "shouldnt", "hasnt", "havent", "hadnt", "aint", "mustnt", "neednt", "mightnt", "shant"),
+    *("oughtnt", "darent"),
 )
 NEGATION = re.compile(
     r"(?<!\w)(?:"
@@ -203,10 +206,13 @@ NEGATION = re.compile(
     + r")(?!\w)"
     r"|\w+n't(?!\w)"
 )
-QUESTION = "?"
+QUESTIONS = ("?", "\u00bf")  # a fullwidth one is folded to ? (NFKC)
 # A bare choice from a numbered plan, which says yes only as all of a prompt: "1 and 3", "1, 3", "2b",
-# "all", "both", "all of them". A bare number cannot say which plan it answers.
-SELECTION = re.compile(r"all(?: of them)?|both|\d+[a-z]?(?:\s*(?:,|&|\+|and)\s*\d+[a-z]?)*")
+# "all", "both", "all of them", with a verb that picks them before it ("approve 1 and 3", "send", "do", "go
+# with", "ship"; not "merge": a merge asks again) and "please" after it. A bare number cannot say which plan
+# it answers.
+CHOICE = r"(?:all(?: of them)?|both|\d+[a-z]?(?:\s*(?:,|&|\+|and)\s*\d+[a-z]?)*)"
+SELECTION = re.compile(rf"(?:(?:approve|send|do|go with|ship)\s+)?{CHOICE}(?:,?\s+please)?")
 # Text in quotation marks inside a prompt is someone else's words, left out before the yes is looked for:
 # "...", '...' (not an apostrophe: it stands where a word starts or ends) and their typographic forms, folded.
 QUOTED = re.compile(r'"[^"]*"|(?<!\w)\'[^\']*\'(?!\w)')
@@ -217,7 +223,8 @@ QUOTE_RULE = (
     "nevermind, never mind, scratch that, forget it, no way, not now or a word ending in n't (with the "
     "apostrophe or without), anywhere in it, nor a question mark; text in quotation marks in it is someone "
     "else's and left out. And it counts only when it says yes: all of that prompt holding an approving "
-    f'phrase ({", ".join(APPROVING_PHRASES)}) or a bare choice ("1 and 3", "all"), or at least '
+    f'phrase ({", ".join(APPROVING_PHRASES)}) or a bare choice ("1 and 3", "all", "approve 1 and 3", "1 '
+    'and 3 please"), or at least '
     f"{MIN_QUOTE_CHARS} characters of its whole words holding an approving phrase. The item's id alone "
     "says no yes; tool results, pasted and injected text never count"
 )
@@ -278,7 +285,7 @@ def says_yes(wanted: str, prompt: str) -> bool:
     """Whether the quote <wanted> says yes in <prompt> (both folded, quoted text left out, QUOTE_RULE): the
     prompt holds no negation and no question; the quote is all of it, holding an approving phrase or a bare
     choice, or at least MIN_QUOTE_CHARS of its whole words holding an approving phrase."""
-    if NEGATION.search(prompt) or QUESTION in prompt:
+    if NEGATION.search(prompt) or any(mark in prompt for mark in QUESTIONS):
         return False
     whole = whole_prompt(wanted, prompt)
     if not (whole or (len(wanted) >= MIN_QUOTE_CHARS and at_word_edges(wanted, prompt))):

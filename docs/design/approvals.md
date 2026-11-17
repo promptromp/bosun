@@ -99,10 +99,14 @@ call only when all of these hold:
   quotation marks as `'` and `"`, runs of whitespace as one space, case ignored), and text in quotation
   marks inside the prompt ("...", '...', “...”) is someone else's words, left out first. The prompt must
   hold no negation anywhere (no, nope, nah, not, never, wait, stop, hold, cancel, abort, later,
-  nevermind, never mind, scratch that, forget it, no way, not now, or a word ending in n't, with the
-  apostrophe or without: dont, isnt, cant, wont, ...) and no question mark. Then the quote counts when
-  it is all of the prompt (punctuation at either end aside) holding an approving phrase or a bare choice
-  from the plan ("1 and 3", "1, 3", "all", "both", "all of them"), or a run of its whole words (it begins
+  nevermind, never mind, scratch that, forget it, no way, not now, or a word ending in n't; typed
+  without the apostrophe, only the words `WITHOUT_APOSTROPHE` lists: dont, doesnt, didnt, isnt, arent,
+  wasnt, werent, cant, couldnt, wont, wouldnt, shouldnt, hasnt, havent, hadnt, aint, mustnt, neednt,
+  mightnt, shant, oughtnt, darent, and a word that list lacks is no negation to it) and no question mark
+  (? or ¿). Then the quote counts when it is all of the prompt (punctuation at either end aside) holding
+  an approving phrase or a bare choice from the plan ("1 and 3", "1, 3", "all", "both", "all of them",
+  with "approve", "send", "do", "go with" or "ship" before it and "please" after it: "approve 1 and 3",
+  "1 and 3 please"; not "merge 1 and 3", which asks again), or a run of its whole words (it begins
   and ends at word boundaries, so `e` is not in "yes") at least 8 characters long holding an approving
   phrase. The approving phrases are yes, yeah, yep, yup, ok, okay, sure, go ahead, do it, send it, send
   them, ship it, lgtm, approved, confirmed (`APPROVING_PHRASES`); a bare verb (send, approve, proceed) or
@@ -136,10 +140,13 @@ still counts:
 
 - what my yes answered: a "yes", "ok" or "go ahead" I typed to an unrelated question after the proposal
   counts for every proposal pending then, and a bare number ("2") cannot say which plan it picks from;
+- a yes with a limit that is no negation: "ok for all except 2" and "yes, but only 1" count for every
+  pending proposal, the excepted one too; "yes, after lunch" and "yes, merge it once CI is green" count now;
 - a request that holds an approving phrase ("go ahead and tell me what's pending");
-- someone's words I pass on without quotation marks ("Dana wrote: ok, ship it");
-- a yes with a condition or a time that is no negation ("yes, after lunch");
-- a negation spelled with look-alike letters (a Greek omicron in "no");
+- someone's words I pass on without quotation marks ("Dana wrote: ok, ship it"), and a no in quotation marks
+  (`yes "no"` counts: the quoted no is someone else's);
+- a negation spelled with look-alike letters (a Greek omicron in "no"), or typed without its apostrophe
+  and missing from the list;
 - a yes I take back in a later prompt ("yes", then "wait, no"), as the check reads each prompt alone.
 
 ## 2. Standing approvals
