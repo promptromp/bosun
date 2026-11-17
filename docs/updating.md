@@ -106,8 +106,9 @@ as `bosun.env.pre-update-<time>`, and the plan shows the change before you say y
   [plugin lists](configuration.md#plugins-which-of-yours-each-window-loads) keeps loading every Claude Code plugin of
   yours in its orchestrator, as before. A plugin's hook or skill can stop its unattended runs at a question, so name
   the ones it needs in `BOSUN_ORCHESTRATOR_PLUGINS`, or set it empty for none; `bosun doctor` says what it loads.
-  A checkout you update with `git pull` gets no such change, and the update's plan and summary say so if there is
-  no `bosun.env` to write it to: set the key yourself, or the orchestrator loads none of your plugins.
+  A checkout you update with `git pull` gets no such change: set the key yourself, or the orchestrator loads none
+  of your plugins. An install with no `bosun.env` to write it to gets none either, and the update's plan and
+  summary say so.
 - **`BOSUN_UPDATE_CHANNEL="main"`:** an install that was updating before releases existed goes on following the
   head of `main`, and the plan and summary say how to follow the releases instead.
 - **`BOSUN_MENU_APP`, `BOSUN_CONSOLE_ALWAYS` and `BOSUN_START_AT_LOGIN`, all `"0"`:** an install from before the
