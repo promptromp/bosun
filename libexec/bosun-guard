@@ -4,10 +4,12 @@
 # Permission guard for the orchestrator, run as a PreToolUse hook (added at launch, and to
 # `bosun chores --dry-run`): asks before any MCP tool with a write verb in its name and before
 # Chrome's clicks and typing, and denies force pushes and `gh pr merge --admin` anywhere in a Bash
-# command: by the command's name (/usr/bin/git too), past git's own options (git -C <dir> push), in
-# $(...) and backticks, and in what bash|sh|zsh -c and eval run, read again. It asks before a gated
-# outward command (git push, gh pr merge, ...) in a form the settings' ask rules do not see, and
-# before what -c or eval runs when it cannot read it. See lib/guard.py.
+# command: by the command's name (/usr/bin/git too), past redirections, wrappers and git's and gh's own
+# options (git -C <dir> push), in $(...) and backticks, and in what bash|sh|zsh -c, eval and env -S run,
+# read again. It asks before a gated outward command (git push, gh pr merge, ...) in a form the
+# settings' ask rules do not see, and whenever it cannot read a command for certain (quotes or a
+# heredoc that never close, a command named by a substitution or a pattern). See lib/guard.py and
+# docs/permissions.md.
 # With BOSUN_APPROVALS_ENABLED=1, `bosun launch` also runs it as `--approvals` (PreToolUse:
 # deny unapproved outward calls), `--permission-request` (PermissionRequest: allow approved
 # ones) and `--post-tool-use` (PostToolUse, PostToolUseFailure: close the proposal an approved

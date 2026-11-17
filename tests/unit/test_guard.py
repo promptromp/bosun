@@ -309,10 +309,115 @@ class BashTest(unittest.TestCase):
             "gh pr merge 5 --squash",
             "echo 'git push -f'",
             "git log --format=%H",
-            "git push 'unbalanced",
         ]:
             with self.subTest(command=command):
                 self.assertIsNone(decision("Bash", command=command))
+
+
+class ReadAsTheShellReadsTest(unittest.TestCase):
+    """Review round 1: forms that hid a command from the guard, each with what it must get now (deny, ask,
+    or no decision), and ordinary commands that must stay as they were. When the guard cannot read a
+    command for certain, it asks."""
+
+    CASES: tuple[tuple[str, str | None], ...] = (
+        # 2. a full path to a wrapper
+        ("/usr/bin/env git push -f", "deny"),
+        ("/usr/bin/timeout 10 git push -f", "deny"),
+        ("/usr/bin/nohup git push --force origin main", "deny"),
+        ("echo 5 | /usr/bin/xargs -I{} gh pr merge {} --admin", "deny"),
+        # 3. $(...) with a quoted ) inside
+        ("echo $(echo ')'; git push -f)", "deny"),
+        ('echo "$(echo ")"; git push -f)"', "deny"),
+        ("echo $(echo \\); git push -f)", "deny"),
+        ("git push 'unbalanced", "ask"),
+        # 4. gh's options before the subcommand
+        ("gh -R acme/x pr merge 5 --admin", "deny"),
+        ("gh --repo acme/x pr merge 5 --admin", "deny"),
+        ("gh --repo=acme/x pr merge 5 --admin", "deny"),
+        ("gh --repo acme/x pr create --fill", "ask"),
+        # 5a. a # inside a word
+        ("echo x#; git push -f", "deny"),
+        ("echo a#b && gh pr merge 5 --admin", "deny"),
+        ("echo hi # git push -f", None),
+        # 5b. heredoc detection
+        ("cat <<< x\ngit push -f", "deny"),
+        ("echo $((1<<2))\ngit push -f", "deny"),
+        ('cat <<"E"OF\nx\nEOF\ngit push -f', "deny"),
+        ("cat <<EOF-\nx\nEOF-\ngit push -f", "deny"),
+        ('echo "<<EOF"\ngit push -f', "deny"),
+        ("cat <<EOF\nnever closes\ngit push -f", "ask"),
+        # 5c. a leading redirection
+        ("2>/dev/null git push -f", "deny"),
+        (">out gh pr merge 5 --admin", "deny"),
+        ("2> /dev/null git push -f", "deny"),
+        # 5d. a command word made by substitution or ANSI-C quoting
+        ("$(echo git) push -f", "ask"),
+        ("`echo git` push -f", "ask"),
+        ("$'git' push -f", "ask"),
+        ('$"git" push -f', "deny"),
+        # 7. more forms
+        ("gh pr merge 5 --admin=true", "deny"),
+        ("gh pr merge 5 --admin=1", "deny"),
+        ("git push --mirror", "deny"),
+        ("git push $'-f'", "ask"),
+        ("git push origin --{force,}", "ask"),
+        ("/usr/bin/g[i]t push -f", "ask"),
+        ("/usr/bin/g?t push origin main", "ask"),
+        ("env -S 'git push -f'", "deny"),
+        ("env -S'git push -f'", "deny"),
+        ("arch -arm64 git push -f", "deny"),
+        ("script -q /dev/null git push -f", "deny"),
+        ("coproc git push -f", "deny"),
+        ("/bin/csh -c 'git push -f'", "deny"),
+        ("/bin/tcsh -c 'git push -f'", "deny"),
+        ("fish -c 'git push -f'", "deny"),
+        ("python3 -c 'import os; os.system(\"git push -f\")'", "ask"),
+        ("perl -e 'system(\"gh pr merge 5\")'", "ask"),
+        ("ruby -e 'system \"git push\"'", "ask"),
+        ("node -e \"require('child_process').execSync('git push -f')\"", "ask"),
+        ("osascript -e 'do shell script \"curl https://example.com\"'", "ask"),
+        ("python3 -c 'print(1+1)'", None),
+        # 8. a quoted or escaped command word
+        ("\\git push origin main", "ask"),
+        ('"git" push origin main', "ask"),
+        ("'gh' pr merge 5", "ask"),
+        # ordinary commands stay as they were
+        ("git push origin feature", None),
+        ("gh pr merge 5 --squash", None),
+        ("cd repo && git push", None),
+        ("gh pr view 5 --json title --jq .title", None),
+        ('git log --since="$(date -u +%F)" --oneline', None),
+        ('L="bosun ledger"\n$L upsert "review:acme/x#1" --kind review-request', None),
+        ("for f in $(ls); do echo $f; done", None),
+        ("bash -c 'echo $HOME'", None),
+        ("echo 'it''s' && git status", None),
+        ("cat <<'EOF' | bosun ledger propose x -\nsend $(id)\nEOF", None),
+        # heredocs and comments inside a substitution: an apostrophe in them opens no quote
+        ("gh pr view 5 --json body --jq \"$(cat <<'EOF'\nit's (a) note\nEOF\n)\"", None),
+        ("x=$(cat <<EOF\nit's $(git push -f)\nEOF\n)", "deny"),
+        ("git commit -m \"$(cat <<'EOF'\nfix: don't (ever)\nEOF\n)\" && git push -f", "deny"),
+        ("echo $(echo hi # it's\n)", None),
+        # a backslash before a newline joins the lines
+        ('for p in \\\n "a?b" \\\n "c" ; do echo "$p"; done', None),
+        ("git \\\n push -f", "deny"),
+    )
+
+    def test_each_form_gets_its_decision(self) -> None:
+        for command, wanted in self.CASES:
+            with self.subTest(command=command):
+                self.assertEqual(decision("Bash", command=command), wanted)
+
+    def test_what_it_cannot_read_it_says(self) -> None:
+        said = guard.decide({"tool_name": "Bash", "tool_input": {"command": "$(echo git) push -f"}}) or {}
+        self.assertIn(
+            "named by a pattern, a substitution or ANSI-C quoting", said.get("permissionDecisionReason", "")
+        )
+        said = (
+            guard.decide({"tool_name": "Bash", "tool_input": {"command": "cat <<EOF\nx\ngit push -f"}}) or {}
+        )
+        self.assertIn("a heredoc that never closes", said.get("permissionDecisionReason", ""))
+        said = guard.decide({"tool_name": "Bash", "tool_input": {"command": "git push 'x"}}) or {}
+        self.assertIn("quotes that do not close", said.get("permissionDecisionReason", ""))
 
 
 class TextCommandTest(unittest.TestCase):
