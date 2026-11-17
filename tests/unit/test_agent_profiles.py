@@ -85,6 +85,13 @@ class AgentProfileTest(unittest.TestCase):
             module = importlib.import_module(agent.PROFILE.connectors)
             assert callable(module.main) and callable(module.doctor_line)
 
+    def test_each_agent_names_the_module_that_says_what_plugins_its_windows_load(self) -> None:
+        self.assertEqual(claude_state.PROFILE.plugins, "plugins_claude")
+        self.assertEqual(codex_state.PROFILE.plugins, "connectors_codex")
+        self.assertEqual(agy_state.PROFILE.plugins, "connectors_agy")
+        for agent in AGENTS.values():
+            assert callable(importlib.import_module(agent.PROFILE.plugins).plugins_doctor_line)
+
     def test_the_profiles_command(self) -> None:
         captured = io.StringIO()
         with contextlib.redirect_stdout(captured):

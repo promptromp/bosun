@@ -113,6 +113,9 @@ class Profile:
     screen: Screen  # how its window's input box and questions are read
     # the module that holds its windows to their lists of connectors (lib/connectors_<agent>.py)
     connectors: str
+    # the module that says, in bosun doctor, what plugins of mine its windows load (`plugins_doctor_line`):
+    # its launch limits them per plugin, turns them all off, or refuses a window with a list but `all`
+    plugins: str
     setup_sessions: str = ""  # how `bosun init` says its repo sessions will run
     setup_note: str = ""  # what `bosun init` tells the person about running them on it
     turn_end: TurnEnd | None = None  # how it reports the end of a turn; None: it does not

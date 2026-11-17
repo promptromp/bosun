@@ -9,23 +9,24 @@ AGENT_BIN="$BOSUN_AGY_BIN"
 # Checks, once per process, that window <name>, launched in this folder, reaches no MCP server beyond its list
 # (window_connectors; docs/design/connectors.md). agy takes no limit per launch, and switching a server off in
 # its shared configuration would race between windows and change the person's Antigravity app, so the window
-# starts only if lib/connectors_agy.py finds each server it would start named in the list, or the list `all`. A
-# refusal, and a listing that fails, stop the launch; its lines (a server the list does not name, a name agy
+# starts only if lib/connectors_agy.py finds each server it would start named in the list, or the list `all`,
+# and its plugin list (window_plugins) is `all`, for the same reason. A refusal, and a listing that fails, stop the launch; its lines (a server the list does not name, a name agy
 # has no server by) are logged as a Claude Code window's are (log_connector_lines). Call it in the shell itself,
 # not in $(...), which would lose the die. A launch builds its arguments twice, and the second time reuses the
 # first lookup.
 check_agy_connectors() { # <name>
   [ "${agy_connector_window-}" = "$1" ] && return 0
-  local list errors code=0
+  local list plugins errors code=0
   list="$(window_connectors "$1")" || die "could not read the connectors of '$1' in $BOSUN_SESSIONS_FILE"
+  plugins="$(window_plugins "$1")" || die "could not read the plugins of '$1' in $BOSUN_SESSIONS_FILE"
   errors="$(mktemp "${TMPDIR:-/tmp}/bosun-connectors.XXXXXX")" || die "'$1' does not start: no temporary file"
-  # The list is its own argument, so one that starts with "-" is no flag.
-  python3 "$BOSUN_ROOT/lib/connectors_agy.py" --agent-bin "$BOSUN_AGY_BIN" --list="$list" --cwd "$PWD" \
-    2>"$errors" || code=$?
+  # Each list is its own argument, so one that starts with "-" is no flag.
+  python3 "$BOSUN_ROOT/lib/connectors_agy.py" --agent-bin "$BOSUN_AGY_BIN" --list="$list" --plugins="$plugins" \
+    --cwd "$PWD" 2>"$errors" || code=$?
   log_connector_lines "$1" "$errors"
   rm -f "$errors"
   [ "$code" = 0 ] ||
-    die "'$1' does not start: it would reach servers beyond its connectors, or they could not be listed (lib/connectors_agy.py, above)"
+    die "'$1' does not start: it would reach servers beyond its connectors, they could not be listed, or it has a plugin list (lib/connectors_agy.py, above)"
   agy_connector_window="$1"
 }
 

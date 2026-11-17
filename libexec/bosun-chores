@@ -8,7 +8,8 @@
 # --dry-run runs the same command headless (claude -p) with the orchestrator's policy, settings,
 # plugin and guard (this bosun's own), and its connectors (BOSUN_ORCHESTRATOR_CONNECTORS, resolved as its
 # launch resolves them, and refused as its launch refuses a list another settings file would widen; any
-# list but none turns claude.ai's connectors on, as a headless Claude has them only when asked), and real
+# list but none turns claude.ai's connectors on, as a headless Claude has them only when asked), and its
+# plugins of yours (BOSUN_ORCHESTRATOR_PLUGINS, as its launch has them), and real
 # Slack/GitHub/Confluence reads, but with no side effects:
 #   - the ledger is a scratch copy of the real one under $BOSUN_STATE_DIR/dry-runs/<timestamp>/,
 #     so idempotency is exercised against current state. --fresh starts empty; --continue starts
@@ -74,16 +75,20 @@ cp "$run_dir/ledger.json" "$run_dir/ledger.before.json" 2>/dev/null || echo '{"i
 log "dry run of '$COMMAND' in $BOSUN_ORCHESTRATOR_DIR; scratch state: $run_dir"
 # shellcheck disable=SC2206
 flags=($BOSUN_ORCHESTRATOR_FLAGS)
-# Sets model_effort_args to the live orchestrator's model, effort, settings and connectors, with the guard
-# of this bosun. A connector not found is in the log lines above the plan; a rehearsal alerts nobody.
-# Headless Claude reaches claude.ai's connectors only when asked to, so it asks when the list may name one.
+# Sets model_effort_args to the live orchestrator's model, effort, settings, connectors and plugins, with the
+# guard of this bosun. A connector or plugin not found is in the log lines above the plan; a rehearsal alerts
+# nobody. Headless Claude reaches claude.ai's connectors only when asked to, so it asks when the list may name
+# one.
 set_rehearsal_args() {
-  local connectors
+  local connectors plugins
   connectors="$(resolve_connectors "$BOSUN_ORCHESTRATOR" "$BOSUN_ORCHESTRATOR_CONNECTORS" "$BOSUN_ORCHESTRATOR_DIR" 0)" ||
     die "the orchestrator's connectors were refused or could not be resolved (lib/connectors_claude.py, above)"
+  plugins="$(resolve_plugins "$BOSUN_ORCHESTRATOR" "$BOSUN_ORCHESTRATOR_PLUGINS" "$BOSUN_ORCHESTRATOR_CONNECTORS" \
+    "$BOSUN_ORCHESTRATOR_DIR")" || die "the orchestrator's plugins could not be resolved (lib/plugins_claude.py, above)"
   build_model_effort_args "$BOSUN_ORCHESTRATOR_MODEL" "$BOSUN_ORCHESTRATOR_EFFORT" "$BOSUN_ORCHESTRATOR_SETTINGS" \
-    "$(printf '%s\n' "$(guard_hook_settings)" "$connectors" | merge_settings)"
+    "$(printf '%s\n' "$(guard_hook_settings)" "$connectors" "$plugins" | merge_settings)"
   require_connector_limit "$BOSUN_ORCHESTRATOR" "$connectors"
+  require_plugin_limit "$BOSUN_ORCHESTRATOR" "$plugins"
   [ -z "$BOSUN_ORCHESTRATOR_CONNECTORS" ] || export ENABLE_CLAUDEAI_MCP_SERVERS=true
 }
 set_rehearsal_args

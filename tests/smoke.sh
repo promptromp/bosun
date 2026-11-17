@@ -729,6 +729,20 @@ ensure_watchdog_state() {
   BOSUN_DAYS=MTWRFSU BOSUN_WATCHDOG_NOW="$(date -j -f '%Y-%m-%d %H:%M:%S' "$(date +%F) 12:00:00" +%s)" "$BOSUN" watchdog >/dev/null 2>&1
   [ ! -e "$quit.held" ] || mv "$quit.held" "$quit"
 }
+# launch_settings <launch output>: the --settings JSON its dry-run line hands Claude Code.
+launch_settings() {
+  local line i
+  local -a args
+  line="$(grep '^dry-run: would run:' <<<"$1" | tail -1)"
+  [ -n "$line" ] || {
+    echo "no dry-run line in: $(tail -3 <<<"$1")"
+    return 1
+  }
+  eval "args=(${line#dry-run: would run:})" # printf %q's own quoting, read back
+  for ((i = 0; i < ${#args[@]}; i++)); do
+    if [ "${args[$i]}" = --settings ]; then printf '%s\n' "${args[$((i + 1))]}"; fi
+  done
+}
 project_dir() { echo "$HOME/.claude/projects/${1//[^A-Za-z0-9-]/-}"; }
 make_session() { # dir id title mtime
   local p
@@ -1490,20 +1504,6 @@ cat "$WORK/mcp-list.out"
 FAKE
 chmod +x "$WORK/mcp-claude"
 printf 'Checking MCP server health...\n\nclaude.ai Acme Chat: https://chat.example.com/mcp - ✔ Connected\n' >"$WORK/mcp-list.out"
-# launch_settings <launch output>: the --settings JSON its dry-run line hands Claude Code.
-launch_settings() {
-  local line i
-  local -a args
-  line="$(grep '^dry-run: would run:' <<<"$1" | tail -1)"
-  [ -n "$line" ] || {
-    echo "no dry-run line in: $(tail -3 <<<"$1")"
-    return 1
-  }
-  eval "args=(${line#dry-run: would run:})" # printf %q's own quoting, read back
-  for ((i = 0; i < ${#args[@]}; i++)); do
-    if [ "${args[$i]}" = --settings ]; then printf '%s\n' "${args[$((i + 1))]}"; fi
-  done
-}
 # allows <launch output> <jq test of its allowedMcpServers, as $a>: the test holds, or say what it got.
 allows() {
   local settings
@@ -1705,6 +1705,88 @@ check "... and so does its launch" fails_with "$HOME/.claude/settings.json allow
   bash -c 'cd "$1" && "${@:2}" launch orch' _ "$REPO_A" "${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="claude.ai Acme Chat" "$BOSUN"
 rm -f "$HOME/.claude/settings.json"
 rm -f "$WORK/mcp-claude.calls" "$BOSUN_STATE_DIR/connectors.json" "$LAUNCH_LOG"
+
+section plugins "plugins of mine a window loads (fixture Claude Code settings)" covers 'libexec/bosun-doctor,libexec/bosun-launch,lib/plugins*.py,lib/claude_state.py,lib/connectors*.py'
+# My settings enable two plugins and switch a third off; one of them is installed with an MCP server of its own.
+mkdir -p "$HOME/.claude/plugins" "$WORK/plugins/acme-helper"
+echo '{"enabledPlugins": {"probe@local": true, "acme-helper@acme-market": true, "acme-off@acme-market": false}}' >"$HOME/.claude/settings.json"
+printf '{"plugins": {"acme-helper@acme-market": [{"scope": "user", "installPath": "%s"}]}}\n' "$WORK/plugins/acme-helper" >"$HOME/.claude/plugins/installed_plugins.json"
+echo '{"mcpServers": {"helper": {"command": "/bin/echo", "args": ["helper"]}}}' >"$WORK/plugins/acme-helper/.mcp.json"
+PL=(env BOSUN_ORCHESTRATOR=orch BOSUN_ORCHESTRATOR_DIR="$REPO_A")
+# switches <launch output> <jq test of its enabledPlugins, as $p>: the test holds, or say what it got.
+switches() {
+  local settings
+  settings="$(launch_settings "$1")" || return 1
+  jq -e "(.enabledPlugins // \"no key\") as \$p | $2" <<<"$settings" >/dev/null || {
+    echo "enabledPlugins: $(jq -c '.enabledPlugins // "no key"' <<<"$settings")"
+    return 1
+  }
+}
+out="$(cd "$REPO_A" && "${PL[@]}" "$BOSUN" launch orch 2>&1)"
+check "the orchestrator's launch switches off each plugin of mine my settings enable" \
+  switches "$out" '$p == {"acme-helper@acme-market": false, "probe@local": false}'
+check "... but bosun's own plugin loads" contains "$out" "--plugin-dir $ROOT/orchestrator/plugin"
+check "a plugin the orchestrator's list names stays on, by its bare name" \
+  switches "$(cd "$REPO_A" && "${PL[@]}" BOSUN_ORCHESTRATOR_PLUGINS=probe "$BOSUN" launch orch 2>&1)" '$p == {"acme-helper@acme-market": false}'
+out="$(cd "$REPO_A" && "${PL[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="plugin:acme-helper:helper" "$BOSUN" launch orch 2>&1)"
+check "... and one whose server its connectors name" switches "$out" '$p == {"probe@local": false}'
+out="$(cd "$REPO_A" && "${PL[@]}" BOSUN_ORCHESTRATOR_PLUGINS="acme-gone" "$BOSUN" launch orch 2>&1)"
+check "a name no plugin has is left out and logged, never fatal" bash -c '
+  grep -qF "orch: plugins: acme-gone not found, so this window starts without it" <<<"$1" && grep -q "dry-run: would run" <<<"$1"' _ "$out"
+check "the orchestrator with all gets no plugin settings" switches "$(cd "$REPO_A" && "${PL[@]}" BOSUN_ORCHESTRATOR_PLUGINS=all "$BOSUN" launch orch 2>&1)" '$p == "no key"'
+check "a repo window keeps every plugin by default" switches "$(cd "$REPO_A" && "$BOSUN" launch alpha 2>&1)" '$p == "no key"'
+cat >"$WORK/plugins-sessions.yml" <<YAML
+sessions:
+  - name: alpha
+    dir: $REPO_A
+    plugins: []
+  - name: beta
+    dir: $REPO_A
+    plugins: [acme-helper@acme-market]
+  - name: epsilon
+    dir: $REPO_A
+    plugins: no
+YAML
+PS=(env BOSUN_SESSIONS_FILE="$WORK/plugins-sessions.yml")
+check "plugins: [] in sessions.yml switches them off" \
+  switches "$(cd "$REPO_A" && "${PS[@]}" "$BOSUN" launch alpha 2>&1)" '$p == {"acme-helper@acme-market": false, "probe@local": false}'
+check "... a list keeps its own, by id" switches "$(cd "$REPO_A" && "${PS[@]}" "$BOSUN" launch beta 2>&1)" '$p == {"probe@local": false}'
+check "... and a value that is no list is refused, as for connectors" fails_with \
+  "the plugins of epsilon must be a comma-separated string or a list of names" bash -c 'cd "$1" && "${@:2}" launch epsilon' _ "$REPO_A" "${PS[@]}" "$BOSUN"
+mkdir -p "$REPO_A/.claude"
+echo '{"enabledPlugins": {"probe@local": false}}' >"$REPO_A/.claude/settings.local.json"
+check "a plugin my user settings enable and the repo's local settings switch off is not switched off again" \
+  switches "$(cd "$REPO_A" && "${PS[@]}" "$BOSUN" launch alpha 2>&1)" '$p == {"acme-helper@acme-market": false}'
+rm -f "$REPO_A/.claude/settings.local.json"
+out="$("${PL[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="plugin:acme-helper:helper" "$BOSUN" doctor 2>&1)"
+check "doctor says what plugins each window loads: the orchestrator's" contains "$out" \
+  "ok    orch: plugins: none of yours (1 switched off); keeps acme-helper@acme-market for its server in connectors"
+check "... and a repo window's" contains "$out" "ok    alpha: plugins: all of yours"
+check "... and warns of a name not found" contains "$(BOSUN_PLUGINS=acme-gone "$BOSUN" doctor 2>&1)" \
+  "warn  alpha: plugins: none of yours (2 switched off); plugins not found, so it starts without: acme-gone"
+(cd "$REPO_A" && "${PL[@]}" "$BOSUN" launch orch >/dev/null 2>&1)
+check "the fingerprint agrees with the launch" bash -c '
+  [ "$(jq -cS .fingerprint "$1")" = "$(cd / && "${@:2}" launch --fingerprint orch 2>/dev/null | jq -cS .)" ]' \
+  _ "$BOSUN_STATE_DIR/launches/smoke/orch.json" "${PL[@]}" "$BOSUN"
+check "... and holds the plugin settings: a change of the orchestrator's list changes it (an update restarts it)" bash -c '
+  [ "$(jq -cS .fingerprint "$1")" != "$(cd / && "${@:2}" launch --fingerprint orch 2>/dev/null | jq -cS .)" ]' \
+  _ "$BOSUN_STATE_DIR/launches/smoke/orch.json" "${PL[@]}" BOSUN_ORCHESTRATOR_PLUGINS=all "$BOSUN"
+# Fail closed in the shell: an answer not of the shape a list gets, or settings that lost a `false`, stop the launch.
+check "a plugin resolver answer not of its shape stops the launch" bash -c '
+  source "$1/lib/common.sh"; load_config
+  for answer in "not json" "{}{}" "[]" "{}" "{\"enabledPlugins\": []}" "{\"enabledPlugins\": {\"x@y\": true}}"; do
+    python3() { printf "%s\n" "$answer"; }
+    ! resolve_plugins alpha "" "" "$PWD" >/dev/null 2>&1 || { echo "took: $answer"; exit 1; }
+  done
+  python3() { echo "{\"enabledPlugins\": {}}"; }
+  ! resolve_plugins alpha all "" "$PWD" >/dev/null 2>&1 || { echo "took a table for all"; exit 1; }' _ "$ROOT"
+check "settings that lost a plugin's false are refused" fails_with "lost its plugin limit" bash -c '
+  source "$1/lib/common.sh"; load_config
+  model_effort_args=(--model opus --settings "{\"enabledPlugins\":{\"probe@local\":true}}")
+  require_plugin_limit alpha "{\"enabledPlugins\":{\"probe@local\":false}}"' _ "$ROOT"
+check "... and settings asked for before the plugins were resolved" fails_with "were not resolved before" bash -c '
+  source "$1/lib/common.sh"; load_config; plugin_settings alpha' _ "$ROOT"
+rm -rf "$HOME/.claude/settings.json" "$HOME/.claude/plugins" "$WORK/plugins"
 
 section knowledge "knowledge (kg, fixture acme knowledge base)" covers 'libexec/bosun-kg,libexec/bosun-context,tests/fixtures/knowledge/**'
 # kg runs from a terminal here: kg asks the agent session that ran it for my words, and this run's own process
@@ -2949,6 +3031,8 @@ check "dry run denies the settings' ask list by name" bash -c 'grep -qx -- --dis
 check "dry run leaves the real ledger alone" bash -c '! "$1" ledger show "review:o/r#9" >/dev/null 2>&1' _ "$BOSUN"
 check "dry run limits the connectors as the orchestrator's launch does" bash -c '
   [ "$(grep -A1 -x -- --settings "$1" | tail -1 | jq -c .allowedMcpServers)" = "[]" ] && ! grep -q ENABLE_CLAUDEAI "$2"' _ "$WORK/fake-claude.args" "$WORK/fake-claude.env"
+check "... and holds it to its plugins as its launch does (none of mine)" bash -c '
+  [ "$(grep -A1 -x -- --settings "$1" | tail -1 | jq -c .enabledPlugins)" = "{}" ]' _ "$WORK/fake-claude.args"
 sleep 1
 env -u ENABLE_CLAUDEAI_MCP_SERVERS BOSUN_ORCHESTRATOR_CONNECTORS=acme-local "$BOSUN" chores morning --dry-run >/dev/null 2>&1
 check "... with the orchestrator's list, and claude.ai's connectors on when it names any" bash -c '
@@ -5021,10 +5105,11 @@ for line in sys.stdin:
   out="$(CX launch --fingerprint cx)"
   check "... while a listing that works gives one" bash -c 'jq -e ".args | length > 0" <<<"$1" >/dev/null' _ "$out"
   # codex_args_valid <list> <lines...>: "valid" or "refused", as lib/launch/codex.sh judges what
-  # connectors_codex.py would print for <list>. A crash prints neither, so it is no answer to either check.
+  # connectors_codex.py would print for <list> and the plugin list $CX_PLUGINS (default all). A crash prints
+  # neither, so it is no answer to either check.
   codex_args_valid() {
     bash -c 'set -u; BOSUN_CODEX_BIN=codex; source "$1/lib/common.sh" && source "$1/lib/launch/codex.sh" || exit 3; list="$2"; shift 2; codex_connector_args=("$@")
-      if codex_connector_args_valid "$list"; then echo valid; else echo refused; fi' _ "$ROOT" "$@"
+      if codex_connector_args_valid "$list" "${CX_PLUGINS:-all}"; then echo valid; else echo refused; fi' _ "$ROOT" "$@"
   }
   outputs() { # <want> <command...>: the command prints exactly <want>
     local got
@@ -5049,6 +5134,19 @@ for line in sys.stdin:
   check "... nor more after --disable apps" outputs refused codex_args_valid "" --disable apps -c 'mcp_servers={acme-docs={enabled=false}}'
   check "... nor extra text after it" outputs refused codex_args_valid "" --disable apps extra
   check "... nor an unknown flag" outputs refused codex_args_valid "" --frob --disable apps
+  # A plugin list other than all: Codex can only switch every plugin off, so --disable plugins must be there.
+  codex_plugins_valid() { (export CX_PLUGINS="$1" && codex_args_valid "${@:2}"); } # <plugin list> <list> <lines...>
+  check "with a plugin list, --disable plugins is taken" outputs valid codex_plugins_valid acme-kit "acme-docs" --disable plugins --disable apps
+  check "... and is no longer optional" outputs refused codex_plugins_valid acme-kit "acme-docs" --disable apps
+  check "... and for the connectors all it is the whole answer" outputs valid codex_plugins_valid " " all --disable plugins
+  check "... where nothing is no answer" outputs refused codex_plugins_valid " " all
+  check "... nor --disable apps after it" outputs refused codex_plugins_valid " " all --disable plugins --disable apps
+  printf '  - name: cx-noplugins\n    dir: %s\n    harness: codex\n    connectors: all\n    plugins: []\n' "$CX_REPO" >>"$WORK/cx-sessions.yml"
+  out="$(codex_launch_args "$(CXP launch cx-noplugins)")"
+  check "a Codex window with plugins: [] switches every plugin off, and nothing else, for connectors: all" bash -c '
+    grep -qF -- " --disable plugins" <<<"$1" && ! grep -qF mcp_servers <<<"$1" && ! grep -qF -- "--disable apps" <<<"$1"' _ "$out"
+  check "... and doctor says so" contains "$(CXP doctor)" \
+    "ok    cx-noplugins: plugins: none of yours (Codex switches every plugin off: it cannot keep some and not others)"
 
   section agy-launch "a window on agy (launch, with a stand-in that records what it was started with)" needs codex-launch,setup-steps covers 'libexec/bosun-launch,libexec/bosun-morning,libexec/bosun-preflight,libexec/bosun-sessions,tests/sandbox/agy-stand-in,tests/fixtures/agy/**,agents/agy-plugin/**,lib/agy_*.py,lib/connectors_agy.py'
   AGY_REPO="$WORK/agy-repo"
@@ -5190,6 +5288,11 @@ FAKE
   check "... and without it the window starts" contains "$(AGYD launch agyw)" "dry-run: would run"
   mkdir -p "$WORK/log dir"
   check "a log folder with a space keeps an agy window from starting" fails_with "'agyw' does not start: bosun's log folder \"$WORK/log dir\" has a space in it, which agy windows cannot use yet" env BOSUN_LOG_DIR="$WORK/log dir" BOSUN_AGY_BIN="$WORK/fake-agy" BOSUN_SESSIONS_FILE="$WORK/agy-sessions.yml" BOSUN_LAUNCH_DRY_RUN=1 BOSUN_EVENTS_ENABLED=0 bash -c 'cd "$1" && "$2" launch agyw' _ "$AGY_REPO" "$BOSUN"
+  check "a plugin list keeps an agy window from starting, saying why" fails_with \
+    "plugins: agy cannot switch plugins off per window, so its plugin list must be all" \
+    env BOSUN_PLUGINS="" BOSUN_AGY_BIN="$WORK/fake-agy" BOSUN_SESSIONS_FILE="$WORK/agy-sessions.yml" BOSUN_LAUNCH_DRY_RUN=1 BOSUN_EVENTS_ENABLED=0 bash -c 'cd "$1" && "$2" launch agyw' _ "$AGY_REPO" "$BOSUN"
+  check "... and doctor says it does not start" contains "$(BOSUN_PLUGINS="" BOSUN_SESSIONS_FILE="$WORK/agy-sessions.yml" BOSUN_AGY_BIN="$WORK/fake-agy" "$BOSUN" doctor 2>&1)" \
+    "warn  agyw: does not start: agy cannot switch plugins off per window"
   printf '#!/bin/sh\nexit 1\n' >"$WORK/failing-agy"
   chmod +x "$WORK/failing-agy"
   check "a listing that fails keeps it from starting too" fails_with "does not start" env BOSUN_AGY_BIN="$WORK/failing-agy" BOSUN_SESSIONS_FILE="$WORK/agy-sessions.yml" BOSUN_LAUNCH_DRY_RUN=1 BOSUN_EVENTS_ENABLED=0 bash -c 'cd "$1" && "$2" launch agyw' _ "$AGY_REPO" "$BOSUN"

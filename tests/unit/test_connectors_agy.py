@@ -232,6 +232,42 @@ class RefusalTest(AgyCase):
         self.assertEqual(stamps, [p.stat().st_mtime_ns for p in before])
 
 
+class PluginListTest(AgyCase):
+    """agy cannot switch plugins off per window: a plugin list other than `all` refuses the window."""
+
+    def run_with(self, plugin_list: str) -> tuple[int, str, str]:
+        return capture(
+            connectors_agy.main,
+            "--list=all",
+            f"--plugins={plugin_list}",
+            *("--agent-bin", str(self.root / "no-agy"), "--cwd", str(self.below)),
+        )
+
+    def test_a_plugin_list_refuses_before_anything_is_listed(self) -> None:
+        for value in ("", "acme-helper"):
+            with self.subTest(plugins=value):
+                code, out, err = self.run_with(value)
+                self.assertEqual((code, out), (1, ""))
+                self.assertEqual(
+                    err, f"plugins: {connectors_agy.NO_PLUGIN_LIMIT}, so this window does not start\n"
+                )
+
+    def test_all_and_no_list_start(self) -> None:
+        self.assertEqual(self.run_with("all"), (0, "", ""))
+        self.assertEqual(self.run_main("all", self.root / "no-agy"), (0, "", ""))
+
+    def test_the_doctor_line_for_its_plugins(self) -> None:
+        args = argparse.Namespace(window="ag")
+        self.assertEqual(
+            connectors_agy.plugins_doctor_line(args, parse("all"), parse("")),
+            ("ok", "ag: plugins: all of yours"),
+        )
+        self.assertEqual(
+            connectors_agy.plugins_doctor_line(args, parse(""), parse("")),
+            ("warn", f"ag: does not start: {connectors_agy.NO_PLUGIN_LIMIT}"),
+        )
+
+
 class DoctorTest(AgyCase):
     def test_doctor_names_what_blocks(self) -> None:
         self.write_servers(self.config, {"acme-docs": stdio(), "acme-mail": stdio()})

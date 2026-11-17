@@ -20,19 +20,23 @@ worktrees_folder_settings() {
 # The orchestrator has its own flags, settings, plugin and policy, and the hooks of
 # orchestrator_extra_settings; a repo session gets the hooks of repo_session_settings (lib/common.sh) and
 # its worktrees folder (worktrees_folder_settings).
-# Both get the connectors their list names (connector_settings), in place of any the settings file names.
+# Both get the connectors their list names (connector_settings), in place of any the settings file names, and
+# a `false` for each plugin of mine their plugin list leaves out (plugin_settings).
 # shellcheck disable=SC2154  # build_model_effort_args and set_autocompact_flag (lib/common.sh) set their arrays; harness: libexec/bosun-launch's
 build_agent_args() { # <window> <session name> <model> <effort>
   # Here, in the launch's own shell: the lookup runs once, and a failure stops the launch. The settings
-  # built below must still hold the limit (require_connector_limit).
+  # built below must still hold the limits (require_connector_limit, require_plugin_limit).
   set_connector_settings "$1"
+  set_plugin_settings "$1"
   if is_orchestrator "$1"; then
     build_model_effort_args "$3" "$4" "$BOSUN_ORCHESTRATOR_SETTINGS" \
       "$({
         orchestrator_extra_settings
         connector_settings "$1"
+        plugin_settings "$1"
       } | merge_settings)"
     require_connector_limit "$1" "$connector_settings_json"
+    require_plugin_limit "$1" "$plugin_settings_json"
     # shellcheck disable=SC2206  # the flags are words, on purpose
     agent_args=($BOSUN_ORCHESTRATOR_FLAGS "${model_effort_args[@]}"
       --plugin-dir "$BOSUN_INSTALL/orchestrator/plugin"
@@ -42,8 +46,10 @@ build_agent_args() { # <window> <session name> <model> <effort>
       repo_session_settings "$1"
       worktrees_folder_settings
       connector_settings "$1"
+      plugin_settings "$1"
     } | merge_settings)"
     require_connector_limit "$1" "$connector_settings_json"
+    require_plugin_limit "$1" "$plugin_settings_json"
     # shellcheck disable=SC2206  # the flags are words, on purpose
     agent_args=($BOSUN_CLAUDE_FLAGS ${model_effort_args[@]+"${model_effort_args[@]}"})
     # With BOSUN_KNOWLEDGE_ENABLED=1, the ontology's rules, after the model and effort (launch_settings reads

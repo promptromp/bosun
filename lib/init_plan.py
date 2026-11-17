@@ -804,8 +804,9 @@ SESSIONS_HEADER = f"""\
 # One tmux window per entry, written by `bosun init`. `name` is the window's name, and the name its
 # session is resumed by; if there is no such session in `dir`, a new one is created.
 # Optional per window: `harness` ({agent_names()}), `model`, `effort`, `connectors` (the MCP servers and
-# connectors it may reach, as `claude mcp list` names them: a list, [] for none) and, on Claude Code,
-# `autocompact` (defaults: bosun.env; connectors: BOSUN_CONNECTORS, empty: none).
+# connectors it may reach, as `claude mcp list` names them: a list, [] for none), `plugins` (which of your
+# Claude Code plugins it loads: a list, [] for none) and, on Claude Code, `autocompact` (defaults:
+# bosun.env; connectors: BOSUN_CONNECTORS, empty: none; plugins: BOSUN_PLUGINS, all).
 """
 
 

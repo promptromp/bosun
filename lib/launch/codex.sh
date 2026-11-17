@@ -9,20 +9,22 @@ AGENT_BIN="$BOSUN_CODEX_BIN"
 # Sets codex_connector_args to the launch arguments that limit window <name>, launched in this folder, to
 # its list (window_connectors; docs/design/connectors.md), as lib/connectors_codex.py prints them: one
 # `-c mcp_servers={<key>={enabled=false},...}` for the configured servers it does not name (none when there
-# are none), `--disable plugins` when it does not name one of the plugins' servers, and `--disable apps`.
-# None for `all`. Once per process: a launch builds its arguments twice, and the second time reuses the
+# are none), `--disable plugins` when it does not name one of the plugins' servers or its plugin list
+# (window_plugins) is not `all`, and `--disable apps`. For `all`: none, or `--disable plugins` alone for such
+# a plugin list. Once per process: a launch builds its arguments twice, and the second time reuses the
 # first lookup. A listing that fails, or arguments not of that shape, stop the launch: the window never
 # starts with a server its list does not name. Its lines (a name Codex has no server by, a listing that
 # failed) are logged as a Claude Code window's are (log_connector_lines). Call it in the shell itself, not
 # in $(...), which would lose both the result and the die.
 set_codex_connector_args() { # <name>
   [ "${codex_connector_window-}" = "$1" ] && return 0
-  local list output line errors code=0
+  local list plugins output line errors code=0
   list="$(window_connectors "$1")" || die "could not read the connectors of '$1' in $BOSUN_SESSIONS_FILE"
+  plugins="$(window_plugins "$1")" || die "could not read the plugins of '$1' in $BOSUN_SESSIONS_FILE"
   errors="$(mktemp "${TMPDIR:-/tmp}/bosun-connectors.XXXXXX")" || die "'$1' does not start: no temporary file"
-  # The list is its own argument, so one that starts with "-" is no flag.
-  output="$(python3 "$BOSUN_ROOT/lib/connectors_codex.py" --agent-bin "$BOSUN_CODEX_BIN" --list="$list" 2>"$errors")" ||
-    code=$?
+  # Each list is its own argument, so one that starts with "-" is no flag.
+  output="$(python3 "$BOSUN_ROOT/lib/connectors_codex.py" --agent-bin "$BOSUN_CODEX_BIN" --list="$list" \
+    --plugins="$plugins" 2>"$errors")" || code=$?
   log_connector_lines "$1" "$errors"
   rm -f "$errors"
   [ "$code" = 0 ] ||
@@ -31,27 +33,38 @@ set_codex_connector_args() { # <name>
   if [ -n "$output" ]; then
     while IFS= read -r line; do codex_connector_args+=("$line"); done <<<"$output"
   fi
-  codex_connector_args_valid "$list" ||
+  codex_connector_args_valid "$list" "$plugins" ||
     die "'$1' does not start: lib/connectors_codex.py gave arguments not of the expected shape"
   codex_connector_window="$1"
 }
 
-# Whether codex_connector_args have the shape of what lib/connectors_codex.py prints for <list>: nothing,
-# for `all`; otherwise, in this order, an optional `-c` with an `mcp_servers={...}` table, an optional
-# `--disable plugins`, then `--disable apps`, and nothing after. A shape check only, so that a missing or
-# garbled answer is never taken for "no limit"; what the table holds is lib/connectors_codex.py's (its tests read
-# it back as TOML).
-codex_connector_args_valid() { # <list>
-  local n=${#codex_connector_args[@]} i=0
-  [ "$n" -gt 0 ] || lists_everything "$1" || return 1
-  [ "$n" -gt 0 ] || return 0
-  if [ "${codex_connector_args[0]}" = -c ]; then
+# Whether codex_connector_args have the shape of what lib/connectors_codex.py prints for <list> and <plugin
+# list>: for the list `all`, nothing, or only `--disable plugins` when the plugin list is not `all`; otherwise,
+# in this order, an optional `-c` with an `mcp_servers={...}` table, `--disable plugins` (optional, but there
+# when the plugin list is not `all`), then `--disable apps`, and nothing after. A shape check only, so that a
+# missing or garbled answer is never taken for "no limit"; what the table holds is lib/connectors_codex.py's
+# (its tests read it back as TOML).
+codex_connector_args_valid() { # <list> <plugin list>
+  local n=${#codex_connector_args[@]} i=0 plugins_off=0
+  lists_everything "$2" || plugins_off=1
+  if lists_everything "$1" && [ "$plugins_off" = 0 ]; then
+    [ "$n" = 0 ]
+    return
+  elif lists_everything "$1"; then
+    [ "$n" = 2 ] && codex_disables 0 plugins
+    return
+  fi
+  if [ "${codex_connector_args[0]-}" = -c ]; then
     case "${codex_connector_args[1]-}" in
       "mcp_servers={"*"}") i=2 ;;
       *) return 1 ;;
     esac
   fi
-  codex_disables "$i" plugins && i=$((i + 2))
+  if codex_disables "$i" plugins; then
+    i=$((i + 2))
+  else
+    [ "$plugins_off" = 0 ] || return 1
+  fi
   codex_disables "$i" apps && [ "$n" = $((i + 2)) ]
 }
 codex_disables() { # <index> <feature>: codex_connector_args from <index> are `--disable <feature>`

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 import tomllib
@@ -15,6 +16,7 @@ import codex_state  # noqa: E402
 import connector_fakes  # noqa: E402
 import connectors  # noqa: E402
 import connectors_codex  # noqa: E402
+import plugins  # noqa: E402
 from connector_fakes import fake_agent, printing  # noqa: E402
 from connectors import parse  # noqa: E402
 from connectors_codex import codex_args  # noqa: E402
@@ -109,6 +111,48 @@ class PureTest(unittest.TestCase):
         )
 
 
+class PluginListTest(unittest.TestCase):
+    """A plugin list (lib/plugins.py) other than `all`: Codex can only switch every plugin off."""
+
+    def test_a_plugin_list_switches_every_plugin_off(self) -> None:
+        for value in ("", "acme-kit", "acme-helper@acme-market"):
+            with self.subTest(plugins=value):
+                self.assertEqual(
+                    codex_args(parse("acme-kit"), servers(plugins=("acme-kit",)), plugins.parse(value)),
+                    ["--disable", "plugins", "--disable", "apps"],
+                )
+
+    def test_with_the_connectors_all_it_is_the_only_argument(self) -> None:
+        listing = servers("acme-docs", plugins=("acme-kit",))
+        self.assertEqual(codex_args(parse("all"), listing, plugins.parse("")), ["--disable", "plugins"])
+        self.assertEqual(codex_args(parse("all"), listing, plugins.parse("all")), [])
+
+    def test_the_plugin_servers_it_names_are_dropped_for_the_list(self) -> None:
+        plan = connectors_codex.codex_plan(
+            parse("acme-kit"), servers(plugins=("acme-kit",)), plugins.parse("")
+        )
+        self.assertEqual(plan, connectors_codex.CodexPlan((), (), ("acme-kit",), by_list=True))
+        self.assertTrue(plan.plugins_off)
+
+    def test_the_doctor_line_for_its_plugins(self) -> None:
+        args = argparse.Namespace(window="cx")
+        self.assertEqual(
+            connectors_codex.plugins_doctor_line(args, plugins.parse("all"), parse("")),
+            ("ok", "cx: plugins: all of yours"),
+        )
+        self.assertEqual(
+            connectors_codex.plugins_doctor_line(args, plugins.parse(""), parse("")),
+            ("ok", f"cx: {connectors_codex.PLUGINS_OFF}"),
+        )
+        self.assertEqual(
+            connectors_codex.plugins_doctor_line(args, plugins.parse("acme-kit"), parse("")),
+            (
+                "warn",
+                f"cx: {connectors_codex.PLUGINS_OFF}; " + connectors_codex.CANNOT_KEEP.format("acme-kit"),
+            ),
+        )
+
+
 class CommandTest(connector_fakes.ScratchCase):
     """connectors_codex.py's command line."""
 
@@ -141,6 +185,20 @@ class CommandTest(connector_fakes.ScratchCase):
 
     def test_codex_all_needs_no_listing(self) -> None:
         self.assertEqual(self.run_main("--list", "all", "--agent-bin", str(self.root / "none")), (0, "", ""))
+
+    def test_codex_all_with_a_plugin_list_needs_no_listing_either(self) -> None:
+        self.assertEqual(
+            self.run_main("--list", "all", "--plugins=", "--agent-bin", str(self.root / "none")),
+            (0, "--disable\nplugins\n", ""),
+        )
+
+    def test_codex_a_plugin_list_switches_every_plugin_off(self) -> None:
+        agent = codex_listing(self.root, ["acme-docs", "acme-kit"], ["acme-docs"])
+        code, out, err = self.run_main(
+            "--list", "acme-docs, acme-kit", "--plugins=probe", "--agent-bin", str(agent)
+        )
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(out.splitlines(), ["--disable", "plugins", "--disable", "apps"])
 
     def test_codex_says_which_names_it_has_no_server_by(self) -> None:
         agent = printing(self.root, json.dumps([{"name": "acme-docs"}, {"name": "acme.mail"}]))
@@ -177,6 +235,29 @@ class DoctorTest(connector_fakes.DoctorMixin, connector_fakes.ScratchCase):
         self.assertEqual(
             self.doctor("cx", "acme-kit, acme-pad", agent, harness="codex"),
             "ok\tcx: reaches acme-kit, acme-pad (switches off acme-docs and ChatGPT's connectors)",
+        )
+
+    def doctor_with_plugins(self, value: str, agent: Path) -> str:
+        """The doctor's line for a Codex window whose plugin list is none."""
+        code, out, err = connector_fakes.capture(
+            connectors.main,
+            *("doctor", "--window", "cx", "--kind", "session", "--harness", "codex", "--list", value),
+            *("--cwd", str(self.root), "--state-dir", str(self.state), "--agent-bin", str(agent)),
+            "--plugins=",
+        )
+        self.assertEqual((code, err), (0, ""))
+        return out.rstrip("\n")
+
+    def test_doctor_says_its_plugin_list_drops_the_plugin_servers_it_names(self) -> None:
+        agent = codex_listing(self.root, ["acme-docs", "acme-kit"], ["acme-docs"])
+        self.assertEqual(
+            self.doctor_with_plugins("acme-docs, acme-kit", agent),
+            "warn\tcx: reaches acme-docs (switches off every plugin (with acme-kit) and ChatGPT's "
+            "connectors); its plugin list switches every plugin off, so it also starts without: acme-kit",
+        )
+        self.assertEqual(
+            self.doctor_with_plugins("acme-docs", printing(self.root, json.dumps([{"name": "acme-docs"}]))),
+            "ok\tcx: reaches acme-docs (switches off every plugin and ChatGPT's connectors)",
         )
 
     def test_doctor_lines_for_a_codex_window(self) -> None:

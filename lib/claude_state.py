@@ -32,6 +32,9 @@ None of these are public APIs. If a Claude Code update changes them, this is the
 - ~/.claude/settings.json: `skipDangerousModePermissionPrompt` (the bypass warning accepted); it, and a
   folder's `.claude/settings.json` and `.claude/settings.local.json`: `allowedMcpServers`, which Claude
   Code adds to the list a window is launched with (every scope's lists add up), so each widens it
+  and `enabledPlugins` (plugin id -> on or off), merged key by key with the launch's `--settings` above
+  them; the managed settings files (managed-settings.json, managed-settings.d/*.json, in
+  /Library/Application Support/ClaudeCode on macOS): their `enabledPlugins` over every other source
 
 Usage: claude_state.py resolve <workdir> <name>    the most recent session named exactly <name>
        claude_state.py list <workdir>              named sessions, newest first
@@ -135,6 +138,7 @@ PROFILE = Profile(
     setup_preview=("One Claude Code session per repo, and the orchestrator runs on it too.",),
     screen=Screen(claude_typed_text, never_asks, unknown_command_lines),
     connectors="connectors_claude",
+    plugins="plugins_claude",
     verifies_quotes=True,
 )
 MODEL_FLAG = re.compile(r"(?:^|\s)--model\s+(\S+)")
@@ -147,6 +151,11 @@ CONFIG_FILE = HOME / ".claude.json"
 SETTINGS_FILE = HOME / ".claude" / "settings.json"
 ALLOW_LIST = "allowedMcpServers"  # in a settings file: the MCP servers a session may reach
 INSTALLED_PLUGINS = HOME / ".claude" / "plugins" / "installed_plugins.json"
+ENABLED_PLUGINS = "enabledPlugins"  # in a settings file: plugin id (name@marketplace) -> on or off
+# Where Claude Code reads its managed settings files: managed-settings.json and managed-settings.d/
+MANAGED_DIR = Path(
+    "/Library/Application Support/ClaudeCode" if sys.platform == "darwin" else "/etc/claude-code"
+)
 CLAUDE_AI_PREFIX = "claude.ai "  # how `claude mcp list` names claude.ai's connectors: claude.ai Acme Mail
 SLACK_PLUGIN = "slack"
 PLUGIN_ROOT = "${CLAUDE_PLUGIN_ROOT}"  # in a plugin's .mcp.json: the folder it is installed in
@@ -477,10 +486,11 @@ def settings_allow_list(path: Path) -> list[Any] | None:
     return entries if isinstance(entries, list) else None
 
 
-def allow_list_scopes(cwd: Path) -> tuple[Path, ...]:
-    """The settings files whose `allowedMcpServers` Claude Code adds to the one a window started in <cwd> is
-    launched with: mine, and the folder's shared and local project settings. Each once, as a folder that is
-    my home folder has my settings as its project's."""
+def settings_scopes(cwd: Path) -> tuple[Path, ...]:
+    """The settings files a window started in <cwd> reads beside its launch settings, lowest precedence
+    first: mine, and the folder's shared and local project settings. Their `allowedMcpServers` add to the one
+    the window is launched with; their `enabledPlugins` merge key by key, the later file's value winning.
+    Each once, as a folder that is my home folder has my settings as its project's."""
     project = Path(cwd) / ".claude"
     files: dict[Path, Path] = {}
     for path in (SETTINGS_FILE, project / "settings.json", project / "settings.local.json"):
@@ -489,9 +499,49 @@ def allow_list_scopes(cwd: Path) -> tuple[Path, ...]:
 
 
 def settings_allow_lists(cwd: Path) -> list[tuple[Path, list[Any]]]:
-    """Each of allow_list_scopes(<cwd>) that holds `allowedMcpServers` entries, and those entries. Claude
+    """Each of settings_scopes(<cwd>) that holds `allowedMcpServers` entries, and those entries. Claude
     Code adds them up, so each widens a window's own list (docs/design/connectors.md)."""
-    return [(path, entries) for path in allow_list_scopes(cwd) if (entries := settings_allow_list(path))]
+    return [(path, entries) for path in settings_scopes(cwd) if (entries := settings_allow_list(path))]
+
+
+def plugin_switches(settings: dict[str, Any] | None) -> dict[str, bool]:
+    """The `enabledPlugins` of a settings object: each plugin id (`name@marketplace`) and whether it is on.
+    An entry that is not a Boolean is not one Claude Code takes, so it is left out."""
+    table = (settings or {}).get(ENABLED_PLUGINS)
+    if not isinstance(table, dict):
+        return {}
+    return {str(key): value for key, value in table.items() if isinstance(value, bool)}
+
+
+def enabled_plugins(cwd: Path) -> dict[str, bool]:
+    """What the settings scopes of a window started in <cwd> (settings_scopes) say of each plugin they
+    mention, merged as Claude Code merges them: key by key, the highest-precedence file that mentions a
+    plugin deciding it (docs.claude.com: plugins, "Find where a plugin is enabled")."""
+    merged: dict[str, bool] = {}
+    for path in settings_scopes(cwd):
+        merged.update(plugin_switches(read_object(path)))
+    return merged
+
+
+def managed_plugins(managed_dir: Path | None = None) -> dict[str, bool]:
+    """What the managed settings files say of each plugin they mention: `managed-settings.json`, then each
+    `managed-settings.d/*.json` in alphabetical order (not hidden), the later one winning, as Claude Code
+    merges them. A `true` there forces the plugin on and a `false` blocks it, over every other source. Only
+    the files: an MDM profile or server-managed settings are not read (best effort)."""
+    folder = managed_dir or MANAGED_DIR
+    drop_ins = sorted(
+        path for path in (folder / "managed-settings.d").glob("*.json") if not path.name.startswith(".")
+    )
+    merged: dict[str, bool] = {}
+    for path in (folder / "managed-settings.json", *drop_ins):
+        merged.update(plugin_switches(read_object(path)))
+    return merged
+
+
+def installed_plugin_ids(installed: Path | None = None) -> tuple[str, ...]:
+    """The id (`name@marketplace`) of every plugin installed_plugins.json records, at any scope."""
+    plugins = (read_object(installed or INSTALLED_PLUGINS) or {}).get("plugins")
+    return tuple(str(key) for key in plugins) if isinstance(plugins, dict) else ()
 
 
 def is_claude_ai_connector(name: str) -> bool:
