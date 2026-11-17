@@ -48,6 +48,9 @@ brings the rest along once each is idle. A window opened while you answer, or du
 along too; one opened after it runs the new version from its next `bosun` command, and keeps what it was started
 with.
 
+A window whose restart did not start (its launch refused, or its agent exited at once) is not waited for: the
+summary says it did not start, why, and what to do (fix that, then `bosun refresh <window>`).
+
 Tasks already handed to a repo window keep the text they had. The summary lists them, so you can send a
 `bosun delegate --update` where a changed rule matters.
 
@@ -81,9 +84,9 @@ as `bosun.env.pre-update-<time>`, and the plan shows the change before you say y
   menu bar app stays as it was: no app, no console job, no start at login.
 
 A Claude Code window that a settings file would give servers its list does not name
-([Connectors](configuration.md#connectors-what-each-window-may-reach)) does not start on the new version. The summary says it is
-still waited for, and its pane, the day's launch log and `bosun doctor` say why. Name those servers in its list,
-or remove them from that file.
+([Connectors](configuration.md#connectors-what-each-window-may-reach)) does not start on the new version. The summary says it did
+not start and why, as do its pane, the day's launch log and `bosun doctor`. Name those servers in its list, or
+remove them from that file, then `bosun refresh <window>`.
 
 </details>
 

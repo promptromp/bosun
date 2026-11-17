@@ -72,6 +72,15 @@ class CommandsTest(Folder):
             self.assertEqual(bosun.call_args.args[4], window)
             self.assertEqual(Path(bosun.call_args.args[3]).parent, self.state_dir / update_state.UPDATE_DIR)
 
+    def test_a_launch_that_failed_did_not_start_and_says_why(self) -> None:
+        """refresh exits 5 when the window's launch failed: final, its reason the last line on stderr."""
+        stderr = "2026-11-07 14:02:00 [refresh] api: did not start: x\n'api' does not start: no plugin\n"
+        with self.ran(5, stderr):
+            self.assertEqual(self.commands.restart("api", "bosun was updated"), Started.DID_NOT_START)
+        self.assertEqual(self.commands.why_not_started("api"), "'api' does not start: no plugin")
+        self.assertEqual(self.commands.why_not_started("web"), "")
+        self.assertEqual(self.said, [])  # the turn records it, and says that
+
     def test_a_failure_is_said_once(self) -> None:
         for _ in range(2):
             with self.ran(1, "refresh: the window is split into several panes\n"):

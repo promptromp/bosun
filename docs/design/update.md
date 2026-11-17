@@ -435,7 +435,9 @@ Settled while building it:
   the update itself, the next `bosun update`, or the check-in loop's last turn.
 - **Each window's line** is what was done to it, as the record keeps it (the orchestrator's re-read
   naming the files it was asked to re-read), then its own answer; a window left alone says it kept
-  running, and the `checkin` window is not listed. The prompts are named in the plan's order.
+  running, and the `checkin` window is not listed. A window whose restart did not start says so, with the
+  launch's own reason and what to do ("did not start: <why>; fix that, then bosun refresh <window>"). The
+  prompts are named in the plan's order.
 - **What else it can say,** each only when there is something: what to change by hand in my own
   files, under Config; the tasks handed out that keep their old text, with the `bosun delegate
   --update` for each; and, under "Found after the switch", what the update itself found (a job not
@@ -845,7 +847,12 @@ Decided while building it:
   advance`, each tick while windows are pending), which take `update.lock` in turn, never repeat one; the
   loop's turn does nothing while the update itself still runs.
 - **The turn's cases.** A restart that refresh leaves running (busy again, someone typing: exit 3) or that
-  fails is tried at the next turn; a prompt `bosun send` could not deliver is sent again. A window
+  fails otherwise (a split window, an agent that would not stop) is tried at the next turn; a prompt `bosun
+  send` could not deliver is sent again. A restart whose launch failed is final: once refresh started a
+  launch, it waits (up to `BOSUN_START_TIMEOUT`) for the agent, and a launch that ends without one (refused,
+  the window left a plain shell) or whose agent exits at once makes it exit 5, with the launch's own last
+  error line last on stderr; the turn records the window as "did not start: <why>" and no longer waits for
+  it, rather than trying it again every turn. A launch still going by then counts as started. A window
   restarted into its next conversation (exit 4) never sees the update prompt, so the turn notes its status
   itself ("started its next conversation"), and the background work it listed stays in its note, which
   the window's outcome names. One whose agent exited is started again with the update prompt. A window

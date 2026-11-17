@@ -183,7 +183,9 @@ describes. Two modes are for `bosun update`, and neither takes another mode, `--
 - **`refresh --update-restart <prompt-file> <window>`** restarts one window now if its turn is over (idle, or `shell`:
   only background work runs) and nobody is typing there, resuming its conversation with the prompt in the file
   instead of the drain prompt. A busy or waiting window, or one whose input box holds unsent text, is left running
-  and refresh exits 3, so the caller can try again.
+  and refresh exits 3, so the caller can try again. Once it started a launch it waits for the agent (up to
+  `BOSUN_START_TIMEOUT`): a launch that ends without one, or whose agent exits at once, makes it exit 5, with the
+  launch's own error line last on stderr.
 - **`refresh --checkin-loop`** restarts the check-in loop in the `checkin` window, which otherwise keeps the code it
   started with. It stops the loop at once, even in the middle of a tick, so call it while an update holds bosun's
   background work.

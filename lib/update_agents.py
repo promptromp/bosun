@@ -23,7 +23,9 @@ status now, what the window gets, and does it once:
 - relaunch one whose agent exited.
 
 A restart left running (busy again, someone typing) is tried again at the next turn, as is a prompt
-that could not be delivered. A window restarted into its next conversation (an orchestrator still on
+that could not be delivered. A restart whose launch failed (refused, its agent exited at once, the window
+left a plain shell) is final: the window is recorded as one that did not start, with the launch's reason,
+and no longer waited for. A window restarted into its next conversation (an orchestrator still on
 yesterday's, a repo window with a fresh one pending) starts that conversation's own prompt and never
 sees the update prompt, so the turn notes its status itself. What was done to each window is
 recorded in update.json (`windows`) as it is done, so no later turn does it again. Once no window is
@@ -60,9 +62,10 @@ RELAUNCHED = "relaunched"
 NEXT_CONVERSATION = "started its next conversation"  # also its status note: it never sees the prompt
 ANSWERED = "answered"
 CLOSED = "closed"
+DID_NOT_START = "did not start"  # recorded with the launch's reason after it: "did not start: <why>"
 # After any of these a window only has to answer.
 STARTED = (ASKED_REREAD, RESTARTED, RELAUNCHED, NEXT_CONVERSATION)
-FINISHED = (ANSWERED, CLOSED)
+FINISHED = (ANSWERED, CLOSED)  # and DID_NOT_START with its reason: finished()
 # Left as they are (one bosun did not start among them), and the checkin window, whose loop is the release's.
 NOT_PENDING = (Treatment.LEAVE, Treatment.NOT_STARTED_BY_BOSUN, Treatment.RESTART_LOOP)
 PROMPTS_DIR = "orchestrator"  # the folder of bosun's prompts, left out of their names
@@ -100,6 +103,7 @@ SEEN_LINE = (
     "doing: {running}.\n"
 )
 SEEN_RUNNING = "(What bosun saw still running then: {running}.)"
+NOT_STARTED_HINT = "fix that, then bosun refresh {window}"
 
 
 class Started(StrEnum):
@@ -108,6 +112,7 @@ class Started(StrEnum):
     YES = "started"  # with the update prompt
     LEFT_RUNNING = "left running"  # busy again, waiting, someone typing (exit 3): try again
     NEXT_CONVERSATION = "next conversation"  # into its next conversation, with its own prompt (exit 4)
+    DID_NOT_START = "did not start"  # its launch failed (exit 5): final, Actions.why_not_started says why
     FAILED = "failed"  # anything else: try again
 
 
@@ -139,6 +144,10 @@ class Actions(Protocol):
 
     def relaunch(self, window: str, prompt: str) -> Started:
         """Start <window>'s agent again, which exited, with <prompt>."""
+
+    def why_not_started(self, window: str) -> str:
+        """Why the last restart or relaunch of <window> did not start it (Started.DID_NOT_START): the
+        launch's own reason, in a line."""
 
     def left_running(self, window: str) -> str:
         """What the last turn that ended in <window> left running, described; "" when nothing."""
@@ -260,12 +269,26 @@ def _decide(win: _Window, status: str) -> Treatment:
     return update_plan.treatment(WindowFacts(win.name, win.kind, status, launch_changed=True), reread=False)
 
 
+def _not_started(done: Sequence[str]) -> bool:
+    """Whether a window whose record says <done> did not start: its launch failed (DID_NOT_START)."""
+    return any(what.startswith(f"{DID_NOT_START}:") for what in done)
+
+
+def finished(done: Sequence[str]) -> bool:
+    """Whether a window whose record says <done> no longer has to answer: it answered, closed, or did not
+    start."""
+    return bool(set(done) & set(FINISHED)) or _not_started(done)
+
+
 def _started(win: _Window, started: Started, what: str) -> UpdateState:
     if started is Started.YES:
         return win.did(what)
     if started is Started.NEXT_CONVERSATION:
         win.act.notes.save(win.name, STATUS, NEXT_CONVERSATION)
         return win.did(NEXT_CONVERSATION)
+    if started is Started.DID_NOT_START:
+        why = " ".join(win.act.why_not_started(win.name).split()) or "its launch failed"
+        return win.did(f"{DID_NOT_START}: {why}")
     return win.state  # left running, or it failed: the next turn decides again
 
 
@@ -305,7 +328,7 @@ _ACTIONS: dict[Treatment, Callable[[_Window], UpdateState]] = {
 def _bring(win: _Window, status: str) -> UpdateState:
     """The window's turn: nothing once it was started or answered; closed when it is gone; else what
     its status now calls for (nothing while it is busy or waiting for me)."""
-    if set(win.done) & {*STARTED, *FINISHED} or win.note(STATUS) is not None:
+    if set(win.done) & set(STARTED) or finished(win.done) or win.note(STATUS) is not None:
         return win.state
     if status == GONE:
         return win.did(CLOSED)
@@ -327,7 +350,7 @@ def settled(state: UpdateState, notes: Notes) -> UpdateState:
     for window in state.pending:
         if notes.read(window, STATUS) is not None and ANSWERED not in _entry(state, window)[2]:
             state = _with(state, window, ANSWERED)
-    pending = tuple(w for w in state.pending if not set(_entry(state, w)[2]) & set(FINISHED))
+    pending = tuple(w for w in state.pending if not finished(_entry(state, w)[2]))
     if pending and pending == state.pending:
         return state
     return update_state.advanced(state, "done" if not pending else state.step, pending=pending)
@@ -380,6 +403,8 @@ def _what_came(window: str, entry: Sequence[str], notes: Notes, asked: str) -> s
     if NEXT_CONVERSATION in done:
         listed = notes.read(window, STOCK) is not None
         return line + (f" (the background work it listed: {notes.where(window, STOCK)})" if listed else "")
+    if _not_started(done):
+        return f"{line}; {NOT_STARTED_HINT.format(window=window)}"
     answer = notes.read(window, STATUS)
     return line + (f"; {answer.splitlines()[0]}" if answer and ANSWERED in entry else "")
 

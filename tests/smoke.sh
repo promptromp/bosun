@@ -2640,6 +2640,14 @@ check "... and an update's restart of it" env BOSUN_LAUNCH_DRY_RUN=0 "$BOSUN" re
 check "... starts it again on Claude, as it was launched, with its --model" wait_for 15 another_claude_in zeta "$zeta_pid"
 check "... (its arguments are Claude's)" bash -c 'grep -qx -- --remote-control "$1.args" && grep -qx haiku "$1.args"' _ "$WORK/live-claude.$(claude_in zeta)"
 rm -f "$BOSUN_CONFIG_DIR/bosun.env"
+# An update's restart whose launch fails (here: an effort no agent takes, which launch refuses) did not start:
+# refresh says so with exit 5, the launch's own error line last on stderr, so the update stops waiting for it.
+echo 'BOSUN_EFFORT="extreme"' >"$BOSUN_CONFIG_DIR/bosun.env"
+env BOSUN_LAUNCH_DRY_RUN=0 "$BOSUN" refresh --update-restart "$WORK/update-prompt" alpha >/dev/null 2>"$WORK/not-started.err"
+rc=$?
+rm -f "$BOSUN_CONFIG_DIR/bosun.env"
+check "an update's restart whose launch fails did not start: refresh exits 5, with the launch's own error last on stderr" bash -c '
+  [ "$1" = 5 ] && tail -1 "$2" | grep -q "^effort must be one of: .*(got .extreme.)"' _ "$rc" "$WORK/not-started.err"
 check "delegate --window delivers through send" contains "$("$BOSUN" delegate investigate --id slack:C8/1 --ask 'look into it' --window delta 2>&1)" "delivered to smoke:delta"
 check "the prompt file is removed once read" bash -c '[ -z "$(ls -A "$1")" ]' _ "$BOSUN_STATE_DIR/prompts"
 check "--new refuses an existing window" fails_with "already exists" live --new delta "$REPO_A" again

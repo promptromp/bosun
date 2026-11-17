@@ -38,6 +38,7 @@ POLL_SECONDS = 5
 CTRL_C_POLL_SECONDS = 0.2
 LEFT_RUNNING_STATUS = 3  # bosun refresh --update-restart's status when it left the agent running
 NEXT_CONVERSATION_STATUS = 4  # ... and when it started the window's next conversation
+LAUNCH_FAILED_STATUS = 5  # ... and when the window's launch failed (its reason the last line on stderr)
 
 
 # ---- the turn's actions ------------------------------------------------------------------------
@@ -54,6 +55,7 @@ class Commands:
         self.notes = update_notes.Files(state_dir)
         self.said: dict[str, str] = {}
         self.listed: list[dict[str, Any]] | None = None
+        self.not_started: dict[str, str] = {}
 
     def _windows(self) -> list[dict[str, Any]]:
         if self.listed is None:
@@ -99,11 +101,21 @@ class Commands:
             return Started.LEFT_RUNNING
         if done.returncode == NEXT_CONVERSATION_STATUS:
             return Started.NEXT_CONVERSATION
+        if done.returncode == LAUNCH_FAILED_STATUS:
+            self.not_started[window] = _last_line(done.stderr)
+            return Started.DID_NOT_START
         self._failed(window, "not restarted yet", done.stderr)
         return Started.FAILED
 
     def relaunch(self, window: str, prompt: str) -> Started:
         return self.restart(window, prompt)  # refresh --update-restart starts an agent that exited
+
+    def why_not_started(self, window: str) -> str:
+        return self.not_started.get(window, "")
+
+
+def _last_line(text: str) -> str:
+    return (text.strip().splitlines() or [""])[-1].strip()
 
 
 def _news(before: UpdateState, after: UpdateState, state_dir: Path) -> list[str]:

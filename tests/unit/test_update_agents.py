@@ -53,6 +53,7 @@ class FakeActions:
         self.calls: list[tuple[str, str, str]] = []
         self.refused: set[str] = set()
         self.started: dict[str, Started] = {}
+        self.why: dict[str, str] = {}
         self.running: dict[str, str] = {}
         self.elsewhere: set[str] = set()
         self.notes = MemoryNotes()
@@ -68,6 +69,9 @@ class FakeActions:
     def relaunch(self, window: str, prompt: str) -> Started:
         self.calls.append(("relaunch", window, prompt))
         return self.started.get(window, Started.YES)
+
+    def why_not_started(self, window: str) -> str:
+        return self.why.get(window, "")
 
     def left_running(self, window: str) -> str:
         return self.running.get(window, "")
@@ -289,6 +293,36 @@ class AdvanceTest(Agents):
         self.advance()
         self.assertEqual(len(self.act.made("restart")), 2)
         self.assertEqual(self.record().windows["api"], ("repo", "restart", "restarted"))
+
+    def test_a_restart_whose_launch_failed_did_not_start_and_is_no_longer_waited_for(self) -> None:
+        """Decision 4: refresh exits 5 (the launch refused, its agent exited at once): final, recorded
+        with the launch's reason, never tried again; its outcome says why and what to do."""
+        self.bring(
+            {"api": ("repo", Treatment.RESTART), "web": ("repo", Treatment.WAIT)}, api="idle", web="busy"
+        )
+        self.act.started["api"] = Started.DID_NOT_START
+        self.act.why["api"] = "'api' does not start:\n  the plugin folder is missing"
+        self.assertEqual(self.advance(), ["web"])
+        entry = self.record().windows["api"]
+        self.assertEqual(
+            entry, ("repo", "restart", "did not start: 'api' does not start: the plugin folder is missing")
+        )
+        self.statuses["api"] = "exited"
+        self.advance()
+        self.assertEqual(len(self.act.made("restart")), 1)  # never again
+        outcome = dict(update_agents.outcomes(self.record(), self.act.notes))
+        self.assertEqual(
+            outcome["api"],
+            "did not start: 'api' does not start: the plugin folder is missing; "
+            "fix that, then bosun refresh api",
+        )
+
+    def test_a_launch_that_failed_without_a_reason_still_says_it_did_not_start(self) -> None:
+        self.bring({"api": ("repo", Treatment.RESTART)}, api="idle")
+        self.act.started["api"] = Started.DID_NOT_START
+        self.assertEqual(self.advance(), [])
+        self.assertEqual(self.record().step, "done")
+        self.assertEqual(self.record().windows["api"][-1], "did not start: its launch failed")
 
     def test_a_prompt_not_delivered_is_sent_again(self) -> None:
         self.bring({"orchestrator": ("orchestrator", Treatment.REREAD)}, orchestrator="idle")
