@@ -285,6 +285,40 @@ class LockTest(unittest.TestCase):
         marker.write_text(f"{os.getpid()}\n")
         self.assertTrue(update_state.marked(self.dir, update_state.TURN_MARKER))
 
+    def test_a_marker_is_made_exclusively_and_a_stale_one_replaced(self) -> None:
+        marker = self.dir / update_state.UPDATE_DIR / update_state.RUN_MARKER
+        with update_state.marking(self.dir, update_state.RUN_MARKER):
+            first = marker.read_text()
+            with update_state.marking(self.dir, update_state.RUN_MARKER):  # a second at once: not its own
+                self.assertEqual(marker.read_text(), first)
+            self.assertEqual(marker.read_text(), first)  # nor removed by it
+        self.assertFalse(marker.exists())
+        dead = subprocess.Popen(["true"])
+        dead.wait()
+        marker.write_text(f"{dead.pid}\n")
+        with update_state.marking(self.dir, update_state.RUN_MARKER):
+            self.assertEqual(marker.read_text().strip(), str(os.getpid()))
+            update_state.mark_update(self.dir, "u7")
+            self.assertEqual(marker.read_text(), f"{os.getpid()}\nu7\n")
+        self.assertFalse(marker.exists())
+        self.assertEqual(sorted(p.name for p in marker.parent.iterdir()), [])  # no temp file left
+
+    def test_the_loop_s_marker_counts_only_with_no_other_update_s(self) -> None:
+        """The loop writes its marker before it tries the lock: with another update's live marker, that
+        update is the holder, and a refusal never blames the loop; the refusal says how long it waited."""
+        other = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(other.kill)
+        run = self.dir / update_state.UPDATE_DIR / update_state.RUN_MARKER
+        with update_state.marking(self.dir, update_state.TURN_MARKER):
+            self.assertTrue(update_state.turn_holds(self.dir))
+            run.write_text(f"{other.pid}\n")
+            self.assertFalse(update_state.turn_holds(self.dir))
+            self.assertEqual(update_state.lock_wait(self.dir), 0.0)
+            run.unlink()
+            refused = self.assertRaisesRegex(update_state.LoopTurnRunning, r"after 0\.5 s;")
+            with update_state.one_update(self.dir), refused, update_state.one_update(self.dir, wait=0.0):
+                pass
+
     def test_a_second_update_never_takes_the_first_ones_marker_away(self) -> None:
         marker = self.dir / update_state.UPDATE_DIR / update_state.RUN_MARKER
         marker.parent.mkdir(parents=True)

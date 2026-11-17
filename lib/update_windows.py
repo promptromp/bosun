@@ -294,8 +294,10 @@ def bring_along(
         _reread_files(plan, root),
         last,
     )
+    # taken over: each of the last one's windows this update brings along, the ones it restarts afresh too
+    taken = tuple(window for window in (last.pending if last else ()) if window in windows)
     state = update_state.advanced(
-        state, "agents", pending=tuple(windows), windows=windows, reread=reread, taken_over=kept
+        state, "agents", pending=tuple(windows), windows=windows, reread=reread, taken_over=taken
     )
     if then is not None and last is not None:
         then(state, last)  # before the notes go: the last update's answers are in them

@@ -155,18 +155,20 @@ def update_facts(state_dir: Path) -> tuple[bool, tuple[str, ...]]:
     if not update_state.update_runs(state_dir):
         return False, ()
     record = update_state.read(state_dir)
-    # its own wait's windows: a record at agents that was handed over is the last update's, which the
-    # running one has yet to take over (it plans, or asks first)
-    own = record is not None and record.step == "agents" and not record.handed_over
+    # its own wait's windows only: a record an earlier update left (the running one plans, or asks first)
+    # is told as handed over (update_owed)
+    own = record is not None and record.step == "agents" and update_state.record_runs(state_dir, record)
     return True, tuple(record.pending) if own and record is not None else ()
 
 
 def update_owed(state_dir: Path) -> tuple[tuple[str, str], ...]:
-    """The windows the last update still waits for while no update runs (handed to the check-in loop),
-    each with what it is owed (update_agents.Owed's value); none while an update runs."""
-    if update_state.update_runs(state_dir):
+    """The windows an update whose own run is over still waits for (handed to the check-in loop, or to
+    the next update), each with what it is owed (update_agents.Owed's value): none while the update the
+    record names runs, whatever the record's handed_over says."""
+    record = update_state.read(state_dir)
+    if update_state.record_runs(state_dir, record):
         return ()
-    last = update_state.owing(update_state.read(state_dir), abandoned=update_state.abandoned(state_dir))
+    last = update_state.owing(record, abandoned=update_state.abandoned(state_dir))
     if last is None:
         return ()
     return tuple((window, update_agents.owed(last, window).value) for window in last.pending)

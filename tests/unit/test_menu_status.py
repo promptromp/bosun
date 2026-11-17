@@ -6,6 +6,7 @@ acme's invoice exporter."""
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import io
 import json
 import os
@@ -1110,12 +1111,19 @@ class GatherTestCase(unittest.TestCase):
         self.assertEqual((found.update_running, found.update_waiting_for), (False, ()))
         self.assertEqual(found.update_owed, (("exporter", "restart"),))
         self.assertEqual(self.gather().update_owed, (("exporter", "restart"),))
-        # a takeover planning (its marker, the lock perhaps not yet taken, the record still the last one's):
-        # an update runs, and names no window of the last one as handed over, nor as its own wait's
+        # a takeover planning (its marker, no id yet, the record still the last one's, whatever its
+        # handed_over says: one that died in its own wait left none): an update runs, and the last one's
+        # windows are told as handed over, never as its own wait's
+        update_state.write(self.state, dataclasses.replace(record, handed_over=""))
         with update_state.marking(self.state, update_state.RUN_MARKER):
             planning = self.gather()
-        self.assertEqual(planning.update_running, True)
-        self.assertEqual((planning.update_waiting_for, planning.update_owed), ((), ()))
+            self.assertEqual(planning.update_running, True)
+            self.assertEqual(
+                (planning.update_waiting_for, planning.update_owed), ((), (("exporter", "restart"),))
+            )
+            update_state.mark_update(self.state, "u1")  # the running update is the one the record names
+            own = self.gather()
+        self.assertEqual((own.update_waiting_for, own.update_owed), (("exporter",), ()))
 
     def test_no_record_or_one_that_cannot_be_read_tells_no_last_update(self) -> None:
         self.assertIsNone(self.gather().update_last)

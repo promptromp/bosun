@@ -103,7 +103,7 @@ class LoopTurnRunning(UpdateRunning):
         super().__init__("", "", "")
         said = (
             f"the check-in loop's turn at the windows the last update left it (bosun update advance) still "
-            f"holds update.lock after {round(waited)} s; run bosun update again once it is done"
+            f"holds update.lock after {waited:g} s; run bosun update again once it is done"
         )
         self.args = (said,)
 
@@ -339,9 +339,10 @@ def one_update(state_dir: Path, wait: float = 0.0) -> Iterator[None]:
     state_dir.mkdir(parents=True, exist_ok=True)
     fd = os.open(state_dir / LOCK_FILE, os.O_RDWR | os.O_CREAT, 0o644)
     try:
-        if not _taken(fd, max(wait, PROBE_SECONDS)):
-            if marked(state_dir, TURN_MARKER):
-                raise LoopTurnRunning(wait)
+        waited = max(wait, PROBE_SECONDS)
+        if not _taken(fd, waited):
+            if turn_holds(state_dir):
+                raise LoopTurnRunning(waited)
             other = read(state_dir)
             raise UpdateRunning(
                 other.started_at if other else "",
@@ -405,12 +406,14 @@ def carried_back(state_dir: Path) -> UpdateState | None:
     return last
 
 
-def end_abandoned(state_dir: Path) -> UpdateState | None:
+def end_abandoned(state_dir: Path, holder: bool = False) -> UpdateState | None:
     """For a caller that holds update.lock: an update stopped before its freeze that no process carries
-    on (no live RUN_MARKER) recorded `failed`, as nothing had changed but the hold, which lapsed; the
-    record as it is then."""
+    on recorded `failed`, as nothing had changed but the hold, which lapsed; the record as it is then.
+    No process carries it on when no RUN_MARKER is live, or when the caller is an update that holds the
+    lock and has not written its own record yet (<holder>: the marker is its own)."""
     state = read(state_dir)
-    if state is None or state.step not in BEFORE_FREEZE or marked(state_dir, RUN_MARKER):
+    carried_on = not holder and marked(state_dir, RUN_MARKER)
+    if state is None or state.step not in BEFORE_FREEZE or carried_on:
         return state
     failed = advanced(state, "failed", error=f"cut short at step {state.step}; nothing had changed")
     write(state_dir, failed)
@@ -437,13 +440,7 @@ def _marker(state_dir: Path, name: str) -> Path:
     return state_dir / UPDATE_DIR / name
 
 
-def marked(state_dir: Path, name: str) -> bool:
-    """Whether marker <name> (RUN_MARKER, TURN_MARKER) names a process that is alive; a marker whose
-    process is gone (a crash), or that cannot be read, counts as absent."""
-    try:
-        pid = int(_marker(state_dir, name).read_text().strip())
-    except (OSError, ValueError):
-        return False
+def _alive(pid: int) -> bool:
     if pid <= 0:
         return False
     try:
@@ -455,26 +452,100 @@ def marked(state_dir: Path, name: str) -> bool:
     return True
 
 
+def _read_marker(path: Path) -> tuple[int, str]:
+    """The pid a marker names and the update id after it ("" while it has none); (0, "") unreadable."""
+    try:
+        first, _, rest = path.read_text().partition("\n")
+        return int(first.strip()), rest.strip()
+    except (OSError, ValueError):
+        return 0, ""
+
+
+def _live_marker(state_dir: Path, name: str) -> tuple[int, str] | None:
+    """Marker <name>'s pid and id when its process is alive; None when it is absent, unreadable or its
+    process is gone (a crash)."""
+    pid, update_id = _read_marker(_marker(state_dir, name))
+    return (pid, update_id) if _alive(pid) else None
+
+
+def marked(state_dir: Path, name: str) -> bool:
+    """Whether marker <name> (RUN_MARKER, TURN_MARKER) names a process that is alive; a marker whose
+    process is gone (a crash), or that cannot be read, counts as absent."""
+    return _live_marker(state_dir, name) is not None
+
+
+def _placed(path: Path, text: str) -> bool:
+    """<text> placed at <path> at once and only if nothing is there (a temp file linked into place)."""
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(text)
+    try:
+        os.link(tmp, path)
+    except FileExistsError:
+        return False
+    finally:
+        tmp.unlink(missing_ok=True)
+    return True
+
+
+def _claimed(path: Path) -> bool:
+    """Whether this process now owns marker <path>: placed exclusively; a stale one (its process gone)
+    removed, if it still names that process, and placing tried once more; a live other's left alone."""
+    mine = f"{os.getpid()}\n"
+    if _placed(path, mine):
+        return True
+    stale, _ = _read_marker(path)
+    if _alive(stale):
+        return False
+    if _read_marker(path)[0] == stale:
+        path.unlink(missing_ok=True)
+    return _placed(path, mine)
+
+
 @contextlib.contextmanager
 def marking(state_dir: Path, name: str) -> Iterator[None]:
-    """Marker <name> naming this process, from now until the block ends (removed then, if it is still
-    this process's): RUN_MARKER from before an update waits for update.lock until it ends, TURN_MARKER
-    around the check-in loop's turn. Another live process's marker is left as it is (a second update, to
-    be refused, never takes the first one's marker away)."""
+    """Marker <name> naming this process, from now until the block ends: RUN_MARKER from before an update
+    waits for update.lock until it ends, TURN_MARKER around the check-in loop's turn. Created at once and
+    exclusively, so of two at once only one owns it; another live process's marker is left as it is (a
+    second update, to be refused, never takes the first one's away). Removed as it ends only if it still
+    names this process."""
     path = _marker(state_dir, name)
-    if marked(state_dir, name):
-        yield
-        return
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{name}.{os.getpid()}.tmp")
-    tmp.write_text(f"{os.getpid()}\n")
-    tmp.replace(path)
+    owned = _claimed(path)
     try:
         yield
     finally:
-        with contextlib.suppress(OSError, ValueError):
-            if int(path.read_text().strip()) == os.getpid():
-                path.unlink()
+        if owned and _read_marker(path)[0] == os.getpid():
+            path.unlink(missing_ok=True)
+
+
+def mark_update(state_dir: Path, update_id: str) -> None:
+    """The update id <update_id> added to this process's RUN_MARKER (once its record has one), so the
+    status tells its record from one an earlier update left."""
+    path = _marker(state_dir, RUN_MARKER)
+    pid, known = _read_marker(path)
+    if pid != os.getpid() or known == update_id:
+        return
+    tmp = path.with_name(f".{path.name}.{pid}.id.tmp")
+    tmp.write_text(f"{pid}\n{update_id}\n")
+    tmp.replace(path)
+
+
+def record_runs(state_dir: Path, state: UpdateState | None) -> bool:
+    """Whether the update <state> records is the one running now: the live RUN_MARKER names its id; or,
+    with no live marker, the lock is held and not by the check-in loop's turn (an older bosun's update)."""
+    if state is None:
+        return False
+    live = _live_marker(state_dir, RUN_MARKER)
+    if live is not None:
+        return live[1] == state.id
+    return running(state_dir) and not marked(state_dir, TURN_MARKER)
+
+
+def turn_holds(state_dir: Path) -> bool:
+    """Whether the check-in loop's turn counts as the holder of update.lock: its marker is live and no
+    other process's RUN_MARKER is (the turn writes its marker before it tries the lock)."""
+    run = _live_marker(state_dir, RUN_MARKER)
+    return marked(state_dir, TURN_MARKER) and (run is None or run[0] == os.getpid())
 
 
 def update_runs(state_dir: Path) -> bool:
@@ -494,7 +565,7 @@ def lock_wait(state_dir: Path) -> float:
     """How long an update waits for update.lock: TURN_SECONDS while the check-in loop takes its turn at
     the windows (a live TURN_MARKER), which gives way between windows once the update's own marker is
     there; else no longer than one_update's least."""
-    return TURN_SECONDS if marked(state_dir, TURN_MARKER) else 0.0
+    return TURN_SECONDS if turn_holds(state_dir) else 0.0
 
 
 def main(argv: list[str]) -> int:

@@ -5993,11 +5993,7 @@ HAND
       .carried.id == \$last and (.handed_over | length > 0)" "$1/update.json" >/dev/null' _ "$U_STATE" "$u_last_id"
   check "... the last update's summary saved next to its backup, the window carried into the next update" bash -c '
     grep -qE "^  u-waiting +carried into the next update$" "$1/summary.md" && grep -qE "^  u-busy +restarted; resumed after the update$" "$1/summary.md" &&
-      grep -qE "^  orch +asked to re-read policy.md; re-read, checked in, carrying on$" "$1/summary.md" || {
-      cat "$1/summary.md"
-      grep "took over" "$2"
-      false
-    }' _ "$u_last_backup" "$U/takeover.out"
+      grep -qE "^  orch +asked to re-read policy.md; re-read, checked in, carrying on$" "$1/summary.md"' _ "$u_last_backup"
   check "... and the new summary says it is still waited for, owed by the last update too" \
     grep -qE "^  u-waiting +nothing yet; still waited for \(owed by the last update too\)$" "$U/takeover.out"
   check "... the window untouched, the link at v3, and the status calls no update running" bash -c '

@@ -490,6 +490,8 @@ update_restart() { # <name>
   elif [ "$listed" = "0" ]; then
     die "'$1' is not in the window list and has no launch recorded: bosun did not start it, so an update leaves it as it is"
   fi
+  # An earlier launch's error is not this one's: gone before the pane respawns (launch clears it too).
+  [ "$DRY_RUN" = "1" ] || rm -f "$(launch_error_file "$name")"
   refresh_window "$name" "$dir" "$kind" "" "" || return 1
   [ "$left_running" = "0" ] || return "$LEFT_RUNNING"
   if ! why="$(await_launch "$name")"; then

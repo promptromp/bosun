@@ -553,7 +553,7 @@ refuse() {
 }
 # A launch's last error, in its window's file (launch_error_file), which `refresh --update-restart` reads to say
 # why a window did not start: only where the command set LAUNCH_ERROR_FILE (bosun launch; never exported).
-note_error() { [ -z "${LAUNCH_ERROR_FILE:-}" ] || printf '%s\n' "$*" >"$LAUNCH_ERROR_FILE" 2>/dev/null || true; }
+note_error() { [ -z "${LAUNCH_ERROR_FILE:-}" ] || printf '%s\n' "$*" 2>/dev/null >"$LAUNCH_ERROR_FILE" || true; }
 launch_error_file() { echo "$BOSUN_STATE_DIR/launches/${BOSUN_SESSION_NAME//\//_}/${1//\//_}.error"; } # <window>
 
 # Print a script's leading comment block (its `# Usage:` header): what --help shows. Reads one file and

@@ -869,10 +869,15 @@ Decided while building it:
   one; the loop's turn does nothing while an update runs. Once the update's own run handed them over, it
   records when (`handed_over`). Who holds `update.lock` is never guessed from the record: each holder says
   so in a marker of its own, its pid in `update/run` (an update, from before it waits for the lock until it
-  ends) or `update/turn` (the check-in loop's turn, around it), removed as it ends; a marker whose process
-  is gone counts as absent. An update runs (`update_state.update_runs`) while its marker is live, or while
-  the lock is held with no live turn marker (a writer putting back a freeze); so the status calls neither
-  the loop's turn an update running nor a takeover planning before it writes its record none. The next
+  ends, and its update's id once its record has one) or `update/turn` (the check-in loop's turn, written
+  before it tries the lock), each made at once and exclusively (a temp file linked into place), a stale one
+  (its process gone) replaced, and removed as it ends only if it still names its process; a marker whose
+  process is gone counts as absent, and the turn's counts as the holder only with no other update's marker
+  live. An update runs (`update_state.update_runs`) while its marker is live, or while the lock is held with
+  no live turn marker (a writer putting back a freeze); so the status calls neither the loop's turn an
+  update running nor a takeover planning before it writes its record none. The record's pending windows are
+  the running update's own wait only when the marker names its id; a record at `agents` whose update is not
+  running is shown as handed over, whatever `handed_over` says. The next
   update waits for the loop's turn (`TURN_SECONDS`), which gives way after the window it is on once the
   update's marker is there, leaving the rest pending for it to take over; if it still times out, its
   refusal says the check-in loop's turn holds the lock.
@@ -882,7 +887,8 @@ Decided while building it:
   launch, it waits (up to `BOSUN_START_TIMEOUT`) for the agent, and a launch that ends without one (refused,
   the window left a plain shell) or whose agent exits at once makes it exit 5, with the launch's own last
   error line last on stderr (from the file `bosun launch` leaves its last error in,
-  `launches/<session>/<window>.error`, cleared as each launch starts, which refresh reads and removes: a
+  `launches/<session>/<window>.error`, removed by refresh before it respawns the pane and cleared as each
+  launch starts, which refresh reads and removes: a
   refusal, an agent not installed, a copy of the conversation already running; else what the pane shows);
   the turn records the window as "did not start: <why>" and no longer waits for it, rather than trying it
   again every turn. A launch still going by then counts as started. A window
@@ -945,14 +951,17 @@ Decided while building it:
   still gets what the last update began, or its answer is still waited for; an orchestrator owed a re-read
   re-reads both updates' files. A window the last update asked to take stock, which the new plan only asks
   to re-read, never gets its saved list back: accepted, as nothing restarts it, so its background work was
-  never ended. The new record keeps which windows it took over (`taken_over`), and the last update's
+  never ended. The new record keeps which windows it took over (`taken_over`: each of the last one's
+  windows it brings along, one the last had restarted and it restarts afresh too), and the last update's
   summary is then finished and saved next to its backup: each of those carried into the next update, one
   closed since closed, and any other "left alone by the next update: nothing it was launched with differs
   from the newest version". The new summary says "owed by the last update too" of those it took over. An
   update that fails, or is put back, before that gives them back: the last record is written again as it
   was (`update_state.carried_back`, by the next `bosun update` or the check-in loop's turn), so they stay
   the loop's; so does one killed before its freeze (`planned`, `rehearsed`, `holding`) once nothing holds
-  the lock and no update's marker is live, which the loop's turn records `failed` first. `update.lock` is
+  the lock and no update's marker is live, which the loop's turn records `failed` first. An update that
+  finds such a record when it holds the lock (the loop having given way to its marker) ends it `failed`
+  itself before it writes its own, and takes over the windows it carried. `update.lock` is
   still taken in turn by the update and the loop's `bosun update advance`.
 
 Left to the builder:

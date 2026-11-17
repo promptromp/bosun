@@ -181,7 +181,9 @@ class UpdateFailed(Exception):
 
 
 def _record(state_dir: Path, state: UpdateState) -> UpdateState:
+    """<state> written, and its id in this update's marker (update_state.mark_update)."""
     update_state.write(state_dir, state)
+    update_state.mark_update(state_dir, state.id)
     return state
 
 
@@ -626,9 +628,19 @@ def _prepared(plan: Plan, old_root: Path, new_root: Path, where: Folders) -> Upd
     one keeps."""
     Output.say("Asking bosun doctor what fails before the update...")
     before = _doctor_fails(new_root)
-    last = update_state.owing(update_state.read(where.state_dir))
-    started = _started(plan, old_root, new_root, before, last)
+    started = _started(plan, old_root, new_root, before, _taken_from(where.state_dir))
     return _rehearsed(_record(where.state_dir, started), plan, where)
+
+
+def _taken_from(state_dir: Path) -> UpdateState | None:
+    """Under update.lock, before this update writes its record: the record of the update whose windows it
+    takes over (update_state.owing). One stopped before its freeze is abandoned, as this update holds the
+    lock: recorded `failed` first (update_state.end_abandoned), and the windows it carried taken over."""
+    previous = update_state.read(state_dir)
+    ended = update_state.end_abandoned(state_dir, holder=True)
+    if previous is not None and ended is not None and ended.step != previous.step:
+        Output.say(f"  an update cut short at step {previous.step} ({ended.error}): ended")
+    return update_state.owing(ended)
 
 
 def _carried_out(plan: Plan, old_root: Path, new_root: Path, where: Folders) -> UpdateState:

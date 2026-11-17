@@ -866,9 +866,10 @@ class ResumeTest(World):
         last = self.record(
             "agents",
             backup=str(backup),
-            pending=("api", "docs", "gone"),
+            pending=("api", "ci", "docs", "gone"),
             windows={
                 **dict.fromkeys(("api", "docs", "gone"), ("repo", "wait until idle")),
+                "ci": ("repo", "restart", "restarted"),  # restarted by the last, and afresh by this one
                 "web": ("repo", "restart", "restarted", "answered"),
             },
         )
@@ -876,8 +877,12 @@ class ResumeTest(World):
         self.record("released", carried=update_state.as_object(last))
         plan = dataclasses.replace(
             a_plan(),
-            windows=(("api", update_plan.Treatment.WAIT), ("docs", update_plan.Treatment.LEAVE)),
-            kinds=(("api", "repo"), ("docs", "repo")),
+            windows=(
+                ("api", update_plan.Treatment.WAIT),
+                ("ci", update_plan.Treatment.RESTART),
+                ("docs", update_plan.Treatment.LEAVE),
+            ),
+            kinds=(("api", "repo"), ("ci", "repo"), ("docs", "repo")),
         )
         out = io.StringIO()
         with (
@@ -888,16 +893,18 @@ class ResumeTest(World):
         ):
             done = update.resume(self.state)
         assert done is not None
-        self.assertEqual((done.step, done.taken_over), ("done", ("api",)))
+        self.assertEqual((done.step, done.taken_over), ("done", ("api", "ci")))
+        self.assertEqual(done.windows["ci"], ("repo", "restart"))  # its own restart, afresh
         summary = (backup / "summary.md").read_text()
         self.assertRegex(summary, r"\n  api +carried into the next update\n")
+        self.assertRegex(summary, r"\n  ci +restarted, carried into the next update\n")
         self.assertRegex(summary, r"\n  gone +closed\n")
         self.assertRegex(
             summary, r"\n  web +restarted; resumed: waiting on CI\n"
         )  # answered before the notes go
         left = "left alone by the next update: nothing it was launched with differs from the newest version"
         self.assertRegex(summary, rf"\n  docs +{left}\n")
-        took = f"took over api from the last update ({FROM[:7]} -> {TO[:7]})"
+        took = f"took over api, ci from the last update ({FROM[:7]} -> {TO[:7]})"
         self.assertIn(f"{took}; its summary: {backup / 'summary.md'}", out.getvalue())
         outcomes = dict(update_agents.outcomes(done, update_notes.Files(self.state)))
         self.assertTrue(outcomes["api"].endswith("(owed by the last update too)"))
@@ -1096,6 +1103,22 @@ class StartTest(World):
         self.assertEqual(seen, [None])  # before the update's record is written, so long before its hold
         self.assertEqual(state.step, "failed")
         self.assertEqual(state.doctor_before, ("FAIL: gh is not logged in: run 'gh auth login'",))
+
+    def test_a_takeover_killed_before_its_freeze_is_ended_and_its_windows_carried_on(self) -> None:
+        """The race of round 2: takeover K, carrying the last update L0, killed at holding; the next update
+        U holds the lock (the loop saw U's marker and left K): U's start ends K failed and takes L0's
+        windows over, never overwriting them."""
+        l0 = self.record("agents", pending=("api",), windows={"api": ("repo", "restart")})
+        self.record("holding", carried=update_state.as_object(l0))
+        where = update_facts.Folders(self.state, self.config, "update-test")
+        with (
+            update_state.marking(self.state, update_state.RUN_MARKER),
+            update_state.one_update(self.state),
+            mock.patch.object(update, "_doctor_fails", return_value=()),
+            mock.patch.object(update, "rehearse", return_value=["the rehearsal stops it here"]),
+        ):
+            started = update._carried_out(a_plan(), self.old, self.new, where)
+        self.assertEqual(update_state.from_object(started.carried), l0)
 
     def test_doctor_while_planning_keeps_its_fails_only(self) -> None:
         said = "Tools\n  ok    tmux\n  warn  on battery\n  FAIL  gh is not logged in: run 'gh auth login'\n"
@@ -1364,6 +1387,17 @@ class AgentsCommandTest(World):
             self.main("advance")
         self.assertEqual(seen, [(True, False), (True, True)])
         self.assertFalse(update_state.marked(self.state, update_state.TURN_MARKER))
+
+    def test_advance_ends_a_takeover_killed_before_its_freeze_and_takes_its_turn(self) -> None:
+        """Nothing holds the lock and no update's marker is live: the loop's turn records it failed, gives
+        the windows it carried back, and takes its turn at them."""
+        last = self.record("agents", pending=("api",), windows={"api": ("repo", "restart")})
+        self.record("holding", carried=update_state.as_object(last))
+        self.assertTrue(update_state.windows_pending(self.state))
+        with mock.patch.object(update_windows, "turn", return_value={"api": "busy"}) as turn:
+            self.assertEqual(self.main("advance")[0], 0)
+        turn.assert_called_once()
+        self.assertEqual(update_state.read(self.state), last)
 
     def test_advance_with_nothing_pending_does_nothing(self) -> None:
         for step in ("done", "released"):
