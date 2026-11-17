@@ -4074,6 +4074,10 @@ for path in sys.argv[1:]:
   check "a reload of the morning job that keeps its time keeps its stamp" bash -c 'grep -qx "$1" <<<"$2" && grep -qx "2026-01-05 05:00:00" "$3"' _ "$BOSUN_LAUNCHD_LABEL" "$out" "$BOSUN_STATE_DIR/loaded-morning"
   reload_jobs BOSUN_START_TIME=07:00 >/dev/null
   check "... and one that moves its time stamps it" stamped_now "$BOSUN_STATE_DIR/loaded-morning"
+  echo "2026-01-05 05:00:00" >"$BOSUN_STATE_DIR/loaded-watchdog"
+  echo "<!-- touched -->" >>"$HOME/Library/LaunchAgents/$BOSUN_LAUNCHD_LABEL.watchdog.plist"
+  reload_jobs >/dev/null
+  check "... and a plist with no time of day it can read (the watchdog's interval) counts as moved: stamped" stamped_now "$BOSUN_STATE_DIR/loaded-watchdog"
   reload_jobs >/dev/null 2>&1 # back at its time
   ro_state="$WORK/read-only-state"
   mkdir -p "$ro_state/logs"

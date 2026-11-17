@@ -1661,8 +1661,10 @@ job_times() { # <plist>
 # time already and keeps it (its days, the log folder or a template changed; a put-back) keeps its stamp, so the
 # run due today stays owed.
 reload_job() { # <label> <rendered> <installed>
-  local kept=0
-  if [ -e "$3" ] && job_loaded "$1" && [ "$(job_times "$3")" = "$(job_times "$2")" ]; then kept=1; fi
+  local kept=0 before after
+  before="$(job_times "$3")" after="$(job_times "$2")"
+  # kept only for times both plists say, and alike: one it cannot read counts as moved, and is stamped
+  if [ -n "$before" ] && [ "$before" = "$after" ] && job_loaded "$1"; then kept=1; fi
   launchctl bootout "gui/$(id -u)/$1" 2>/dev/null
   if [ ! -s "$2" ]; then
     rm -f "$3"
