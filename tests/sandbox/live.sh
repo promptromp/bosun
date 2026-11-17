@@ -535,8 +535,9 @@ every_version_clean() { # each version folder in bosun-versions, the old one too
 waits_for_me() {
   [ "$(window orchestrator status)" = waiting ]
 }
-waits_for_me_soon() { # <seconds>; if not by then, what the orchestrator shows
+waits_for_me_soon() { # <seconds>; if not by then, which assumption failed and what the orchestrator shows
   wait_for "$1" waits_for_me && return 0
+  echo "ASSUMPTION FAILED: the orchestrator's status never became waiting within $1 s (its status now: $(window orchestrator status)): it did not put the question up with AskUserQuestion, or Claude Code does not show that as waiting"
   screen_of orchestrator
   return 1
 }
@@ -556,6 +557,7 @@ answered_question() { # Enter on its question (the first answer), again while it
     tmux -L bosun send-keys -t "=bosun:=orchestrator" Enter
     wait_for 60 bash -c '[ "$(bosun sessions --json | jq -r ".[] | select(.name == \"orchestrator\") | .agent.status")" != waiting ]' && return 0
   done
+  echo "ASSUMPTION FAILED: Enter did not answer its question after 3 tries, 60 s each (its status still: $(window orchestrator status)): the question's screen takes another key"
   screen_of orchestrator
   return 1
 }

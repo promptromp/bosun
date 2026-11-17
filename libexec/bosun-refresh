@@ -52,7 +52,8 @@
 #                    started a launch, it waits (up to BOSUN_START_TIMEOUT) for its agent: a launch that
 #                    ends without one (refused, the window left a plain shell) or whose agent exits at
 #                    once is a window that did not start, and refresh exits 5, the launch's own last
-#                    error line the last line on stderr (one still starting by then counts as started).
+#                    error line the last line on stderr (from the file launch leaves it in, else the
+#                    window's screen; one still starting by then counts as started).
 #                    Each starts on the agent its last launch
 #                    ran (if sessions.yml or BOSUN_HARNESS now names another, that one takes over at
 #                    the next restart not for an update), with the model and effort it ran with when
@@ -417,11 +418,18 @@ refresh_window() { # <name> <dir> <kind> <model> <effort>
   fi
 }
 
-# Why window <window_id>'s launch failed, from what its pane shows (the screen alone: the respawn cleared
-# it, so nothing of an earlier launch): the launch's last error line, without its time and tag; <fallback>
-# when it shows none.
-launch_error() { # <window_id> <fallback>
-  local said
+# Why window <name>'s launch failed: the error line the launch left in its file (launch_error_file, cleared
+# as each launch starts; removed once read), else what its pane shows (the screen alone: the respawn cleared
+# it, so nothing of an earlier launch): the launch's last error line without its time and tag; else <fallback>.
+launch_error() { # <name> <window_id> <fallback>
+  local said file
+  file="$(launch_error_file "$1")"
+  if [ -s "$file" ]; then
+    tail -n 1 "$file"
+    rm -f "$file"
+    return 0
+  fi
+  shift
   said="$(tmux_cmd capture-pane -p -J -t "$1" 2>/dev/null | grep -F '[launch] ERROR: ' | tail -n 1)"
   if [ -n "$said" ]; then printf '%s\n' "${said#*"[launch] ERROR: "}"; else printf '%s\n' "$2"; fi
 }
@@ -453,7 +461,7 @@ await_launch() { # <name>
       sleep "$AGENT_SETTLE_SECONDS"
       kill -0 "$agent" 2>/dev/null && return 0
     elif ! launch_running "$pane_pid"; then
-      if [ "$seen" = "1" ]; then launch_error "$window_id" "its agent exited at once"; else launch_error "$window_id" "its launch ended without starting its agent"; fi
+      if [ "$seen" = "1" ]; then launch_error "$1" "$window_id" "its agent exited at once"; else launch_error "$1" "$window_id" "its launch ended without starting its agent"; fi
       return 1
     else
       sleep "$LAUNCH_POLL_SECONDS"

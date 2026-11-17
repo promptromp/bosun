@@ -1781,7 +1781,7 @@ printf '#!/bin/sh\necho "2.0.0 (Claude Code)"\n' >"$WORK/fake-claude"
 chmod +x "$WORK/fake-claude"
 export BOSUN_CLAUDE_BIN="$WORK/fake-claude"
 
-section tmux-session "tmux session (isolated socket, dry-run windows)" covers 'libexec/bosun-attach,libexec/bosun-start,libexec/bosun-stop,libexec/bosun-send,libexec/bosun-refresh,libexec/bosun-ledger,lib/run_locked.py'
+section tmux-session "tmux session (isolated socket, dry-run windows)" covers 'libexec/bosun-attach,libexec/bosun-launch,libexec/bosun-start,libexec/bosun-stop,libexec/bosun-send,libexec/bosun-refresh,libexec/bosun-ledger,lib/run_locked.py'
 "$BOSUN" start >/dev/null 2>&1
 wait_for 30 has_windows "alpha beta gamma "
 windows="$(tmux -L "$SOCKET" list-windows -t "=smoke" -F '#{window_name}' 2>/dev/null | tr '\n' ' ')"
@@ -1816,6 +1816,9 @@ check "a start under a parent that holds the windows lock goes on, and its refre
 check "start --restart from inside bosun's tmux refuses: it would stop itself" fails_with "it would stop itself before starting again" env TMUX="/tmp/tmux-0/$SOCKET,1,0" "$BOSUN" start --restart
 check "a window whose agent is not installed says so, rather than becoming a plain shell" fails_with "its agent, $WORK/no-such-claude, is not installed for this window's shell" \
   bash -c 'cd "$1" && BOSUN_LAUNCH_DRY_RUN=0 BOSUN_CLAUDE_BIN="$2" "$3" launch alpha </dev/null' _ "$REPO_A" "$WORK/no-such-claude" "$BOSUN"
+check "... and leaves that in its window's error file, for an update's restart to say why it did not start" \
+  grep -qx "its agent, $WORK/no-such-claude, is not installed for this window's shell (not on its PATH)" "$BOSUN_STATE_DIR/launches/smoke/alpha.error"
+rm -f "$BOSUN_STATE_DIR/launches/smoke/alpha.error"
 check "send refuses windows without Claude" fails_with "is not running an agent" "$BOSUN" send alpha hello
 check "send refuses unknown windows" fails_with "no window 'no-such-window'" "$BOSUN" send no-such-window hello
 tmux -L "$SOCKET" select-window -t "=smoke:alpha"
@@ -2647,7 +2650,8 @@ env BOSUN_LAUNCH_DRY_RUN=0 "$BOSUN" refresh --update-restart "$WORK/update-promp
 rc=$?
 rm -f "$BOSUN_CONFIG_DIR/bosun.env"
 check "an update's restart whose launch fails did not start: refresh exits 5, with the launch's own error last on stderr" bash -c '
-  [ "$1" = 5 ] && tail -1 "$2" | grep -q "^effort must be one of: .*(got .extreme.)"' _ "$rc" "$WORK/not-started.err"
+  [ "$1" = 5 ] && tail -1 "$2" | grep -q "^effort must be one of: .*(got .extreme.)$"' _ "$rc" "$WORK/not-started.err"
+check "... read from the launch's error file, which it removes" test ! -e "$BOSUN_STATE_DIR/launches/smoke/alpha.error"
 check "delegate --window delivers through send" contains "$("$BOSUN" delegate investigate --id slack:C8/1 --ask 'look into it' --window delta 2>&1)" "delivered to smoke:delta"
 check "the prompt file is removed once read" bash -c '[ -z "$(ls -A "$1")" ]' _ "$BOSUN_STATE_DIR/prompts"
 check "--new refuses an existing window" fails_with "already exists" live --new delta "$REPO_A" again

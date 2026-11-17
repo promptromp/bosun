@@ -874,8 +874,11 @@ Decided while building it:
   send` could not deliver is sent again. A restart whose launch failed is final: once refresh started a
   launch, it waits (up to `BOSUN_START_TIMEOUT`) for the agent, and a launch that ends without one (refused,
   the window left a plain shell) or whose agent exits at once makes it exit 5, with the launch's own last
-  error line last on stderr; the turn records the window as "did not start: <why>" and no longer waits for
-  it, rather than trying it again every turn. A launch still going by then counts as started. A window
+  error line last on stderr (from the file `bosun launch` leaves its last error in,
+  `launches/<session>/<window>.error`, cleared as each launch starts, which refresh reads and removes: a
+  refusal, an agent not installed, a copy of the conversation already running; else what the pane shows);
+  the turn records the window as "did not start: <why>" and no longer waits for it, rather than trying it
+  again every turn. A launch still going by then counts as started. A window
   restarted into its next conversation (exit 4) never sees the update prompt, so the turn notes its status
   itself ("started its next conversation"), and the background work it listed stays in its note, which
   the window's outcome names. One whose agent exited is started again with the update prompt. A window
