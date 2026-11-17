@@ -14,8 +14,10 @@
 #      repeating event); a sudo that is refused is a warning, never a failed install
 #   4. link `bosun` into ~/.local/bin
 #   5. run `bosun doctor`
-# A job it loads leaves the time it was loaded ($BOSUN_STATE_DIR/loaded-<morning|learn|watchdog>, reload_job in
-# lib/common.sh): the watchdog owes no run that was due before then, which launchd would not run.
+# A job it loads fresh, or whose time it moves, leaves the time it was loaded ($BOSUN_STATE_DIR/loaded-<morning|learn|
+# watchdog>, reload_job in lib/common.sh): the watchdog owes no run that was due before then, which launchd would
+# not run. --cancel-wake looks again first: it refuses, saying why, unless pmset has exactly one repeating event,
+# bosun's own left from before (BOSUN_WAKE=0).
 # Exit status: 0 done; 1 a step failed (its ERROR line says which), and the steps after it were not made; 2 bad
 # usage; 3 every step was made, and `bosun doctor` found problems (its FAIL lines).
 set -uo pipefail

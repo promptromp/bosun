@@ -1634,19 +1634,30 @@ job_role() { # <label>
   esac
 }
 
-# The stamp of job <label>, which has just been loaded. One that cannot be written is a line, never a failed reload.
+# The stamp of job <label>, which has just been loaded. One that cannot be written is a line on stderr, never a
+# failed reload: reload_changed_jobs' stdout is the labels it reloaded, which install.sh and `bosun update` read.
 stamp_job_loaded() { # <label>
   local role
   role="$(job_role "$1")"
   [ -n "$role" ] || return 0
-  if ! { mkdir -p "$BOSUN_STATE_DIR" && date '+%F %T' >"$(job_loaded_stamp "$role")"; }; then
-    log "WARN: could not write $(job_loaded_stamp "$role")"
+  if ! { mkdir -p "$BOSUN_STATE_DIR" && date '+%F %T' >"$(job_loaded_stamp "$role")"; } 2>/dev/null; then
+    log "WARN: could not write $(job_loaded_stamp "$role")" >&2
   fi
 }
 
+# The times of day a job's plist runs it at, its Hour and Minute pairs, one a line: what a reload compares.
+job_times() { # <plist>
+  grep -o '<key>Hour</key><integer>[0-9]*</integer><key>Minute</key><integer>[0-9]*</integer>' "$1" 2>/dev/null | sort -u
+}
+
 # Job <label> unloaded, then, from the plist <rendered> (checked already; empty: the job is no longer
-# wanted), written as <installed> and loaded again (its stamp written: stamp_job_loaded); or its plist removed.
+# wanted), written as <installed> and loaded again; or its plist removed. A fresh load, or one that moves the job's
+# time, is stamped (stamp_job_loaded): launchd runs no time that passed before it. A job that was loaded at its
+# time already and keeps it (its days, the log folder or a template changed; a put-back) keeps its stamp, so the
+# run due today stays owed.
 reload_job() { # <label> <rendered> <installed>
+  local kept=0
+  if [ -e "$3" ] && job_loaded "$1" && [ "$(job_times "$3")" = "$(job_times "$2")" ]; then kept=1; fi
   launchctl bootout "gui/$(id -u)/$1" 2>/dev/null
   if [ ! -s "$2" ]; then
     rm -f "$3"
@@ -1659,7 +1670,7 @@ reload_job() { # <label> <rendered> <installed>
     date '+%F %T' >"$(login_reload_marker)"
   fi
   if cp "$2" "$3" && launchctl bootstrap "gui/$(id -u)" "$3"; then
-    stamp_job_loaded "$1"
+    [ "$kept" = 1 ] || stamp_job_loaded "$1"
     return 0
   fi
   log "ERROR: launchctl bootstrap failed for $3" >&2

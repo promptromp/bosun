@@ -4061,6 +4061,24 @@ for path in sys.argv[1:]:
   check "... a wake that sudo refuses fails the install" fails_with "pmset failed" env BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" --with-wake
   check "... after the morning job was loaded again, and stamped" stamped_now "$BOSUN_STATE_DIR/loaded-morning"
   mv "$WORK/sudo.ok" "$HOME/.local/bin/sudo"
+  # reload_changed_jobs on its own, with the install's config: a reload that keeps the job's time keeps its stamp
+  # (the run due today stays owed), one that moves it stamps it, and the labels on stdout are only labels.
+  reload_jobs() { env BOSUN_CONFIG_DIR="$INSTALL_CFG" "$@" bash -c 'source "$1/lib/common.sh"; load_config; reload_changed_jobs' _ "$ROOT"; }
+  echo "2026-01-05 05:00:00" >"$BOSUN_STATE_DIR/loaded-morning"
+  echo "<!-- touched -->" >>"$PLIST"
+  out="$(reload_jobs)"
+  check "a reload of the morning job that keeps its time keeps its stamp" bash -c 'grep -qx "$1" <<<"$2" && grep -qx "2026-01-05 05:00:00" "$3"' _ "$BOSUN_LAUNCHD_LABEL" "$out" "$BOSUN_STATE_DIR/loaded-morning"
+  reload_jobs BOSUN_START_TIME=07:00 >/dev/null
+  check "... and one that moves its time stamps it" stamped_now "$BOSUN_STATE_DIR/loaded-morning"
+  reload_jobs >/dev/null 2>&1 # back at its time
+  ro_state="$WORK/read-only-state"
+  mkdir -p "$ro_state/logs"
+  chmod 555 "$ro_state"
+  rm -f "$PLIST" # a fresh load, which stamps
+  out="$(reload_jobs BOSUN_STATE_DIR="$ro_state" BOSUN_LOG_DIR="$ro_state/logs" 2>"$WORK/reload.err")"
+  chmod 755 "$ro_state"
+  check "a stamp that cannot be written is a line on stderr, never a label on stdout (which install.sh and bosun update read)" bash -c '! grep -q "WARN" <<<"$1" && grep -qx "$2" <<<"$1" && grep -q "WARN: could not write $3/loaded-morning" "$4"' _ "$out" "$BOSUN_LAUNCHD_LABEL" "$ro_state" "$WORK/reload.err"
+  reload_jobs >/dev/null 2>&1 # back in the suite's own state folder
   WATCHDOG_PLIST="$HOME/Library/LaunchAgents/$BOSUN_LAUNCHD_LABEL.watchdog.plist"
   check "install writes the watchdog agent" plutil -lint -s "$WATCHDOG_PLIST"
   check "... and loads it" grep -q "launchctl bootstrap gui/$(id -u) $WATCHDOG_PLIST" "$WORK/system.log"
