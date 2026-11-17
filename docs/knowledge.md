@@ -182,8 +182,9 @@ from a session, need `--from-user --quote` that verifies, at least 8 characters,
 on were proposed; for `batch apply` the quote holds each group number the decision names (or "all", when it says
 all). The quote is kept in the decision's note, on this Mac only. A correction with `--value` or `--object` needs a
 source: your words, checked the same way, or a `--source`; on sources alone it is confirmed only as `kg propose`
-would confirm them, and otherwise waits for review while the fact it corrects stays open. From a terminal, and in
-the console's review, they work as before.
+would confirm them, and otherwise waits for review while the fact it corrects stays open, from a terminal too. A
+correction to a value already recorded is a replacement by that fact (`--by`), and one to the fact's own value is
+refused. From a terminal, and in the console's review, confirming, rejecting and `--by` or `--close` need no quote.
 
 `kg lookup` prints at most 800 tokens (`--max-tokens`), five waiting facts and a count, and says how to see
 more; `kg search` shows 10 hits; `--json` is complete. Your own profile facts and identifiers never reach a

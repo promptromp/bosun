@@ -524,14 +524,15 @@ def check_claim(kb: KB, proposal: Proposal) -> tuple[str, str | None, ks.Predica
     return subject, obj, ks.check_fact(claim, kb.schema)
 
 
-def propose(kb: KB, proposal: Proposal) -> Outcome:
+def propose(kb: KB, proposal: Proposal, *, ignoring: str | None = None) -> Outcome:
     """Propose a fact. The same fact again only re-observes it (newer observed_at, more sources);
-    then the auto-confirm rules decide whether it waits for review."""
+    then the auto-confirm rules decide whether it waits for review (settle: <ignoring>, a fact it is
+    meant to replace, holds it back as no contradiction)."""
     subject, obj, predicate = check_claim(kb, proposal)
     value = proposal.value.strip() if proposal.value is not None else None
     existing = find_same(kb, fact_key(subject, predicate.name, obj, value))
     if existing:
-        return observe(kb, existing, proposal)
+        return observe(kb, existing, proposal, ignoring=ignoring)
     fact_id = next_fact_id(kb)
     now = iso(kb.now)
     fact = {
@@ -556,14 +557,14 @@ def propose(kb: KB, proposal: Proposal) -> Outcome:
         "note": proposal.note,
     }
     kb.add_record({"op": "add", "at": now, "fact": fact})
-    return settle(kb, kb.facts[fact_id], "added")
+    return settle(kb, kb.facts[fact_id], "added", ignoring=ignoring)
 
 
 def stronger(one: str, other: str) -> bool:
     return ks.AUTHORITIES.index(one) < ks.AUTHORITIES.index(other)
 
 
-def observe(kb: KB, fact: Record, proposal: Proposal) -> Outcome:
+def observe(kb: KB, fact: Record, proposal: Proposal, *, ignoring: str | None = None) -> Outcome:
     known = {source_key(s) for s in fact["sources"]}
     changes: Record = {
         "observed_at": iso(kb.now),
@@ -585,7 +586,7 @@ def observe(kb: KB, fact: Record, proposal: Proposal) -> Outcome:
             REJECTED,
             "rejected earlier; it stays rejected unless your own words confirm it (--from-user)",
         )
-    return settle(kb, fact, "observed")
+    return settle(kb, fact, "observed", ignoring=ignoring)
 
 
 def auto_confirm_reason(kb: KB, fact: Record) -> str | None:
@@ -621,14 +622,16 @@ def conflicting(kb: KB, fact: Record) -> list[Record]:
     ]
 
 
-def settle(kb: KB, fact: Record, action: str) -> Outcome:
+def settle(kb: KB, fact: Record, action: str, *, ignoring: str | None = None) -> Outcome:
+    """Confirm a proposed fact when the auto-confirm rules would, unless it contradicts a confirmed one
+    (my words aside); <ignoring>: the fact it is meant to replace, which does not count as one."""
     status = effective_status(fact, kb.now)
     if status != PROPOSED:
         return Outcome(fact["id"], action, status)
     reason = auto_confirm_reason(kb, fact) if kb.auto_confirm else None
     if reason is None:
         return Outcome(fact["id"], action, PROPOSED, "waits for review: kg batch")
-    conflicts = conflicting(kb, fact)
+    conflicts = [f for f in conflicting(kb, fact) if f["id"] != ignoring]
     if conflicts and reason != USER_WORDS:
         ids = ", ".join(f["id"] for f in conflicts)
         return Outcome(fact["id"], action, PROPOSED, f"not confirmed automatically: it contradicts {ids}")
@@ -710,15 +713,19 @@ def review(
     return messages
 
 
-def correction_reason(kb: KB, new: Record, old_id: str) -> str | None:
-    """Why a new fact that corrects <old_id> is confirmed now, or None: what settle() would confirm it on
-    (my words, or sources the auto-confirm rules trust), counting no contradiction with <old_id>, the fact
-    it corrects. None for a fact that is no proposal (confirmed already, or rejected)."""
-    if effective_status(new, kb.now) != PROPOSED or not kb.auto_confirm:
-        return None
-    reason = auto_confirm_reason(kb, new)
-    others = [f["id"] for f in conflicting(kb, new) if f["id"] != old_id]
-    return None if reason is None or (others and reason != USER_WORDS) else reason
+def same_fact(kb: KB, old_id: str, replacement: Proposal) -> str | None:
+    """The current fact a correction of <old_id> would be (the same subject, predicate and object or value),
+    if one is recorded; refused when it is <old_id> itself, which a correction to its own value would only
+    close as superseded by itself."""
+    subject, obj, predicate = check_claim(kb, replacement)
+    value = replacement.value.strip() if replacement.value is not None else None
+    existing = find_same(kb, fact_key(subject, predicate.name, obj, value))
+    if existing is not None and existing["id"] == old_id:
+        raise KnowledgeError(
+            f"{old_id} already says that: a correction to its own value replaces nothing (to end it: "
+            f"kg supersede {old_id} --close)"
+        )
+    return None if existing is None else str(existing["id"])
 
 
 def replacement_fact(
@@ -731,18 +738,21 @@ def replacement_fact(
 ) -> tuple[str | None, list[str]]:
     """The fact that replaces <old_id>, if any, and what confirming it said: an existing one (<by>),
     confirmed, as replacing a fact by another is a decision; or a new one (<replacement>), confirmed only
-    as a proposal of it would be (correction_reason). A correction on its sources alone is no decision:
-    Slack, PR, ticket and doc text never confirms a fact, nor a correction's."""
+    as a proposal of it would be (settle, <old_id> counting as no contradiction). A correction on its
+    sources alone is no decision: Slack, PR, ticket and doc text never confirms a fact, nor a
+    correction's. A replacement already recorded is a replacement by it (`by`; same_fact)."""
     if by is not None:
         new = get_fact(kb, by)
         return by, [] if new["status"] == CONFIRMED else confirm_fact(kb, new, CORRECTION, note, by=reviewer)
     if replacement is None:
         return None, []
-    outcome = propose(kb, replacement)
-    new = get_fact(kb, outcome.fact_id)
-    reason = correction_reason(kb, new, old_id)
-    confirmed = confirm_fact(kb, new, reason, note, by=reviewer) if reason else []
-    return outcome.fact_id, [*outcome.messages, *confirmed]
+    existing = same_fact(kb, old_id, replacement)
+    if existing is not None:
+        raise KnowledgeError(
+            f"the correction is {existing}, recorded already: kg supersede {old_id} --by {existing}"
+        )
+    outcome = propose(kb, replacement, ignoring=old_id)
+    return outcome.fact_id, outcome.messages
 
 
 def left_open(kb: KB, old_id: str, new_id: str) -> str:
@@ -774,8 +784,9 @@ def supersede(
 ) -> list[str]:
     """Close a current fact: replaced by an existing fact (--by), by a new one (replacement_fact: a
     correction in my words is confirmed, one on its sources alone only as the auto-confirm rules would
-    confirm it, and while it waits for review the fact stays open), or by nothing (it simply stopped
-    holding). <reviewer> says who decided (recorded as reviewed_by on what it confirms and closes)."""
+    confirm it), or by nothing (it simply stopped holding). A new replacement that this correction did not
+    confirm leaves the fact open. <reviewer> says who decided (recorded as reviewed_by on what it confirms
+    and closes)."""
     old = get_fact(kb, old_id)
     if not is_current(old):
         raise KnowledgeError(

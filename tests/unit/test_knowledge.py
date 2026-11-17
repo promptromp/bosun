@@ -521,6 +521,58 @@ class SessionQuoteTest(KnowledgeTestCase):
         self.assertIn(f"{berlin} superseded by", self.run_kg("confirm", self.f(2)))
         self.assertEqual(self.fact(berlin)["superseded_by"], self.f(2))
 
+    def test_a_correction_to_the_facts_own_value_is_refused(self) -> None:
+        """review round 1: it closed the fact "superseded by" itself, on any source."""
+        self.seed()
+        self.run_kg("propose", "person/dana", "timezone", "--value", "Europe/Berlin", "--source", "profile:a")
+        berlin = self.f(1)
+        caveat = self.proposed("runs nightly")
+        self.session(typed("something else", START))
+        for fact, value, source in [
+            (berlin, "Europe/Berlin", "slack:https://acme.slack.com/archives/C0/p2"),
+            (caveat, "runs nightly", "ledger:x"),
+        ]:
+            with self.subTest(fact=fact), self.assertRaisesRegex(KnowledgeError, f"{fact} already says that"):
+                self.run_kg("supersede", fact, "--value", value, "--source", source)
+            self.assertIsNone(self.fact(fact)["valid_to"])
+            self.assertIsNone(self.fact(fact).get("superseded_by"))
+
+    def test_a_correction_to_a_recorded_fact_is_a_replacement_by_it(self) -> None:
+        """review round 1: `--value <B's value>` on a source closed A by B, which is `--by B` without my
+        words, and revived a rejected B. It is `--by B`: from a session it needs my words, from a terminal
+        it is mine."""
+        self.seed()
+        nightly, hourly = self.proposed("runs nightly"), self.proposed("runs hourly")
+        weekly = self.proposed("runs weekly")
+        self.run_kg("confirm", nightly)
+        self.run_kg("confirm", hourly)
+        self.run_kg("reject", weekly)
+        self.session(typed("it runs hourly now, not nightly", START + timedelta(hours=1)))
+        self.later(1 / 12)
+        for value, source in [
+            ("runs hourly", "slack:https://acme.slack.com/archives/C0/p1"),
+            ("runs weekly", "memory:z.md"),
+        ]:
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(KnowledgeError, "--by .* --from-user --quote"):
+                    self.run_kg(
+                        "supersede", nightly, "--value", value, "--source", source, "--source", "ledger:q"
+                    )
+                self.assertIsNone(self.fact(nightly)["valid_to"])
+        self.assertEqual(self.fact(weekly)["status"], km.REJECTED)
+        out = self.run_kg(
+            "supersede", nightly, "--value", "runs hourly", "--from-user", "--quote", "it runs hourly now"
+        )
+        self.assertIn(f"{nightly} closed, superseded by {hourly}", out)
+        self.in_session(None)  # from a terminal, the replacement by a recorded fact is mine
+        other = self.proposed("runs on demand")
+        self.run_kg("confirm", other)
+        out = self.run_kg(
+            "supersede", other, "--value", "runs weekly", "--source", "slack:https://acme.slack.com/x"
+        )
+        self.assertIn(f"{other} closed, superseded by {weekly}", out)
+        self.assertEqual(self.fact(weekly)["status"], km.CONFIRMED)
+
     def test_closing_or_replacing_by_another_fact_from_a_session_needs_my_words(self) -> None:
         self.seed()
         old, new = self.proposed("runs nightly"), self.proposed("runs hourly")
