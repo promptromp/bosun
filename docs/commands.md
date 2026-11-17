@@ -198,7 +198,8 @@ that agent instead of the configured one), and records what the agent was launch
 conversation's name and the orchestrator's policy text left out). A repo window's launch first makes the folder its
 worktrees go in, beside its repository (`<repository>.worktrees`;
 [Permissions](permissions.md#what-each-window-can-reach)). `--fingerprint` prints the fingerprint a launch would
-record now, and launches nothing.
+record now, and launches nothing; one the launch would refuse exits 1 with the reason last on stderr, which an update
+shows for a window it leaves running.
 
 <details class="note" markdown>
 <summary>How an update's restart picks the conversation and the agent</summary>
