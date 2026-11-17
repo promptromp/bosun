@@ -54,6 +54,17 @@ set_update_defaults() {
   BOSUN_ACTIVE_CLIENT_MINUTES="10"
 }
 
+set_schedule_defaults() {
+  BOSUN_DAYS="MTWRF"
+  BOSUN_START_TIME="08:00"
+  BOSUN_WAKE_DELAY_MINUTES="1"
+  # 1: the Mac's repeating wake (pmset) is bosun's to set, and `bosun doctor` fails while it is not; 0: bosun sets
+  # none (said no to in `bosun init`, or another app's repeating wake stays: pmset keeps one), and doctor says so.
+  BOSUN_WAKE="1"
+  BOSUN_AWAKE_UNTIL="20:00"
+  BOSUN_LAUNCHD_LABEL="com.bosun.morning"
+}
+
 set_defaults() {
   BOSUN_CONFIG_DIR="${BOSUN_CONFIG_DIR:-$HOME/.config/bosun}"
   BOSUN_SESSION_NAME="bosun"
@@ -66,11 +77,7 @@ set_defaults() {
   # kill a shared server. Empty: the default server. Attach with `bosun attach`.
   BOSUN_TMUX_SOCKET="bosun"
 
-  BOSUN_DAYS="MTWRF"
-  BOSUN_START_TIME="08:00"
-  BOSUN_WAKE_DELAY_MINUTES="1"
-  BOSUN_AWAKE_UNTIL="20:00"
-  BOSUN_LAUNCHD_LABEL="com.bosun.morning"
+  set_schedule_defaults
 
   BOSUN_NETWORK_PROBE_URL="https://www.apple.com/library/test/success.html"
   BOSUN_NETWORK_TIMEOUT="120"
@@ -739,6 +746,10 @@ release_keep_awake() {
 # expect the session on a day you stopped it.
 stop_marker() { echo "$BOSUN_STATE_DIR/stopped-$BOSUN_SESSION_NAME"; }
 
+# When `bosun start` last made the session (`date '+%F %T'`): on a day no morning run is owed, its job loaded after
+# its time (an install after the start time), the watchdog expects the session once one was started after that.
+start_marker() { echo "$BOSUN_STATE_DIR/started-$BOSUN_SESSION_NAME"; }
+
 # Whether `bosun quit` left bosun stopped until it is started (lib/quit_state.py, quit.json in the state
 # folder): succeeds and prints the time of the quit (HH:MM). The watchdog's and learning's scheduled runs
 # skip while it does; quit_paused is the same for the morning run, when the quit also paused it.
@@ -1336,6 +1347,18 @@ seconds_until_awake_end() {
   echo $((target > now ? target - now : 0))
 }
 
+# The morning run's log for now (lib/awake.py's morning-log, the one owner of its name): the workday's, the day the
+# awake window that now is in began, so a run past midnight in a window that runs past it is that day's, as the
+# watchdog, the status and the console read it.
+morning_log_file() {
+  local name
+  if ! name="$(python3 "$BOSUN_ROOT/lib/awake.py" morning-log --days "$BOSUN_DAYS" --start "$BOSUN_START_TIME" --until "$BOSUN_AWAKE_UNTIL" 2>/dev/null)" || [ -z "$name" ]; then
+    name="morning-$(date +%F).log" # today's: the run still has its log
+    log "WARN: lib/awake.py did not name the morning log; using $name" >&2
+  fi
+  echo "$BOSUN_LOG_DIR/$name"
+}
+
 # Seconds left in the awake window that now is in: the one rule (lib/awake.py, which the watchdog and the status
 # use too), so `bosun morning --now` and they agree on what "inside" is. Exits 3 (awake.OUTSIDE) printing
 # nothing outside every window; 2 printing one line when BOSUN_DAYS, BOSUN_START_TIME or BOSUN_AWAKE_UNTIL does
@@ -1553,18 +1576,35 @@ render_learn_plist() {
     <"$BOSUN_ROOT/templates/launchd-learn.plist"
 }
 
+# The setting that job <label> is there for, while it is 1 (render_job renders it only then); nothing for a job
+# that is always there, or the app's login job (there while `bosun app login on` keeps its plist).
+job_setting() { # <label>
+  case "$1" in
+    "$(learn_label)") echo BOSUN_LEARN_ENABLED ;;
+    "$(console_label)") echo BOSUN_CONSOLE_ALWAYS ;;
+    "$(login_label)") echo BOSUN_START_AT_LOGIN ;;
+  esac
+}
+
+# Whether job <label>'s setting wants it: 1, or it has none.
+job_wanted() { # <label>
+  local setting
+  setting="$(job_setting "$1")"
+  [ -z "$setting" ] || [ "${!setting}" = "1" ]
+}
+
 # The plist of the launchd job <label> as this version renders it from the config: the morning job,
 # the watchdog, learning with BOSUN_LEARN_ENABLED=1, the console with BOSUN_CONSOLE_ALWAYS=1, the job
-# that runs the morning run now, the login job with BOSUN_START_AT_LOGIN=1, and the app's login job while its
-# plist is there; nothing for a job not wanted.
+# that runs the morning run now, the login job with BOSUN_START_AT_LOGIN=1 (job_setting), and the app's login
+# job while its plist is there; nothing for a job not wanted.
 render_job() { # <label>
   case "$1" in
     "$BOSUN_LAUNCHD_LABEL") render_launchd_plist "$1" "$BOSUN_START_TIME" "$BOSUN_DAYS" "" BOSUN_TRIGGER=launchd ;;
     "$(watchdog_label)") render_watchdog_plist ;;
-    "$(learn_label)") if [ "$BOSUN_LEARN_ENABLED" = "1" ]; then render_learn_plist; fi ;;
-    "$(console_label)") if [ "$BOSUN_CONSOLE_ALWAYS" = "1" ]; then render_console_plist; fi ;;
+    "$(learn_label)") if job_wanted "$1"; then render_learn_plist; fi ;;
+    "$(console_label)") if job_wanted "$1"; then render_console_plist; fi ;;
     "$(now_label)") render_now_plist ;;
-    "$(login_label)") if [ "$BOSUN_START_AT_LOGIN" = "1" ]; then render_login_plist; fi ;;
+    "$(login_label)") if job_wanted "$1"; then render_login_plist; fi ;;
     "$(app_label)") if [ -e "$(app_plist)" ]; then render_app_plist; fi ;;
   esac
 }
@@ -1584,9 +1624,49 @@ job_fields() { # <label>
 # Whether job <label> is running now.
 job_running() { [ "$(job_fields "$1" | cut -f1)" = running ]; } # <label>
 
+# When reload_job last loaded bosun's launchd job for <role> (`date '+%F %T'`): the morning job, learning and the
+# watchdog. The watchdog owes no run due before its job was loaded, which launchd would not run (lib/watchdog.py's
+# loaded_after: a first install, or a start time moved to before now), and a watchdog job that has not run three
+# intervals after it was loaded is not working (lib/menu_status.py's watchdog_stale).
+job_loaded_stamp() { echo "$BOSUN_STATE_DIR/loaded-$1"; } # <role>
+
+# The role job_loaded_stamp knows job <label> by; nothing for a job it keeps no stamp of.
+job_role() { # <label>
+  case "$1" in
+    "$BOSUN_LAUNCHD_LABEL") echo morning ;;
+    "$(learn_label)") echo learn ;;
+    "$(watchdog_label)") echo watchdog ;;
+  esac
+}
+
+# The stamp of job <label>, which has just been loaded. One that cannot be written is a line on stderr, never a
+# failed reload: reload_changed_jobs' stdout is the labels it reloaded, which install.sh and `bosun update` read.
+stamp_job_loaded() { # <label>
+  local role
+  role="$(job_role "$1")"
+  [ -n "$role" ] || return 0
+  if ! { mkdir -p "$BOSUN_STATE_DIR" && date '+%F %T' >"$(job_loaded_stamp "$role")"; } 2>/dev/null; then
+    log "WARN: could not write $(job_loaded_stamp "$role")" >&2
+  fi
+}
+
+# When a job's plist runs it: every entry of its calendar (launchd_calendar_xml's: the weekday, if it names one, and
+# the hour and minute), one a line, in order: what a reload compares.
+job_calendar() { # <plist>
+  grep -oE '<dict>(<key>Weekday</key><integer>[0-9]+</integer>)?<key>Hour</key><integer>[0-9]+</integer><key>Minute</key><integer>[0-9]+</integer></dict>' "$1" 2>/dev/null | sort
+}
+
 # Job <label> unloaded, then, from the plist <rendered> (checked already; empty: the job is no longer
-# wanted), written as <installed> and loaded again; or its plist removed.
+# wanted), written as <installed> and loaded again; or its plist removed. A fresh load, or one that moves the job's
+# calendar (its time or its days), is stamped (stamp_job_loaded): launchd runs no time that passed before it. A
+# job that was loaded on its calendar already and keeps it (the log folder or a template changed) keeps its
+# stamp, so the run due today stays owed. The put-back of a failed Settings change moves the calendar back, so it
+# is stamped too, as the change before it was.
 reload_job() { # <label> <rendered> <installed>
+  local kept=0 before after
+  before="$(job_calendar "$3")" after="$(job_calendar "$2")"
+  # kept only for a calendar both plists say, and alike: one it cannot read counts as moved, and is stamped
+  if [ -n "$before" ] && [ "$before" = "$after" ] && job_loaded "$1"; then kept=1; fi
   launchctl bootout "gui/$(id -u)/$1" 2>/dev/null
   if [ ! -s "$2" ]; then
     rm -f "$3"
@@ -1598,7 +1678,10 @@ reload_job() { # <label> <rendered> <installed>
     mkdir -p "$BOSUN_STATE_DIR"
     date '+%F %T' >"$(login_reload_marker)"
   fi
-  if cp "$2" "$3" && launchctl bootstrap "gui/$(id -u)" "$3"; then return 0; fi
+  if cp "$2" "$3" && launchctl bootstrap "gui/$(id -u)" "$3"; then
+    [ "$kept" = 1 ] || stamp_job_loaded "$1"
+    return 0
+  fi
   log "ERROR: launchctl bootstrap failed for $3" >&2
   return 1
 }
@@ -1816,6 +1899,53 @@ repo_mask_filter() { # <json-key, or "" for the first field>
 # given), so that what `bosun settings set` asks sudo about before it writes is what set_wake then runs.
 wake_args_for() { # [days] [start HH:MM]
   wake_args=(repeat wakeorpoweron "${1:-$BOSUN_DAYS}" "$(shift_time "${2:-$BOSUN_START_TIME}" "$BOSUN_WAKE_DELAY_MINUTES"):00")
+}
+
+# Whose the Mac's repeating wake is, for the settings in force (bosun.env and the environment): lib/settings.py's
+# wake-owner, which `bosun settings`, doctor and install.sh share. ours, leftover (bosun's, though BOSUN_WAKE=0),
+# other or none. <schedule>: what `pmset -g sched` printed; "": it is asked.
+wake_owner() { # <schedule>
+  python3 "$BOSUN_ROOT/lib/settings.py" wake-owner --config-dir "$BOSUN_CONFIG_DIR" ${1:+--schedule "$1"} \
+    --set "BOSUN_DAYS=$BOSUN_DAYS" --set "BOSUN_START_TIME=$BOSUN_START_TIME" \
+    --set "BOSUN_WAKE_DELAY_MINUTES=$BOSUN_WAKE_DELAY_MINUTES" --set "BOSUN_WAKE=$BOSUN_WAKE"
+}
+
+# The repeating events in <schedule> (`pmset -g sched`), one a line, trimmed: the lines under "Repeating power
+# events", as lib/init_detect.py's repeating_events reads them.
+repeating_events() { # <schedule>
+  awk '/^Repeating power events/ { on = 1; next } on && /^[^ \t]/ { on = 0 }
+    on && NF { sub(/^[ \t]+/, ""); sub(/[ \t]+$/, ""); print }' <<<"$1"
+}
+
+# The repeating event <event> cancelled: the one bosun init judged bosun's own wake (as pmset prints it), after a no
+# to the wake. `pmset repeat cancel` cancels every repeating event, and init's plan was made when it started, against
+# the schedule bosun.env had then (another app may add an event while the wizard is open; the flag can be given by
+# hand), so it looks again first: it cancels only while pmset's repeating events are exactly <event>, and otherwise
+# refuses, saying why. sudo is asked before it looks (sudo -v; the cancel then runs sudo -n), so an event added
+# while its prompt waits is seen. None left is nothing to do; a schedule pmset cannot give is a warning, and
+# nothing is cancelled. Fails when it refuses or sudo or pmset fails.
+cancel_wake() { # <event>
+  local schedule events
+  sudo -v || return 1
+  if ! schedule="$(pmset -g sched)"; then
+    log "WARN: could not read pmset's schedule (pmset -g sched failed), so no wake was cancelled" >&2
+    return 0
+  fi
+  events="$(repeating_events "$schedule")"
+  if [ -z "$events" ]; then
+    log "pmset has no repeating event: there is no wake to cancel"
+    return 0
+  fi
+  if [ "$(grep -c . <<<"$events")" != 1 ]; then
+    log "not cancelling the repeating wake: pmset has $(grep -c . <<<"$events") repeating events, and cancelling takes them all" >&2
+    return 1
+  fi
+  if [ "$events" != "$1" ]; then
+    log "not cancelling the repeating wake: pmset's ($events) is not the one bosun init judged bosun's ($1)" >&2
+    return 1
+  fi
+  log "cancelling bosun's repeating wake ($1): sudo pmset repeat cancel"
+  sudo -n pmset repeat cancel
 }
 
 # `set_wake` sets the wake with sudo; `set_wake print` only says the command to run once; `set_wake no-prompt`

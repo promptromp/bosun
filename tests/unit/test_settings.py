@@ -157,6 +157,23 @@ class TestChange(unittest.TestCase):
         with self.assertRaises(settings.SettingsError):
             settings.change(COMMENTED, [], DEFAULTS)
 
+    def test_a_change_that_sets_the_wake_records_it_as_bosun_s(self) -> None:
+        """A wake declined (BOSUN_WAKE=0) that `set` then sets (it was bosun's after all, or --replace-wake)
+        is bosun's to set from then on, written with the change; without the wake, or with nothing changed,
+        BOSUN_WAKE is left as it is."""
+        declined = COMMENTED + 'BOSUN_WAKE="0"\n'
+        done = settings.change(declined, ["BOSUN_START_TIME=09:00"], DEFAULTS, wake=True)
+        self.assertEqual(done.changed[settings.WAKE_OURS], ("0", "1"))
+        self.assertEqual(init_plan.parse_env(done.text)["BOSUN_WAKE"], "1")
+        self.assertNotIn(
+            settings.WAKE_OURS, settings.change(declined, ["BOSUN_START_TIME=09:00"], DEFAULTS).changed
+        )
+        self.assertEqual(
+            settings.change(declined, ["BOSUN_START_TIME=08:00"], DEFAULTS, wake=True).changed, {}
+        )
+        already = settings.change(COMMENTED, ["BOSUN_START_TIME=09:00"], DEFAULTS, wake=True)
+        self.assertEqual(set(already.changed), {"BOSUN_START_TIME"})  # the default is bosun's already
+
     def test_same_value_changes_nothing(self) -> None:
         for assignment in ("BOSUN_START_TIME=08:00", "BOSUN_UPDATE_CHANNEL=releases"):
             with self.subTest(assignment):
@@ -206,6 +223,14 @@ class TestWakeOwner(unittest.TestCase):
             settings.wake_owner(schedule("wakepoweron at 9:01AM Some days"), some_days, DEFAULTS), "other"
         )
         self.assertEqual(settings.wake_owner(schedule("wakepoweron at"), {}, DEFAULTS), "other")
+
+    def test_bosun_s_wake_with_bosun_wake_0_is_a_leftover_not_ours_to_move(self) -> None:
+        ours = schedule("wakepoweron at 8:01AM weekdays only")
+        self.assertEqual(settings.wake_owner(ours, {"BOSUN_WAKE": "0"}, DEFAULTS), settings.LEFTOVER)
+        self.assertEqual(settings.wake_owner(ours, {"BOSUN_WAKE": "1"}, DEFAULTS), settings.OURS)
+        other = schedule("wakepoweron at 6:30AM every day")
+        self.assertEqual(settings.wake_owner(other, {"BOSUN_WAKE": "0"}, DEFAULTS), settings.OTHER)
+        self.assertEqual(settings.wake_owner("", {"BOSUN_WAKE": "0"}, DEFAULTS), settings.NONE)
 
     def test_a_start_that_does_not_parse_owns_no_wake(self) -> None:
         ours = schedule("wakepoweron at 8:01AM weekdays only")
@@ -303,6 +328,25 @@ class TestCommandLine(unittest.TestCase):
         )
         self.assertEqual((status, out), (0, "ours\n"))
 
+    def test_wake_owner_goes_by_the_settings_in_force(self) -> None:
+        """--set: what the environment says over bosun.env, as doctor and install.sh have it."""
+        at_nine = schedule("wakepoweron at 9:01AM weekdays only")
+        self.assertEqual(run("wake-owner", *self.common, "--schedule", at_nine)[1], "other\n")
+        moved = ("--set", "BOSUN_START_TIME=09:00")
+        self.assertEqual(run("wake-owner", *self.common, "--schedule", at_nine, *moved)[1], "ours\n")
+        declined = ("--set", "BOSUN_WAKE=0")
+        self.assertEqual(
+            run("wake-owner", *self.common, "--schedule", at_nine, *moved, *declined)[1], "leftover\n"
+        )
+
+    def test_get_shows_a_leftover_as_other_to_the_app_and_says_what_it_is(self) -> None:
+        self.env.write_text(COMMENTED + 'BOSUN_WAKE="0"\n')
+        ours = schedule("wakepoweron at 8:01AM weekdays only")
+        self.assertEqual(json.loads(run("get", *self.common, "--schedule", ours)[1])["wake"], "other")
+        text = run("get", *self.common, "--schedule", ours, "--text")[1]
+        self.assertIn("bosun's from before, though BOSUN_WAKE=0", text)
+        self.assertIn("sudo pmset repeat cancel ends it; it removes any other repeating event too", text)
+
     def test_write(self) -> None:
         status, out, _ = run("write", *self.common, "--stamp", "20261114-090000", "BOSUN_START_TIME=09:00")
         self.assertEqual(status, 0)
@@ -312,6 +356,12 @@ class TestCommandLine(unittest.TestCase):
         backup = self.dir / "bosun.env.pre-init-20261114-090000"
         self.assertEqual(backup.read_text(), COMMENTED)
         self.assertEqual((written["backup"], written["created"]), (str(backup), False))
+
+    def test_write_with_the_wake_records_it(self) -> None:
+        self.env.write_text(COMMENTED + 'BOSUN_WAKE="0"\n')
+        out = run("write", *self.common, "--stamp", "s0", "--wake", "BOSUN_START_TIME=09:00")[1]
+        self.assertEqual(json.loads(out)["changed"]["BOSUN_WAKE"], ["0", "1"])
+        self.assertEqual(init_plan.parse_env(self.env.read_text())["BOSUN_WAKE"], "1")
 
     def put_back(self, written: str) -> tuple[int, str]:
         err = io.StringIO()
@@ -358,6 +408,10 @@ class TestCommandLine(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()) as out:
             settings.main(["say"], stdin=io.StringIO(changes))
         self.assertEqual(out.getvalue(), "BOSUN_DAYS: MTWRF → MTWRFS\n")
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            settings.main(["say", "--wake-leftover", "--json"], stdin=io.StringIO(changes))
+        self.assertEqual(json.loads(out.getvalue())["notes"], [settings.WAKE_LEFTOVER])
+        self.assertIn("cancels it (it removes any other repeating event too)", settings.WAKE_LEFTOVER)
 
     def test_error(self) -> None:
         self.assertEqual(json.loads(run("error", "no")[1]), {"contract": 1, "error": "no"})

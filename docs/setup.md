@@ -92,12 +92,21 @@ How it decides, and what it never does: [design note](design/init.md).
 | Which agent should run the repo sessions? | Claude Code, or Codex or Antigravity. Asked only when one of those is installed and logged in. |
 | Which model should the sessions use? | `opus` or `sonnet` for the windows (for the orchestrator, when repo windows run on another agent). |
 | How should repo sessions handle permissions? | Claude Code's auto mode (recommended) or no permission checks. Asked when repo windows run on Claude Code. See [Permissions](permissions.md). |
-| Should the Mac wake by itself? | The repeating `pmset` wake. Recommended, unless another app already set a repeating wake (`pmset` keeps only one). |
+| Should the Mac wake by itself? | The repeating `pmset` wake (`BOSUN_WAKE`). Recommended, unless another app already set a repeating wake (`pmset` keeps only one). See [The wake](#the-wake) below. |
 | Add bosun to the menu bar, and start it when you log in? | The [menu bar app](menu-bar-app.md), and whether bosun starts when you log in during your hours. Answer "no" and it asks the second part alone. |
 | Which AWS SSO profiles should each morning log in to? | The profiles the morning run logs in to ([AWS SSO](configuration.md#aws-sso)). Asked only when `~/.aws/config` has some. |
 
 Run `bosun init` again whenever you like. It starts from your config, keeps anything you added to `bosun.env`,
 backs up what it changes (`bosun.env.pre-init-<time>`), and never changes your `setup.sh` once it exists.
+
+#### The wake
+
+The Mac's repeating wake is bosun's to set while `BOSUN_WAKE=1` (the default), and `bosun doctor` fails while that
+wake is not set. `bosun init` writes `BOSUN_WAKE="0"` when you answer No to the wake, or keep another app's repeating wake
+(pmset keeps only one): bosun then sets no wake, `install.sh` prints no `sudo pmset` line, and doctor only says so,
+with how to turn bosun's wake on (`bosun init` again, answering yes). A No on a re-run also cancels bosun's own wake,
+but only while it is the only repeating event: `sudo pmset repeat cancel` cancels every repeating event, another
+app's too. If you decline the sudo, the wake stays, and doctor warns about it.
 
 ### Starting bosun
 

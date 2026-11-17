@@ -19,6 +19,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import app_release
+import awake
 import claude_state
 import events
 import login
@@ -248,6 +249,54 @@ class MorningMissingTest(WatchdogCase):
         self.morning_run(MONDAY, dry_run="1")
         self.assertEqual(len(self.runs(at(MONDAY, "08:20"), 2)), 1)
 
+    def installed(self, moment: datetime) -> None:
+        (self.state_dir / watchdog.LOADED.format(role="morning")).write_text(f"{moment:%Y-%m-%d %H:%M:%S}\n")
+
+    def test_set_up_after_the_start_time_owes_no_run_today(self) -> None:
+        """Installed on a scheduled day after the start time: the morning job was not loaded at 08:00, so
+        no alert today, and the gate says why; tomorrow's run is owed as usual."""
+        self.installed(at(MONDAY, "14:00:30"))
+        self.assertEqual(self.runs(at(MONDAY, "14:05"), 6), [])
+        ctx = self.inputs(at(MONDAY, "14:10")).context(watchdog.State())
+        self.assertIn("loaded at 14:00", watchdog.check_morning_missing(ctx).note)
+        self.assertEqual(
+            watchdog.session_gate_kind(ctx),
+            (
+                watchdog.GATE_NO_MORNING,
+                "no morning run today: its launchd job was loaded at 14:00, after its time",
+            ),
+        )
+        self.assertEqual(len(self.runs(at(TUESDAY, "08:20"), 2)), 1)
+
+    def test_on_install_day_a_session_started_after_the_load_is_watched(self) -> None:
+        """No run is owed today, but the wizard's Start (`bosun start`) made the session after the job was
+        loaded: the session, check-in and orchestrator checks expect it from then on, and a crash alerts."""
+        self.installed(at(MONDAY, "14:00"))
+        (self.state_dir / "started-main").write_text(f"{MONDAY} 14:01:00\n")
+        ctx = self.inputs(at(MONDAY, "14:10")).context(watchdog.State())
+        self.assertIsNone(watchdog.session_gate_kind(ctx))
+        self.assertEqual(watchdog.check_morning_missing(ctx).findings, [])  # still no run owed
+        gone = Facts(morning_job_state="not running", morning_job_exit="0")
+        sent = self.runs(at(MONDAY, "15:00"), 2, facts=gone)
+        self.assertEqual(len(sent), 1)
+        self.assertIn("tmux session 'main' is not running", sent[0])
+        (self.state_dir / "started-main").write_text(f"{MONDAY} 13:59:00\n")  # before the load: not today's
+        ctx = self.inputs(at(MONDAY, "14:10")).context(watchdog.State())
+        self.assertEqual(watchdog.session_gate_kind(ctx)[0], watchdog.GATE_NO_MORNING)  # type: ignore[index]
+
+    def test_set_up_after_the_start_time_but_before_the_run_is_due_is_not_starting(self) -> None:
+        """At 08:05, between the start time and when the run is due: no run is coming today, so the gate is
+        not "not due yet", which the menu would show as a run starting."""
+        self.installed(at(MONDAY, "08:03"))
+        ctx = self.inputs(at(MONDAY, "08:05")).context(watchdog.State())
+        self.assertEqual(watchdog.session_gate_kind(ctx)[0], watchdog.GATE_NO_MORNING)  # type: ignore[index]
+
+    def test_set_up_before_the_start_time_still_owes_the_run(self) -> None:
+        self.installed(at(MONDAY, "07:59"))
+        self.assertEqual(len(self.runs(at(MONDAY, "08:20"), 2)), 1)
+        self.installed(at(TUESDAY, "23:00"))  # a stamp later than now (the clock moved back) owes it too
+        self.assertEqual(len(self.runs(at(TUESDAY, "08:20"), 2)), 1)
+
 
 class MorningFailedTest(WatchdogCase):
     def test_problems_alert_once_with_the_failing_step(self) -> None:
@@ -292,6 +341,27 @@ class MorningFailedTest(WatchdogCase):
         sent = self.runs(at(MONDAY, "08:50"), 3)
         self.assertEqual(len(sent), 1)
         self.assertIn("is still not done", sent[0])
+
+    def test_a_run_that_skipped_for_a_quit_is_an_outcome(self) -> None:
+        """The morning start paused (or a quit during the run): its end line says it was skipped, so after
+        `bosun start` it is neither a run still going nor a failed one, and the session is expected again."""
+        for line in (
+            "morning run skipped: the morning start is paused (bosun quit at 17:02); start bosun to resume",
+            "morning run skipped: bosun quit during the run, so it did not start bosun",
+        ):
+            with self.subTest(line=line):
+                (self.log_dir / f"morning-{MONDAY}.log").unlink(missing_ok=True)
+                self.morning_run(MONDAY, [f"{MONDAY} 08:01:06 [morning] {line}"])
+                run = watchdog.last_real_run(self.log_dir / f"morning-{MONDAY}.log")
+                self.assertEqual(run.outcome if run else None, "skipped")
+                ctx = self.inputs(at(MONDAY, "10:10")).context(watchdog.State())
+                self.assertEqual(
+                    watchdog.check_morning_failed(ctx).note, "the 08:01 run was skipped: bosun was quit"
+                )
+                self.assertIsNone(watchdog.session_gate_kind(ctx))
+        self.assertEqual(self.runs(at(MONDAY, "10:10"), 3), [])
+        gone = Facts(morning_job_state="not running", morning_job_exit="0")
+        self.assertEqual(len(self.runs(at(MONDAY, "11:00"), 3, facts=gone)), 1)  # session-missing alerts
 
     def test_a_launchd_run_that_crashed_alerts(self) -> None:
         self.morning_run(MONDAY, [f"{MONDAY} 08:01:06 [morning] network is up"])
@@ -503,6 +573,70 @@ class SessionTest(WatchdogCase):
     def test_no_session_alert_after_the_awake_window(self) -> None:
         self.morning_run(MONDAY)
         self.assertEqual(self.runs(at(MONDAY, "20:00"), 3, facts=self.gone), [])
+
+
+class PastMidnightTest(WatchdogCase):
+    """An awake window that runs past midnight (BOSUN_AWAKE_UNTIL at or before the start): from 00:00 to its
+    end the day is still the one the window began on: for the gate, the morning's due time, log and keys."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.config = replace(self.config, awake_until=time(1, 0))
+        self.gone = Facts(morning_job_state="not running", morning_job_exit="0")
+
+    def gate(self, now: datetime) -> tuple[str, str] | None:
+        return watchdog.session_gate_kind(self.inputs(now, self.gone).context(watchdog.State()))
+
+    def test_the_workday_is_the_day_the_window_began(self) -> None:
+        def workday(now: datetime) -> date:
+            return self.inputs(now).context(watchdog.State()).workday
+
+        self.assertEqual(workday(at(TUESDAY, "00:30")), MONDAY)
+        self.assertEqual(workday(at(TUESDAY, "01:00")), TUESDAY)  # the window is over
+        self.assertEqual(workday(at(MONDAY, "23:30")), MONDAY)
+        self.assertEqual(workday(at(SATURDAY, "00:30")), FRIDAY)
+
+    def test_after_midnight_the_session_is_still_expected(self) -> None:
+        self.morning_run(MONDAY)
+        self.assertIsNone(self.gate(at(TUESDAY, "00:30")))  # not "not expected before 08:16" of Tuesday
+        ctx = self.inputs(at(TUESDAY, "00:30")).context(watchdog.State())
+        self.assertEqual(ctx.morning_log.name, f"morning-{MONDAY}.log")
+        self.assertEqual(watchdog.check_morning_missing(ctx).note, "ran at 08:01 (launchd)")
+
+    def test_a_crash_before_midnight_is_confirmed_after_it(self) -> None:
+        self.morning_run(MONDAY)
+        self.assertEqual(self.watch(at(MONDAY, "23:57"), facts=self.gone), [])  # seen once: confirming
+        sent = self.watch(at(TUESDAY, "00:02"), facts=self.gone)
+        self.assertEqual(len(sent), 1)
+        self.assertIn("tmux session 'main' is not running", sent[0])
+        self.assertIn(f"session-missing:{MONDAY}", self.state()["alerted"])
+
+    def test_a_late_run_past_midnight_is_the_workday_s(self) -> None:
+        """The Mac asleep all day, opened at 00:30 Tuesday: launchd runs the missed 08:00 job then, and `bosun
+        morning` writes it in the workday's log (awake.py morning-log), which the watchdog reads: no false
+        "No morning run today", and the session is expected."""
+        name = awake.morning_log_name(awake.workday(self.config.awake, at(TUESDAY, "00:30")))
+        self.assertEqual(name, f"morning-{MONDAY}.log")
+        (self.log_dir / name).write_text(
+            f"{TUESDAY} 00:30:00 [morning] === morning run (trigger=launchd, session=main, dry_run=0) ===\n"
+            f"{TUESDAY} 00:32:00 [morning] morning run complete\n"
+        )
+        ctx = self.inputs(at(TUESDAY, "00:40")).context(watchdog.State())
+        self.assertEqual(watchdog.check_morning_missing(ctx).findings, [])
+        self.assertIsNone(watchdog.session_gate_kind(ctx))
+        self.assertEqual(self.runs(at(TUESDAY, "00:40"), 2), [])
+
+    def test_a_stop_before_or_after_midnight_counts_until_the_window_ends(self) -> None:
+        self.morning_run(MONDAY)
+        for stopped in (f"{MONDAY} 23:50:00", f"{TUESDAY} 00:10:00"):
+            with self.subTest(stopped=stopped):
+                (self.state_dir / "stopped-main").write_text(f"{stopped}\n")
+                self.assertEqual(self.gate(at(TUESDAY, "00:30"))[0], watchdog.GATE_STOPPED)  # type: ignore[index]
+        self.morning_run(TUESDAY)
+        (self.state_dir / "stopped-main").write_text(f"{MONDAY} 23:50:00\n")
+        self.assertIsNone(self.gate(at(TUESDAY, "10:00")))  # Monday's stop is over by Tuesday's window
+        (self.state_dir / "stopped-main").write_text(f"{TUESDAY} 00:10:00\n")
+        self.assertEqual(self.gate(at(TUESDAY, "10:00"))[0], watchdog.GATE_STOPPED)  # type: ignore[index]
 
 
 class CheckinTest(WatchdogCase):

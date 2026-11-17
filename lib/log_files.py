@@ -1,7 +1,10 @@
 """bosun's log folder kept in bounds, once a day by the morning run (`tidy_logs` in libexec/bosun-morning).
 
-- A day's file (`<command>-YYYY-MM-DD.log`, which lib/common.sh's `log` and the jobs write) older than
-  KEEP_DAYS, by the date in its name, is removed.
+- A day's file (`<command>-YYYY-MM-DD.log`, which lib/common.sh's `log` and the jobs write: WRITERS, bosun's
+  own names, so that another program's day files in a shared folder are never taken) older than KEEP_DAYS, by
+  the date in its name, is removed.
+- What an agent writes in the folder (its profile's log_files: agy's logs, say) not written for KEEP_DAYS is
+  removed.
 - What launchd captures from a job (`*.launchd.out`, `*.launchd.err`) has no day in its name and only grows:
   past LAUNCHD_MAX_BYTES it keeps its last LAUNCHD_KEEP_BYTES, from the start of a line. It is cut in place,
   the same file, because launchd keeps it open and appends to it; a new file would leave launchd writing to
@@ -15,17 +18,41 @@ Nothing else in the folder is touched. Each change is one line on stdout (the mo
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import re
 import sys
 from collections.abc import Sequence
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+import agent_state
+
 
 KEEP_DAYS = 30
 LAUNCHD_MAX_BYTES = 1024 * 1024
 LAUNCHD_KEEP_BYTES = 256 * 1024
-DAY_FILE = re.compile(r"^[a-z][a-z0-9-]*-(?P<day>\d{4}-\d{2}-\d{2})\.log$")
+# Whose day files are bosun's: lib/common.sh's `log` names a file after the command bin/bosun runs
+# (BOSUN_COMMAND, a libexec/bosun-<command>), install.sh's own, and "bosun" when no command is set; the jobs
+# and the other writers (the morning run, the check-in loop, the hook, learning, delegate, impact, launch) are
+# commands too. tests/unit/test_uninstall_plan.py holds it to libexec/.
+WRITERS = (
+    *("alert", "app", "attach", "checkin", "chores", "console", "context", "delegate", "doctor", "events"),
+    *("guard", "hook", "impact", "init", "kg", "launch", "learn", "ledger", "morning", "my-prs", "orphans"),
+    *(
+        "pr-threads",
+        "preflight",
+        "quit",
+        "refresh",
+        "resolve",
+        "review-watch",
+        "send",
+        "sessions",
+        "settings",
+    ),
+    *("setup", "slack-watch", "start", "status", "stop", "trust", "uninstall", "update", "wake-test"),
+    *("watchdog", "install", "bosun"),
+)
+DAY_FILE = re.compile(rf"^(?:{'|'.join(map(re.escape, WRITERS))})-(?P<day>\d{{4}}-\d{{2}}-\d{{2}})\.log$")
 LAUNCHD_SUFFIXES = (".launchd.out", ".launchd.err")
 
 
@@ -38,6 +65,15 @@ def day_of(name: str) -> date | None:
         return date.fromisoformat(found["day"])
     except ValueError:
         return None
+
+
+def agent_logs() -> tuple[str, ...]:
+    """The patterns of what the agents write in bosun's log folder (each one's profile)."""
+    return tuple(pattern for agent in agent_state.AGENTS.values() for pattern in agent.PROFILE.log_files)
+
+
+def is_agent_log(name: str) -> bool:
+    return any(fnmatch.fnmatchcase(name, pattern) for pattern in agent_logs())
 
 
 def trim_in_place(path: Path, keep: int, now: datetime) -> int:
@@ -64,18 +100,25 @@ def prune(folder: Path, today: date, now: datetime | None = None) -> list[str]:
     oldest = today - timedelta(days=KEEP_DAYS)
     said = []
     for path in sorted(folder.iterdir()):
-        if not path.is_file() or path.is_symlink():
-            continue
-        day = day_of(path.name)
-        if day is not None and day < oldest:
-            path.unlink()
-            said.append(f"removed {path.name} (older than {KEEP_DAYS} days)")
-        elif path.name.endswith(LAUNCHD_SUFFIXES) and path.stat().st_size > LAUNCHD_MAX_BYTES:
-            gone = trim_in_place(path, LAUNCHD_KEEP_BYTES, now or datetime.now())
-            said.append(
-                f"trimmed {path.name} to its last {LAUNCHD_KEEP_BYTES // 1024} KB ({gone // 1024} KB went)"
-            )
+        if path.is_file() and not path.is_symlink():
+            line = tidy(path, oldest, now or datetime.now())
+            said += [line] if line else []
     return said
+
+
+def tidy(path: Path, oldest: date, now: datetime) -> str:
+    """<path> removed or trimmed if it is one to (a day before <oldest>), and what was done; "" if nothing."""
+    day = day_of(path.name)
+    if day is not None and day < oldest:
+        path.unlink()
+        return f"removed {path.name} (older than {KEEP_DAYS} days)"
+    if is_agent_log(path.name) and date.fromtimestamp(path.stat().st_mtime) < oldest:
+        path.unlink()
+        return f"removed {path.name} (not written for {KEEP_DAYS} days)"
+    if path.name.endswith(LAUNCHD_SUFFIXES) and path.stat().st_size > LAUNCHD_MAX_BYTES:
+        gone = trim_in_place(path, LAUNCHD_KEEP_BYTES, now)
+        return f"trimmed {path.name} to its last {LAUNCHD_KEEP_BYTES // 1024} KB ({gone // 1024} KB went)"
+    return ""
 
 
 def main(argv: Sequence[str]) -> int:

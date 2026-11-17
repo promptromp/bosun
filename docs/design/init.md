@@ -23,6 +23,12 @@ the one with no schedule that `bosun morning --now --background` kickstarts, whi
 ([uninstall.md](uninstall.md)). Answers are JSON (`--print-answers`), and a file only needs what it
 changes: the wizard only fills those in, so `--answers` and the wizard cannot disagree.
 
+`install.sh` exits 3 when it made every step and only `bosun doctor` found problems, and 1 when a step stopped
+it. On 3, `init` goes on as on 0: it adds the menu bar app and asks to start the windows, then ends by saying
+doctor's problems again (each `FAIL` line, with what is listed under it; when doctor stopped without one, the
+last lines it printed) and exits 3. On 1 it says what stopped
+`install.sh` (its last `ERROR` line), adds no app, asks nothing more and exits 1.
+
 **Nothing changes until you accept the plan.** In a terminal `bosun init` asks its questions and then
 shows the plan. Without a terminal, or with `--dry-run`, it only prints the plan; `--recommended` or
 `--answers` carry one out without asking.
@@ -64,7 +70,10 @@ without `bosun.git`):
   starts never inherit the config key, which would beat `bosun.env`), which writes `BOSUN_UPDATE_CHANNEL` into
   `bosun.env`: the install follows the branch, with no question asked about it. The line `get.sh` prints for
   after what bosun needs is there keeps `BOSUN_BRANCH` (as it keeps `BOSUN_HARNESS`), so the install that
-  stopped there goes on following the branch.
+  stopped there goes on following the branch. When `init` starts the windows (the wizard's last question), it starts
+  them without what `get.sh` handed it and without the settings it wrote into `bosun.env` from the answers
+  (`curl ... | BOSUN_HARNESS=codex sh`'s among them), which the tmux server would otherwise keep, beating
+  `bosun.env`, until it ends.
 - **An install `init` has set up** (its `install.sh` linked `~/.local/bin/bosun` to it, as its last step,
   after the launchd jobs and the wake, so an install cut short is not taken for one set up):
   - a link to a version: it fetches nothing, and runs the install's own `bosun update`, with `--yes` when
@@ -101,7 +110,7 @@ for it, and the plan says why.
 | Repo mask | The GitHub owners of the ticked repos, so the recommendation's is its one repo's owner, and unticking a repo narrows it. With none ticked, the owners of the repos you use (20 or more prompts, at most 6; else the 3 with the most; else up to 3 found), so that unticking never makes it empty, which would mean every repo. |
 | Orchestrator folder | The folder the same repos share, never your home folder. |
 | AWS SSO | The profile, if there is exactly one; with more, the choice is yours. |
-| Wake | Yes, unless `pmset` already has a repeating event that bosun did not set: it keeps only one, and it is not ours to replace by default. |
+| Wake | Yes, unless `pmset` already has a repeating event that bosun did not set: it keeps only one, and it is not ours to replace by default. A re-run recommends what `BOSUN_WAKE` says (an install from before the key: yes). Written as `BOSUN_WAKE`, `1` or `0`: with `0` the wake is not bosun's to set (said no to, or another app's left), so `install.sh` prints no `sudo pmset` line and `bosun doctor` says so in a line instead of failing. A no on a re-run where `pmset` has bosun's own wake for the schedule `bosun.env` has, and no other repeating event, cancels it: a plan step, `sudo pmset repeat cancel`, as `bosun uninstall` runs it when the wake is bosun's alone (`install.sh --cancel-wake "<event>"`, with the event as pmset prints it, judged against the schedule `bosun.env` had when init started, so a no that also moves the start still cancels the old wake: it cancels only while pmset's repeating events are exactly that event, and refuses, saying why, otherwise; without a terminal the plan prints it for you to run). A sudo that is declined is a warning, never a failed init. Doctor and `bosun settings` ask the same question of whose the wake is (`settings.py wake-owner`), and a wake at bosun's time with `BOSUN_WAKE=0` is a leftover, to cancel, never to move. |
 | Menu bar app and start at login | One question with three answers ("Add bosun to the menu bar, and start it when you log in?", after the wake question; the `menu_app` and `start_at_login` answers): `y` shows bosun in the menu bar and starts it during your hours (`BOSUN_START_AT_LOGIN=1`), `m` the menu bar only (`BOSUN_START_AT_LOGIN=0`: it starts at the morning time, or on Start), `n` no app, after which the start alone is asked ("Start bosun when you log in?", yes recommended), as it is when no app can be installed, since the start works without the app. A re-run recommends what `BOSUN_MENU_APP` and `BOSUN_START_AT_LOGIN` say (an install from before the key says no). The menu bar part: yes on a first run, but only while `app/publisher.json` has a valid `team_id` (read with `lib/app_release.py`'s own reading and check): with no signed build to install the app is not offered, the question is not asked, `menu_app` is no and the plan says why in a line. Unattended, no, since it opens an app at login and someone should say yes. A re-run goes by `BOSUN_MENU_APP` in the config, so an install without the app stays without. `BOSUN_MENU_APP` is written `1` or `0`; `BOSUN_CONSOLE_ALWAYS` (the app's Open Console needs the console's job) follows it when the answer changes (to `1` or `0`) and stays as it is while the answer does not, so a hand-set value survives re-runs, and turning the app off turns the console job off. After `install.sh`, `bosun app install` (`bosun app update` where the app is already in `~/Applications`, and the plan says which, so a re-run never relaunches an app in use), then `bosun app login on` (which does nothing when the job is there, unchanged and loaded). A refused install (no network, say) is one line, with how to add the app later: `bosun.env` goes back to `BOSUN_MENU_APP="0"` and `BOSUN_CONSOLE_ALWAYS` to the value it had before the run (so a hand-set `1` survives; `0` on a first run), the jobs are reloaded to follow it (a reload that fails is one line saying so; `install.sh`, run again, does it), init is the only writer of `bosun.env` (`bosun app` never writes it), and init still succeeds. Answering No where the app is installed leaves it there: the plan says `bosun app remove` takes it away. |
 
 It only reads where and when prompts were typed, never what they say.

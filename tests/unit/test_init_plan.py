@@ -241,6 +241,26 @@ class RecommendTest(unittest.TestCase):
         answers = init_plan.recommend(facts(repeating_wake="wake at 8:01AM", env={"BOSUN_DAYS": "MTWRF"}))
         self.assertTrue(answers.wake)
 
+    def test_a_laptop_s_wake_note_is_what_doctor_checks(self) -> None:
+        """On power, and the lid open or an external display: doctor's power and lid lines."""
+        self.assertEqual(
+            init_plan.wake_notes(facts(has_battery=True), Answers()), [init_plan.LAPTOP_WAKE_NOTE]
+        )
+        self.assertIn("the lid open or an external display connected", init_plan.LAPTOP_WAKE_NOTE)
+        self.assertEqual(init_plan.wake_notes(facts(), Answers()), [])
+
+    def test_a_rerun_keeps_the_wake_answer_bosun_env_records(self) -> None:
+        """A wake said no to (or another app's left) is BOSUN_WAKE=0, which a re-run recommends again; a
+        bosun.env from before the key had the wake as bosun's, its default."""
+        for env, wake in (
+            ({"BOSUN_WAKE": "0"}, False),
+            ({"BOSUN_WAKE": "1"}, True),
+            ({"BOSUN_DAYS": "MWF"}, True),
+        ):
+            with self.subTest(env=env):
+                self.assertIs(init_plan.recommend(facts(env=env)).wake, wake)
+                self.assertIs(init_plan.recommend(facts(env=env, repeating_wake="wake at 6:00AM")).wake, wake)
+
     def test_a_rerun_keeps_the_listed_windows_and_their_options(self) -> None:
         listed = ({"name": "api", "dir": f"{HOME}/x/api", "model": "haiku"},)
         answers = init_plan.recommend(
@@ -347,6 +367,15 @@ class EnvFileTest(unittest.TestCase):
             init_plan.parse_env(text)["BOSUN_ORCHESTRATOR_CONNECTORS"], answers.orchestrator_connectors
         )
         self.assertIn('BOSUN_ORCHESTRATOR_CONNECTORS=""\n', init_plan.render_env(Answers()))
+
+    def test_the_wake_answer_is_written_as_whether_the_wake_is_bosun_s_to_set(self) -> None:
+        for wake, value in ((True, "1"), (False, "0")):
+            with self.subTest(wake=wake):
+                text = init_plan.render_env(Answers(wake=wake))
+                self.assertEqual(init_plan.parse_env(text)[init_plan.WAKE_KEY], value)
+                self.assertEqual(shell_value_of(text, "BOSUN_WAKE"), value)
+        merged = init_plan.merge_env('BOSUN_WAKE="1"\n# mine\n', Answers(wake=False))
+        self.assertIn('BOSUN_WAKE="0"\n# mine\n', merged)
 
     def test_every_setting_it_writes_is_a_known_one(self) -> None:
         example = (ROOT / "examples" / "generic" / "bosun.env").read_text()
@@ -595,6 +624,34 @@ class PlanTest(unittest.TestCase):
         merged = init_plan.parse_env(self.plan(the_facts, changed).files[0].text)
         self.assertEqual(merged["BOSUN_ORCHESTRATOR_MODEL"], "sonnet")
         self.assertEqual(merged["BOSUN_LEARN_AT"], "15:30")
+
+    def test_a_no_cancels_bosun_s_own_wake_alone(self) -> None:
+        """On a re-run, the wake bosun.env's schedule sets is bosun's to cancel on a no, as uninstall cancels
+        it: only when it is the only repeating event, since pmset cancels them all."""
+        ours = "wakepoweron at 9:01AM weekdays only"
+        env = {"BOSUN_DAYS": "MTWRF", "BOSUN_START_TIME": "09:00"}
+        rerun = facts(env=env, repeating_wake=ours, repeating=(ours,))
+        plan = self.plan(rerun, Answers(wake=False))
+        self.assertEqual((plan.cancel_wake, plan.cancel_event), ("sudo pmset repeat cancel", ours))
+        moved = self.plan(
+            rerun, Answers(wake=False, start="10:00", days="MWF")
+        )  # judged by bosun.env's schedule
+        self.assertEqual(moved.cancel_event, ours)
+        self.assertIn(
+            f"./install.sh --cancel-wake '{ours}'", "\n".join(init_plan.step_lines(moved, "/Users/me"))
+        )
+        steps = "\n".join(init_plan.step_lines(plan, "/Users/me"))
+        self.assertIn("./install.sh --cancel-wake", steps)
+        self.assertIn("sudo pmset repeat cancel   cancels bosun's repeating wake", steps)
+        self.assertIn("is cancelled, since the answer is no", " ".join(plan.notes))
+        for changed, why in (
+            ({"repeating": (ours, "shutdown at 11:00PM every day")}, "another event would go with it"),
+            ({"env": {}}, "a first run cannot tell whose it is"),
+            ({"repeating": ("wakepoweron at 9:01AM every day",)}, "other days: not bosun's"),
+        ):
+            with self.subTest(why=why):
+                self.assertEqual(self.plan(replace(rerun, **changed), Answers(wake=False)).cancel_wake, "")
+        self.assertEqual(self.plan(rerun, Answers(wake=True, start="09:00")).cancel_wake, "")
 
     def test_a_missing_tool_or_folder_blocks(self) -> None:
         plan = self.plan(facts(missing_tools=("tmux", "claude")), Answers(), missing=("~/gone",))

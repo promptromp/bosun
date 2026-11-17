@@ -88,6 +88,9 @@ You rarely type these: bosun's windows, hooks and jobs run them.
   `BOSUN_MENU_APP="0"` and the plan says why. A refused install (no network, say) puts `BOSUN_MENU_APP` back to `0`
   and `BOSUN_CONSOLE_ALWAYS` back to what it was, says how to add the app later, and init still succeeds. Answering
   No where the app is installed leaves it there, and says that `bosun app remove` takes it away.
+- **Exit status:** 0 done (or only printed); 1 blocked, or `install.sh` stopped at a step (its `ERROR` line said
+  again); 2 bad usage or answers; 3 set up, but `bosun doctor` found problems, said again last. `install.sh` exits 3
+  for that too, and 1 when a step stopped it.
 
 How it decides: [design/init.md](design/init.md).
 
@@ -98,7 +101,8 @@ their own auto-update off (`agy update`, once, before the windows start or refre
 notification and stops nothing), then starts or refreshes the windows. `--skip-setup` skips the setup steps only.
 
 - **After a `bosun quit`** that paused the morning start, it logs that and exits 0 before doing anything, until
-  `bosun start`; after one that did not, it starts as usual and ends the quit.
+  `bosun start`. Its line, `morning run skipped: ...`, ends the run for the watchdog, as a quit during the run does.
+  After a quit that did not pause the morning start, it starts as usual and ends the quit.
 - **`--now`** is the same run at any hour or day, as you start it: it ends a `bosun quit`, paused or not, instead of
   stopping for one. It holds the keep-awake until `BOSUN_AWAKE_UNTIL` only while now is inside your hours
   (`BOSUN_DAYS`, from `BOSUN_START_TIME` to `BOSUN_AWAKE_UNTIL`), and none outside them, saying so in one line;
@@ -271,7 +275,8 @@ last run, the Mac's last wake and its boot (a time later than now, after the clo
 It checks, in order: the tools (on launchd's PATH), the Claude Code login, the config, names, the schedule, the
 watchdog's and learning's jobs, power (on AC, the lid open), the login keychain, shells left behind by earlier window
 starts, the setup steps, the ontology and the ledger against their journals, what each window may reach, and what
-the last `bosun update` left to you.
+the last `bosun update` left to you. It judges the watchdog as `bosun status` does: it skips runs while bosun is quit
+or an update holds it, and a watchdog job that never ran warns three intervals after it was loaded.
 
 <details class="note" markdown>
 <summary>What fails and what only warns</summary>
@@ -483,7 +488,10 @@ bosun settings set BOSUN_UPDATE_CHANNEL=main --json
   now is outside your hours.
 - **The wake**: when the days or the start time change and the Mac's repeating wake is bosun's, `set` asks for your
   password first (`sudo -v`) and moves it with `sudo pmset repeat wakeorpoweron`. When sudo is cancelled or refuses,
-  nothing is written. Another app's repeating wake is left as it is, and said, unless `--replace-wake`.
+  nothing is written. Another app's repeating wake is left as it is, and said, unless `--replace-wake`. A wake `set`
+  sets is bosun's to set from then on: `BOSUN_WAKE=1` is written with the change (`bosun doctor` then checks it). With
+  `BOSUN_WAKE=0`, bosun's own wake left from before is not moved either (`--json` shows it as `other`), and the note
+  says that `sudo pmset repeat cancel` cancels it (and any other repeating event).
 - **One at a time**: `set` is refused while `bosun update`, `bosun init` or another `set` runs (exit 1), and the
   wizard is refused while a `set` runs. A value or key it does not take is exit 2.
 

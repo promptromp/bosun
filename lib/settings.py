@@ -10,16 +10,20 @@ change needs done on the Mac (sudo, the launchd jobs, pmset, the keep-awake), wh
         the view, one JSON object (`contract` 1; it only grows), or with --text as lines for a person
     settings.py plan --config-dir D [--example F] KEY=VALUE...
         what the change needs done, one effect a line; a refused change: exit 2 and one line on stderr
-    settings.py wake-owner --config-dir D [--example F] [--schedule S]
-        whose the Mac's repeating wake is: ours, none or other
-    settings.py write --config-dir D [--example F] --stamp S KEY=VALUE...
-        the change written, and what changed as JSON
+    settings.py wake-owner --config-dir D [--example F] [--schedule S] [--set KEY=VALUE]...
+        whose the Mac's repeating wake is: ours, leftover (the one bosun sets, though BOSUN_WAKE=0 says it
+        sets none: to cancel, never to move), none or other; --set: a setting in force over what bosun.env
+        says (the environment's, as `bosun doctor` and install.sh have it)
+    settings.py write --config-dir D [--example F] --stamp S [--wake] KEY=VALUE...
+        the change written, and what changed as JSON; --wake: the change sets the Mac's repeating wake, which
+        is then bosun's to set (BOSUN_WAKE=1), written with it
     settings.py put-back --config-dir D
         after a step of `set` that failed: bosun.env as `write` (its JSON on stdin) found it: the backup it
         made copied back, or the bosun.env it made removed; neither (it reports no backup) is exit 1
-    settings.py say [--json] [--wake-left]
+    settings.py say [--json] [--wake-left] [--wake-leftover]
         what `write` printed (on stdin) as the lines a person reads, or as `set --json`'s object; --wake-left:
-        with the note that another app's repeating wake was left as it is
+        with the note that another app's repeating wake was left as it is; --wake-leftover: that bosun's own,
+        which BOSUN_WAKE=0 says it does not set, was
     settings.py error MESSAGE
         `set --json`'s object for a failure
 
@@ -48,14 +52,21 @@ from awake import DAY_LETTERS
 CONTRACT = 1
 JOBS, WAKE, KEEP_AWAKE = "jobs", "wake", "keep-awake"  # what a change needs done
 OURS, NONE, OTHER = "ours", "none", "other"  # whose the Mac's repeating wake is
+LEFTOVER = "leftover"  # bosun's own, though BOSUN_WAKE=0: shown as other in `get --json`, which the app reads
 EXAMPLE = Path(__file__).resolve().parents[1] / "examples" / "generic" / "bosun.env"  # the defaults
 DAYS, START, UNTIL, LEARN_AT = "BOSUN_DAYS", "BOSUN_START_TIME", "BOSUN_AWAKE_UNTIL", "BOSUN_LEARN_AT"
 SCHEDULE_KEYS = {"days": DAYS, "start": START, "until": UNTIL}  # init_plan.schedule_problems' names for them
 WAKE_DELAY = "BOSUN_WAKE_DELAY_MINUTES"
+WAKE_OURS = init_plan.WAKE_KEY  # whether the Mac's repeating wake is bosun's to set: 1 once `set` sets it
 WRITER = "bosun settings"  # the comment over a setting it adds: "# Added by `bosun settings`"
 WAKE_LEFT = (
     "another app's repeating wake was left as it is (pmset keeps one), so the Mac does not wake for bosun's "
     "schedule; --replace-wake replaces it"
+)
+WAKE_LEFTOVER = (
+    "bosun's own repeating wake is still set, though BOSUN_WAKE=0 says bosun sets none, and was left as is: "
+    f"{init_plan.CANCEL_WAKE} cancels it ({init_plan.CANCEL_TAKES_ALL}), "
+    "--replace-wake makes it bosun's again"
 )
 
 
@@ -226,16 +237,30 @@ def _schedule_changes(current: Mapping[str, str], wanted: Mapping[str, str]) -> 
     return {LEARN_AT: (before, learn)} if moved and learn != before else {}
 
 
-def change(env_text: str, assignments: Sequence[str], defaults: Mapping[str, str]) -> Change:
+def _wake_changes(
+    current: Mapping[str, str], changed: Mapping[str, tuple[str, str]], wake: bool
+) -> dict[str, tuple[str, str]]:
+    """BOSUN_WAKE made 1, when the change (<changed>, not nothing) sets the Mac's repeating wake (<wake>) and
+    the config (<current>) does not say it is bosun's yet."""
+    if wake and changed and current.get(WAKE_OURS, "1") != "1":
+        return {WAKE_OURS: (current.get(WAKE_OURS, ""), "1")}
+    return {}
+
+
+def change(
+    env_text: str, assignments: Sequence[str], defaults: Mapping[str, str], *, wake: bool = False
+) -> Change:
     """<env_text> with <assignments> made (KEY=VALUE each); SettingsError, in one line, for a key it does
     not offer, one without a value or given twice, a value the wizard would refuse, or a schedule that is not
-    one."""
+    one. <wake>: the change sets the Mac's repeating wake, which is bosun's from then on (BOSUN_WAKE=1, with
+    the change it comes with: on its own it is nothing to write)."""
     wanted = _wanted(assignments)
     current = {**defaults, **assigned(env_text)}
     real = {key: value for key, value in wanted.items() if current.get(key, "") != value}
     changed = {key: (current.get(key, ""), value) for key, value in real.items()}
     if real.keys() & set(SCHEDULE_KEYS.values()):
         changed.update(_schedule_changes(current, real))
+    changed.update(_wake_changes(current, changed, wake))
     if not changed:
         return Change(env_text, {}, frozenset())
     effects = frozenset().union(*(BY_KEY[key].effects for key in changed if key in BY_KEY))
@@ -245,7 +270,9 @@ def change(env_text: str, assignments: Sequence[str], defaults: Mapping[str, str
 
 def wake_owner(schedule: str, env: Mapping[str, str], defaults: Mapping[str, str]) -> str:
     """Whose the Mac's repeating wake in <schedule> (`pmset -g sched`) is: OURS when it is the one bosun sets
-    for the settings in <env> (init_plan.wake_command would set none), NONE when there is none, else OTHER."""
+    for the settings in <env> (init_plan.wake_command would set none), LEFTOVER when it is that one but <env>
+    says BOSUN_WAKE=0 (a wake left from before the no: to cancel, not to move), NONE when there is none, else
+    OTHER."""
     wake = init_detect.repeating_wake(schedule)
     if not wake:
         return NONE
@@ -256,7 +283,9 @@ def wake_owner(schedule: str, env: Mapping[str, str], defaults: Mapping[str, str
         command = init_plan.wake_command(facts, answers)
     except ValueError:  # a start time or a delay that does not parse: bosun sets no wake of its own then
         return OTHER
-    return OURS if not command else OTHER
+    if command:
+        return OTHER
+    return LEFTOVER if settings.get(WAKE_OURS, "1") == "0" else OURS
 
 
 def result(changed: Mapping[str, tuple[str, str]], notes: Sequence[str]) -> dict[str, Any]:
@@ -283,11 +312,16 @@ WAKE_WORDS = {
     OURS: "bosun's (bosun moves it with the days and the start time)",
     NONE: "none",
     OTHER: "another app's (pmset keeps one: bosun leaves it, unless set with --replace-wake)",
+    LEFTOVER: (
+        f"bosun's from before, though BOSUN_WAKE=0 says it sets none ({init_plan.CANCEL_WAKE} ends it; "
+        f"{init_plan.CANCEL_TAKES_ALL})"
+    ),
 }
 
 
-def describe(shown: Mapping[str, Any]) -> list[str]:
-    """`bosun settings get` for a person: a line a setting, with what it means."""
+def describe(shown: Mapping[str, Any], owner: str | None = None) -> list[str]:
+    """`bosun settings get` for a person: a line a setting, with what it means, and whose the wake is
+    (<owner>, wake_owner's answer, which the view shows as the app reads it)."""
     folder, error = f"{shown['config_dir']}/{init_plan.ENV_FILE}", shown["error"]
     if not shown["readable"]:
         head = [f"{folder} cannot be read ({error}): fix it, or run bosun init"]
@@ -304,7 +338,8 @@ def describe(shown: Mapping[str, Any]) -> list[str]:
         where = "set" if setting["set"] else "default"
         valid = "" if setting["valid"] else ", not one bosun can use: fix it with bosun init"
         head.append(f"{key}={setting['value']}  ({where}{valid})  {setting['meaning']}")
-    head.append(f"the Mac's repeating wake: {WAKE_WORDS.get(shown['wake'], shown['wake'])}")
+    wake = owner or shown["wake"]
+    head.append(f"the Mac's repeating wake: {WAKE_WORDS.get(wake, wake)}")
     return head
 
 
@@ -334,14 +369,18 @@ def _parser() -> _Parser:
         sub.add_argument("--example", type=Path, default=EXAMPLE)
         if name in ("get", "wake-owner"):
             sub.add_argument("--schedule")
+        if name == "wake-owner":
+            sub.add_argument("--set", action="append", default=[], metavar="KEY=VALUE")
         if name in ("plan", "write"):
             sub.add_argument("assignments", nargs="*")
     commands.choices["get"].add_argument("--env-error", default="")
     commands.choices["get"].add_argument("--text", action="store_true")
     commands.choices["write"].add_argument("--stamp", required=True)
+    commands.choices["write"].add_argument("--wake", action="store_true")
     say = commands.add_parser("say", allow_abbrev=False)
     say.add_argument("--json", action="store_true")
     say.add_argument("--wake-left", action="store_true")
+    say.add_argument("--wake-leftover", action="store_true")
     commands.add_parser("error", allow_abbrev=False).add_argument("message")
     commands.add_parser("put-back", allow_abbrev=False).add_argument("--config-dir", type=Path, required=True)
     return parser
@@ -349,9 +388,9 @@ def _parser() -> _Parser:
 
 def _get(args: argparse.Namespace, known: Mapping[str, str], text: str | None, error: str | None) -> int:
     error = error if text is None else args.env_error or None  # why Python, else why the shell, could not
-    wake = wake_owner(_schedule(args.schedule), assigned(text) if text is not None else {}, known)
-    shown = view(text, error, known, wake, str(args.config_dir))
-    print("\n".join(describe(shown)) if args.text else json.dumps(shown))
+    owner = wake_owner(_schedule(args.schedule), assigned(text) if text is not None else {}, known)
+    shown = view(text, error, known, OTHER if owner == LEFTOVER else owner, str(args.config_dir))
+    print("\n".join(describe(shown, owner)) if args.text else json.dumps(shown))
     return 0
 
 
@@ -366,9 +405,10 @@ def _on_file(args: argparse.Namespace) -> int:
         print(f"settings.py: bosun.env cannot be read: {error}", file=sys.stderr)
         return 1
     if args.command == "wake-owner":
-        print(wake_owner(_schedule(args.schedule), assigned(text), known))
+        in_force = dict(setting.partition("=")[::2] for setting in args.set)
+        print(wake_owner(_schedule(args.schedule), {**assigned(text), **in_force}, known))
         return 0
-    done = change(text, args.assignments, known)
+    done = change(text, args.assignments, known, wake=args.command == "write" and args.wake)
     if args.command == "plan":
         print("".join(f"{effect}\n" for effect in sorted(done.effects)), end="")
         return 0
@@ -416,6 +456,7 @@ def _say(args: argparse.Namespace, stdin: TextIO) -> int:
     written = json.load(stdin)
     changed = {key: (pair[0], pair[1]) for key, pair in written["changed"].items()}
     notes = [*written.get("notes", []), *([WAKE_LEFT] if args.wake_left else [])]
+    notes += [WAKE_LEFTOVER] if args.wake_leftover else []
     if args.json:
         print(json.dumps(result(changed, notes)))
     else:

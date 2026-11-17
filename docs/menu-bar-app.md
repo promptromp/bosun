@@ -81,8 +81,11 @@ What's Wrong... (yellow and red only), Open Console, Check for Updates..., Setti
 A status older than the last good one says "(not current)" after its sentence. The icon shows a small dot for a
 warning, an error or an update ready. An ERROR line in the logs makes the menu yellow for the hour after it was
 logged. A watchdog that has stopped running makes it yellow too, but only once the Mac has been awake long enough
-for it to have run (three of its five-minute intervals), so a morning wake or a restart does not. How the status
-is worked out: [design/menu-bar.md](design/menu-bar.md).
+for it to have run (three of its five-minute intervals), so a morning wake or a restart does not. A watchdog job that
+has never run counts from when it was loaded (`loaded-watchdog` in the state folder), so one that never starts turns
+yellow too. `bosun doctor` judges the watchdog the same way (a job that is not loaded warns there whether or not it
+is installed), and while bosun is quit, or an update holds it, it says that the watchdog skips its runs. How the
+status is worked out: [design/menu-bar.md](design/menu-bar.md).
 
 </details>
 

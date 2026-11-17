@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import select
@@ -42,15 +43,21 @@ class TerminalUi:
         self.write(text + "\n")
 
     def read_byte(self) -> bytes:
-        """One byte, in a mode that does not wait for Return; b"" if the terminal has gone away."""
+        """One byte, in a mode that does not wait for Return; b"" if the terminal has gone away. The
+        terminal's mode is put back however the read ends, also by Ctrl-C (a KeyboardInterrupt out of the
+        read), which would leave the shell after it without echo."""
         try:
             saved = termios.tcgetattr(self.in_fd)
-            tty.setcbreak(self.in_fd, termios.TCSANOW)  # the default flushes what was typed ahead
-            data = self.read_key_bytes()
-            termios.tcsetattr(self.in_fd, termios.TCSANOW, saved)  # DRAIN can wait forever on macOS
         except (OSError, termios.error):
             return b""
-        return data
+        try:
+            tty.setcbreak(self.in_fd, termios.TCSANOW)  # the default flushes what was typed ahead
+            return self.read_key_bytes()
+        except (OSError, termios.error):
+            return b""
+        finally:
+            with contextlib.suppress(OSError, termios.error):
+                termios.tcsetattr(self.in_fd, termios.TCSANOW, saved)  # DRAIN can wait forever on macOS
 
     def read_key_bytes(self) -> bytes:
         data = os.read(self.in_fd, 1)

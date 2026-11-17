@@ -23,6 +23,9 @@
 # a backup next to it, and setup.sh is never changed once it exists. BOSUN_INIT_CHANNEL=main in the
 # environment (get.sh sets it for an install made with BOSUN_BRANCH) is what bosun update follows,
 # written to bosun.env as BOSUN_UPDATE_CHANNEL and never asked. See docs/design/init.md.
+# Exit status: 0 done (or only printed); 1 blocked, or install.sh stopped at a step (its ERROR line is said
+# again); 2 bad usage or answers; 3 set up (the app added, the start asked), but `bosun doctor` found problems,
+# said again last (install.sh's own exit status for that).
 set -uo pipefail
 export BOSUN_USER_PATH="${BOSUN_USER_PATH:-$PATH}" # before common.sh extends PATH for launchd's sake
 source "$(dirname "$0")/../lib/common.sh"

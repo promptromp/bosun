@@ -3173,7 +3173,7 @@ check "--restart starts the session afresh" bash -c 'grep -q "restarting existin
 check "an unknown mode is an error" fails_with "must be refresh, drain or restart" env BOSUN_ON_EXISTING=bogus "$BOSUN" start
 "$BOSUN" stop >/dev/null 2>&1
 
-section stopped-until-started "stopped until started (what bosun quit leaves: quit.json)" covers 'libexec/bosun-learn,libexec/bosun-morning,libexec/bosun-quit,libexec/bosun-start,libexec/bosun-status,libexec/bosun-stop,libexec/bosun-watchdog,lib/quit_state.py'
+section stopped-until-started "stopped until started (what bosun quit leaves: quit.json)" covers 'libexec/bosun-learn,libexec/bosun-morning,libexec/bosun-quit,libexec/bosun-start,libexec/bosun-status,libexec/bosun-stop,libexec/bosun-watchdog,lib/quit_state.py,lib/watchdog.py'
 mkdir -p "$WORK/fake-caffeinate"
 printf '#!/bin/sh\nexit 0\n' >"$WORK/fake-caffeinate/caffeinate" # a real one would keep this Mac awake
 chmod +x "$WORK/fake-caffeinate/caffeinate"
@@ -3191,6 +3191,13 @@ check "... but a learn you type yourself still runs" contains "$(BOSUN_CLAUDE_BI
 out="$("$BOSUN" morning --skip-setup 2>&1)"
 check "a paused morning logs why and starts nothing" bash -c 'grep -qE "the morning start is paused \(bosun quit at [0-9]{2}:[0-9]{2}\); start bosun to resume" <<<"$1" && ! grep -qE "network is up|holding keep-awake|starting tmux session" <<<"$1"' _ "$out"
 check "... it exits 0" "$BOSUN" morning --skip-setup
+check "... and ends its log with a line the watchdog reads as the run's end, skipped: once bosun starts, not a run still going or failed" python3 -I -c '
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import watchdog
+run = watchdog.last_real_run(Path(sys.argv[2]))
+sys.exit(not (run is not None and run.outcome == "skipped"))' "$ROOT/lib" "$BOSUN_LOG_DIR/morning-$(date +%F).log"
 check "... with no session, no keep-awake and the file still there" bash -c '! tmux -L "$1" has-session -t =smoke && [ ! -e "$2/keep-awake-smoke.pid" ] && [ -f "$2/quit.json" ]' _ "$SOCKET" "$BOSUN_STATE_DIR"
 check "... also as a dry run" contains "$("$BOSUN" morning --dry-run 2>&1)" "the morning start is paused"
 write_quit running
@@ -3207,6 +3214,7 @@ rm -f "$BOSUN_STATE_DIR/keep-awake-smoke.pid"
 write_quit paused
 "$BOSUN" start >/dev/null 2>&1
 check "bosun start clears it, paused or not" test ! -e "$BOSUN_STATE_DIR/quit.json"
+check "... and stamps when it made the session (the watchdog's gate on a day no morning run is owed)" grep -qE "^$(date +%F) [0-9:]{8}$" "$BOSUN_STATE_DIR/started-smoke"
 check "... and the watchdog runs again" not_contains "$("$BOSUN" watchdog --dry-run 2>&1)" "bosun is stopped"
 check "... and with BOSUN_CONSOLE_ALWAYS off it leaves no marker for the console job" test ! -e "$BOSUN_STATE_DIR/console/wanted"
 "$BOSUN" stop >/dev/null 2>&1
@@ -3454,7 +3462,7 @@ printf 'setup_steps() { python3 -I -c "import sys; from pathlib import Path; sys
 quit_morning_out="$(PATH="$WORK/fake-caffeinate:$PATH" BOSUN_SETUP_FILE="$WORK/quit-during-setup.sh" BOSUN_NETWORK_PROBE_URL=file:///dev/null "$BOSUN" morning --awake-minutes 1 2>&1 </dev/null)"
 quit_morning_rc=$?
 check "a quit made while the morning sets up survives the morning's start, which logs that and starts nothing" bash -c 'grep -q "bosun was quit at [0-9:]*: not starting it" <<<"$1" && [ -f "$2/quit.json" ] && ! tmux -L "$3" has-session -t =smoke' _ "$quit_morning_out" "$BOSUN_STATE_DIR" "$SOCKET"
-check "... the morning then logs that a quit came during it, not that it completed, and exits 0" bash -c 'grep -q "bosun quit during the morning run; not starting" <<<"$1" && ! grep -q "morning run complete" <<<"$1" && [ "$2" -eq 0 ]' _ "$quit_morning_out" "$quit_morning_rc"
+check "... the morning then logs that a quit came during it, not that it completed, and exits 0" bash -c 'grep -q "morning run skipped: bosun quit during the run" <<<"$1" && ! grep -q "morning run complete" <<<"$1" && [ "$2" -eq 0 ]' _ "$quit_morning_out" "$quit_morning_rc"
 check "... and does not tell you the sessions are ready" bash -c '! grep -q "Sessions ready" "$1"' _ "$WORK/quit-notify.log"
 # The same, with a problem of the run's own (no network): its problems line names the quit too, so it is not read as a start that failed.
 rm -f "$BOSUN_STATE_DIR/quit.json"
@@ -3474,7 +3482,7 @@ rm -f "$BOSUN_STATE_DIR/quit.json" "$BOSUN_STATE_DIR/console/wanted" "$BOSUN_STA
 # current time, so these hold whatever time the suite runs at: a window ending in 20 minutes that began 2 minutes
 # ago is inside (an end earlier than the start runs past midnight, which the window rule handles), one that is 10
 # to 20 minutes ahead is outside, and with every day but today's and yesterday's scheduled, no window holds now.
-section morning-now "morning --now (the morning run at any hour or day)" needs quit covers 'libexec/bosun-morning,libexec/bosun-quit,libexec/bosun-stop,libexec/bosun-ledger,lib/keep_awake.py,lib/login_start.py'
+section morning-now "morning --now (the morning run at any hour or day)" needs quit covers 'libexec/bosun-morning,libexec/bosun-quit,libexec/bosun-stop,libexec/bosun-ledger,lib/keep_awake.py,lib/login_start.py,lib/awake.py'
 today_letter="$(printf MTWRFSU | cut -c "$(date +%u)")"
 yesterday_letter="$(printf MTWRFSU | cut -c "$(date -v-1d +%u)")"
 unscheduled_days="$(printf MTWRFSU | tr -d "$today_letter$yesterday_letter")"
@@ -3515,6 +3523,19 @@ check "--now inside the awake window holds the keep-awake until BOSUN_AWAKE_UNTI
 check "... the record ends at that minute" keep_awake_ends_at "$inside_until"
 now_clean
 
+# A window that began yesterday and runs past midnight into now (an hour from now until half an hour from now, the
+# next day): the run's log is yesterday's, the workday's, which the watchdog reads (lib/awake.py's morning-log).
+now_hm=$((10#$(date +%H%M)))
+if [ "$now_hm" -ge 30 ] && [ "$now_hm" -lt 2230 ]; then
+  rm -f "$BOSUN_LOG_DIR/morning-$(date -v-1d +%F).log"
+  now_morning BOSUN_DAYS=MTWRFSU BOSUN_START_TIME="$(date -v+1H +%H:%M)" BOSUN_AWAKE_UNTIL="$(date -v+30M +%H:%M)" "$BOSUN" morning --now --dry-run >/dev/null
+  check "in a window that began yesterday and runs past midnight, the run's log is the workday's, as the watchdog reads it" grep -q "=== morning run (trigger=now, session=smoke, dry_run=1) ===" "$BOSUN_LOG_DIR/morning-$(date -v-1d +%F).log"
+fi
+check "the morning log's name falls back to today's when lib/awake.py cannot say, with a warning on stderr" bash -c '
+  source "$1/lib/common.sh"; load_config
+  python3() { return 1; }
+  name="$(morning_log_file 2>"$2")" && [ "$name" = "$BOSUN_LOG_DIR/morning-$(date +%F).log" ] && grep -q "WARN: lib/awake.py did not name the morning log" "$2"' _ "$ROOT" "$WORK/morning-log.err"
+
 out="$(now_morning "${awake_unscheduled[@]}" "$BOSUN" morning --now --skip-setup)"
 check "--now on a day that is not scheduled holds no keep-awake, and starts the session" bash -c 'grep -q "outside the awake window" <<<"$1" && ! grep -q "holding keep-awake" <<<"$1" && tmux -L "$2" has-session -t =smoke' _ "$out" "$SOCKET"
 check "... no pid file, no record" no_keep_awake
@@ -3542,7 +3563,7 @@ check "... starting nothing" bash -c '! tmux -L "$1" has-session -t =smoke' _ "$
 # --now clears the quit at its top, but still passes --unless-quit to its start: a quit made while this Start sets up is kept.
 out="$(now_morning "${awake_outside[@]}" BOSUN_SETUP_FILE="$WORK/quit-during-setup.sh" "$BOSUN" morning --now)"
 now_rc=$?
-check "a quit made while --now sets up survives its start, which logs that, and the run says so and exits 0" bash -c 'grep -q "bosun was quit at [0-9:]*: not starting it" <<<"$1" && grep -q "bosun quit during the morning run; not starting" <<<"$1" && ! grep -q "morning run complete" <<<"$1" && [ "$2" -eq 0 ] && [ -f "$3/quit.json" ] && ! tmux -L "$4" has-session -t =smoke' _ "$out" "$now_rc" "$BOSUN_STATE_DIR" "$SOCKET"
+check "a quit made while --now sets up survives its start, which logs that, and the run says so and exits 0" bash -c 'grep -q "bosun was quit at [0-9:]*: not starting it" <<<"$1" && grep -q "morning run skipped: bosun quit during the run" <<<"$1" && ! grep -q "morning run complete" <<<"$1" && [ "$2" -eq 0 ] && [ -f "$3/quit.json" ] && ! tmux -L "$4" has-session -t =smoke' _ "$out" "$now_rc" "$BOSUN_STATE_DIR" "$SOCKET"
 now_clean
 
 # --at-login (lib/login_start.py): the decision comes before the run's header, so a skip leaves none.
@@ -4112,6 +4133,7 @@ EOF
 cat >"$HOME/.local/bin/sudo" <<EOF
 #!/bin/bash
 echo "sudo \$*" >>"$WORK/system.log"
+[ "\$1" = -v ] && exit 0 # the password asked for ahead: always given here
 [ "\$1" = -n ] && shift
 exec "\$@"
 EOF
@@ -4123,17 +4145,61 @@ INSTALL_CFG="$WORK/install-config"
 PLIST="$HOME/Library/LaunchAgents/$BOSUN_LAUNCHD_LABEL.plist"
 # Never let a test touch the real launchd, pmset or sudo: only run if the fakes come first on PATH.
 if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pmset; command -v sudo' _ "$ROOT" | tr '\n' ' ')" = "$HOME/.local/bin/launchctl $HOME/.local/bin/pmset $HOME/.local/bin/sudo " ]; then
-  section install "install and uninstall (fake launchctl and pmset, test label)" needs ledger,knowledge covers 'install.sh,templates/**,examples/**,tests/fixtures/knowledge/**,libexec/bosun-console,libexec/bosun-doctor,libexec/bosun-kg,libexec/bosun-morning,libexec/bosun-ledger'
+  section install "install and uninstall (fake launchctl and pmset, test label)" needs ledger,knowledge covers 'install.sh,templates/**,examples/**,tests/fixtures/knowledge/**,libexec/bosun-console,libexec/bosun-doctor,libexec/bosun-kg,libexec/bosun-morning,libexec/bosun-ledger,lib/menu_status_live.py'
   touch "$WORK/launchctl-fails"
   check "an install that stops at the launchd jobs fails" fails_with "could not load the launchd jobs" env BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" --example generic
   check "... and leaves ~/.local/bin/bosun unlinked, so the install line takes the install for unfinished and runs init again" test ! -e "$HOME/.local/bin/bosun"
   rm -f "$WORK/launchctl-fails" "$HOME"/Library/LaunchAgents/"$BOSUN_LAUNCHD_LABEL"*.plist
+  check "install checks Claude Code as BOSUN_CLAUDE_BIN names it" fails_with "missing: $WORK/no-claude/claude" env BOSUN_CONFIG_DIR="$INSTALL_CFG" BOSUN_CLAUDE_BIN="$WORK/no-claude/claude" "$ROOT/install.sh" --example generic
   BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" --example generic >/dev/null 2>&1
   check "install copies the example config" bash -c '[ -f "$1/bosun.env" ] && [ -f "$1/sessions.yml" ] && [ -f "$1/setup.sh" ]' _ "$INSTALL_CFG"
   check "install links bosun into ~/.local/bin" test "$(readlink "$HOME/.local/bin/bosun")" = "$BOSUN"
   check "install writes a valid launchd job" plutil -lint -s "$PLIST"
   check "install loads it with launchctl" grep -q "launchctl bootstrap gui/$(id -u) $PLIST" "$WORK/system.log"
   check "install never changes pmset without --with-wake" bash -c '! grep -q "pmset repeat" "$1"' _ "$WORK/system.log"
+  stamped_now() { # <stamp file>...: each holds a time of the last ten minutes, as reload_job writes it
+    python3 -I -c '
+import datetime, sys
+for path in sys.argv[1:]:
+    stamp = datetime.datetime.strptime(open(path).read().strip(), "%Y-%m-%d %H:%M:%S")
+    assert abs((datetime.datetime.now() - stamp).total_seconds()) <= 600, path' "$@"
+  }
+  check "loading the morning job and the watchdog stamps when each was loaded, which the watchdog goes by" stamped_now "$BOSUN_STATE_DIR/loaded-morning" "$BOSUN_STATE_DIR/loaded-watchdog"
+  echo "2026-01-05 05:00:00" >"$BOSUN_STATE_DIR/loaded-morning"
+  BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" >/dev/null 2>&1
+  check "... a run that reloads nothing moves no stamp (a re-run on the day of a missed morning keeps its alarm)" grep -qx "2026-01-05 05:00:00" "$BOSUN_STATE_DIR/loaded-morning"
+  rm -f "$PLIST"
+  cp -p "$HOME/.local/bin/sudo" "$WORK/sudo.ok"
+  printf '#!/bin/sh\nexit 1\n' >"$HOME/.local/bin/sudo"
+  check "... a wake that sudo refuses fails the install" fails_with "pmset failed" env BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" --with-wake
+  check "... after the morning job was loaded again, and stamped" stamped_now "$BOSUN_STATE_DIR/loaded-morning"
+  mv "$WORK/sudo.ok" "$HOME/.local/bin/sudo"
+  # reload_changed_jobs on its own, with the install's config: a reload that keeps the job's time keeps its stamp
+  # (the run due today stays owed), one that moves it stamps it, and the labels on stdout are only labels.
+  reload_jobs() { env BOSUN_CONFIG_DIR="$INSTALL_CFG" "$@" bash -c 'source "$1/lib/common.sh"; load_config; reload_changed_jobs' _ "$ROOT"; }
+  echo "2026-01-05 05:00:00" >"$BOSUN_STATE_DIR/loaded-morning"
+  echo "<!-- touched -->" >>"$PLIST"
+  out="$(reload_jobs)"
+  check "a reload of the morning job that keeps its time keeps its stamp" bash -c 'grep -qx "$1" <<<"$2" && grep -qx "2026-01-05 05:00:00" "$3"' _ "$BOSUN_LAUNCHD_LABEL" "$out" "$BOSUN_STATE_DIR/loaded-morning"
+  reload_jobs BOSUN_START_TIME=07:00 >/dev/null
+  check "... and one that moves its time stamps it" stamped_now "$BOSUN_STATE_DIR/loaded-morning"
+  reload_jobs BOSUN_START_TIME=07:00 >/dev/null # its days alone change next
+  echo "2026-01-05 05:00:00" >"$BOSUN_STATE_DIR/loaded-morning"
+  reload_jobs BOSUN_START_TIME=07:00 BOSUN_DAYS=MTWRFSU >/dev/null
+  check "... and so does one that changes its days (today added after its time owes no run today)" stamped_now "$BOSUN_STATE_DIR/loaded-morning"
+  echo "2026-01-05 05:00:00" >"$BOSUN_STATE_DIR/loaded-watchdog"
+  echo "<!-- touched -->" >>"$HOME/Library/LaunchAgents/$BOSUN_LAUNCHD_LABEL.watchdog.plist"
+  reload_jobs >/dev/null
+  check "... and a plist with no time of day it can read (the watchdog's interval) counts as moved: stamped" stamped_now "$BOSUN_STATE_DIR/loaded-watchdog"
+  reload_jobs >/dev/null 2>&1 # back at its time
+  ro_state="$WORK/read-only-state"
+  mkdir -p "$ro_state/logs"
+  chmod 555 "$ro_state"
+  rm -f "$PLIST" # a fresh load, which stamps
+  out="$(reload_jobs BOSUN_STATE_DIR="$ro_state" BOSUN_LOG_DIR="$ro_state/logs" 2>"$WORK/reload.err")"
+  chmod 755 "$ro_state"
+  check "a stamp that cannot be written is a line on stderr, never a label on stdout (which install.sh and bosun update read)" bash -c '! grep -q "WARN" <<<"$1" && grep -qx "$2" <<<"$1" && grep -q "WARN: could not write $3/loaded-morning" "$4"' _ "$out" "$BOSUN_LAUNCHD_LABEL" "$ro_state" "$WORK/reload.err"
+  reload_jobs >/dev/null 2>&1 # back in the suite's own state folder
   WATCHDOG_PLIST="$HOME/Library/LaunchAgents/$BOSUN_LAUNCHD_LABEL.watchdog.plist"
   check "install writes the watchdog agent" plutil -lint -s "$WATCHDOG_PLIST"
   check "... and loads it" grep -q "launchctl bootstrap gui/$(id -u) $WATCHDOG_PLIST" "$WORK/system.log"
@@ -4148,9 +4214,50 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   check "doctor checks the learning agent once it is enabled" contains "$doctor_said" "ok    learning agent $BOSUN_LAUNCHD_LABEL.learn loaded"
   check "doctor checks the job that runs --now, which the app's Start kickstarts" contains "$doctor_said" "ok    launchd job $BOSUN_LAUNCHD_LABEL.now loaded"
   check "doctor checks the ledger against its journal" contains "$doctor_said" "ok    the ledger and its journal: ledger is valid"
+  # The watchdog's line, judged as bosun status judges it, in a state folder of its own: its last full run is long
+  # past, but a run it skipped (an update's hold, a quit) is a run; while bosun is quit it says it skips them.
+  wdstate="$WORK/doctor-watchdog-state"
+  mkdir -p "$wdstate/logs"
+  printf '{"last_run": "2026-01-05 05:00:00"}' >"$wdstate/watchdog.json"
+  echo "update in progress: skipping this watchdog run" >"$wdstate/logs/watchdog.launchd.out"
+  wd_doctor() { BOSUN_STATE_DIR="$wdstate" BOSUN_LOG_DIR="$wdstate/logs" "$BOSUN" doctor 2>&1; }
+  check "doctor counts a run the watchdog skipped as a run, as bosun status does" contains "$(wd_doctor)" "ok    watchdog agent $BOSUN_LAUNCHD_LABEL.watchdog loaded; last ran at "
+  BOSUN_STATE_DIR="$wdstate" write_quit paused
+  check "... and while bosun is quit says it skips its runs, with no warning" contains "$(wd_doctor)" "ok    watchdog agent $BOSUN_LAUNCHD_LABEL.watchdog loaded; it skips its runs while bosun is quit"
   # pmset prints the hour after midnight as 0:01AM, not 12:01AM (seen on a real Mac)
   printf 'Repeating power events:\n  wakepoweron at 0:01AM every day\n' >"$WORK/pmset-sched"
-  check "doctor accepts a wake at 00:01, as pmset prints it (0:01AM)" contains "$(BOSUN_START_TIME=00:00 BOSUN_WAKE_DELAY_MINUTES=1 "$BOSUN" doctor 2>&1)" "ok    pmset repeating wake:"
+  check "doctor accepts a wake at 00:01, as pmset prints it (0:01AM)" contains "$(BOSUN_DAYS=MTWRFSU BOSUN_START_TIME=00:00 BOSUN_WAKE_DELAY_MINUTES=1 "$BOSUN" doctor 2>&1)" "ok    pmset repeating wake:"
+  # Whose the wake is, as bosun settings judges it (settings.py wake-owner), for the settings in force.
+  printf 'Repeating power events:\n  wakepoweron at 8:01AM weekdays only\n' >"$WORK/pmset-sched"
+  ours_env=(BOSUN_DAYS=MTWRF BOSUN_START_TIME=08:00 BOSUN_WAKE_DELAY_MINUTES=1)
+  # (with learning on, as the install above loaded it: the check below removes it, and says why)
+  out="$(env "${ours_env[@]}" BOSUN_LEARN_ENABLED=1 BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" 2>&1)"
+  check "install says the wake is bosun's already, and prints no sudo line to set it again" bash -c 'grep -q "repeating wake is bosun'"'"'s already" <<<"$1" && ! grep -q "run once:" <<<"$1"' _ "$out"
+  check "doctor with BOSUN_WAKE=0 and bosun's own wake still set warns that it is left from before, and how to cancel it" contains "$(env "${ours_env[@]}" BOSUN_WAKE=0 "$BOSUN" doctor 2>&1)" "warn  pmset still has bosun's repeating wake:"
+  check "... and with BOSUN_WAKE=1 it is bosun's" contains "$(env "${ours_env[@]}" BOSUN_WAKE=1 "$BOSUN" doctor 2>&1)" "ok    pmset repeating wake:"
+  # install.sh --cancel-wake <event> (cancel_wake): it cancels only while pmset's repeating events are exactly the
+  # event bosun init judged bosun's (pmset cancels them all), whatever schedule bosun.env has by then.
+  cancel_with() { # <shell to run first, to stand in for a tool> <event>
+    env BOSUN_CONFIG_DIR="$INSTALL_CFG" BOSUN_START_TIME=09:00 bash -c 'source "$1/lib/common.sh"; load_config; eval "$2"; cancel_wake "$3"' _ "$ROOT" "$@"
+  }
+  cancel() { cancel_with "" "$1"; }
+  ours_event="wakepoweron at 8:01AM weekdays only"
+  printf 'Repeating power events:\n  %s\n  shutdown at 11:00PM every day\n' "$ours_event" >"$WORK/pmset-sched"
+  check "cancelling bosun's wake is refused while pmset has another repeating event, which it would take too" fails_with "pmset has 2 repeating events, and cancelling takes them all" cancel "$ours_event"
+  printf 'Repeating power events:\n  wakepoweron at 6:30AM every day\n' >"$WORK/pmset-sched"
+  check "... and when pmset's is not the event init judged bosun's (given by hand, or changed since)" fails_with "pmset's (wakepoweron at 6:30AM every day) is not the one bosun init judged bosun's ($ours_event)" cancel "$ours_event"
+  check "... neither ran pmset repeat cancel" bash -c '! grep -q "repeat cancel" "$1"' _ "$WORK/system.log"
+  printf 'Repeating power events:\n  %s\n' "$ours_event" >"$WORK/pmset-sched"
+  pmset_reads="$(grep -c '^pmset -g sched$' "$WORK/system.log")"
+  if cancel_with 'sudo() { return 1; }' "$ours_event" >/dev/null 2>&1; then sudo_refused=no; else sudo_refused=yes; fi
+  check "... nor looked at pmset when sudo was refused: sudo is asked first, so nothing changes behind its prompt" bash -c '[ "$1" = yes ] && [ "$(grep -c "^pmset -g sched$" "$2")" = "$3" ]' _ "$sudo_refused" "$WORK/system.log" "$pmset_reads"
+  out="$(cancel_with 'pmset() { return 1; }' "$ours_event" 2>&1)"
+  cancel_rc=$?
+  check "... and a schedule pmset cannot give is a warning, no failure, and nothing is cancelled" bash -c '[ "$1" = 0 ] && grep -q "WARN: could not read pmset" <<<"$2" && [ -s "$3" ]' _ "$cancel_rc" "$out" "$WORK/pmset-sched"
+  cancel "$ours_event" >/dev/null 2>&1
+  check "that event alone is cancelled, though bosun.env's start has moved to 09:00 since (a no that moved it)" grep -q "sudo -n pmset repeat cancel" "$WORK/system.log"
+  check "... sudo asked first, then pmset looked at, then the cancel with sudo -n" bash -c 'grep -E "^(sudo -v|pmset -g sched|sudo -n pmset repeat cancel)$" "$1" | tail -3 | paste -sd "|" - | grep -qx "sudo -v|pmset -g sched|sudo -n pmset repeat cancel"' _ "$WORK/system.log"
+  check "with no repeating event left there is nothing to cancel, and that is no failure" cancel "$ours_event"
   rm -f "$WORK/pmset-sched"
   # A ledger of its own: a link to an item that is gone (an old prune) warns and adds no failure;
   # a damaged journal fails. (Doctor's login check calls the fake claude, which writes the ledger.)
@@ -4191,8 +4298,9 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   check "a damaged knowledge journal fails doctor" contains "$doctor_said" "FAIL  the knowledge base's journal refuses writes or a rebuild would lose data"
   check "... saying what validate found" contains "$doctor_said" "journal: the journal is damaged: "
   check "... with the reader's warning kept out of the counts' ok line" bash -c '! grep -q "ok    knowledge: .*damaged" <<<"$1"' _ "$doctor_said"
-  BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" >/dev/null 2>&1
+  out="$(BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" 2>&1)"
   check "... and removes it again once disabled" test ! -e "$LEARN_PLIST"
+  check "... saying the setting that is off" contains "$out" "removed launchd job $BOSUN_LAUNCHD_LABEL.learn (no longer wanted: BOSUN_LEARN_ENABLED is not 1)"
   CONSOLE_PLIST="$HOME/Library/LaunchAgents/$BOSUN_LAUNCHD_LABEL.console.plist"
   check "install writes no console job by default" test ! -e "$CONSOLE_PLIST"
   BOSUN_CONSOLE_ALWAYS=1 BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" >/dev/null 2>&1
@@ -4794,6 +4902,13 @@ for line in sys.stdin:
   kill "$init_holder"
   wait "$init_holder" 2>/dev/null
   BOSUN_CONFIG_DIR="$INIT_CFG" "$BOSUN" init --answers "$INIT_ANSWERS" >"$WORK/init.out" 2>&1
+  init_rc=$?
+  init_said="$(cat "$WORK/init.out")"
+  # This made-up machine fails some of doctor's checks (gh is not logged in, ...): bosun is set up all the same.
+  check "init sets bosun up, and exits 3 for the problems doctor found here, which it says last" bash -c '[ "$1" -eq 3 ] && grep -q "bosun is set up\. " <<<"$2" && tail -n 1 <<<"$2" | grep -q "run bosun doctor again" && ! grep -q "install.sh stopped" <<<"$2"' _ "$init_rc" "$init_said"
+  check "... with no wake among them: the answers said no to it, which bosun.env records" bash -c '! sed -n "/found problems:/,\$p" <<<"$2" | grep -q "pmset" && grep -qx "BOSUN_WAKE=\"0\"" "$1/bosun.env"' _ "$INIT_CFG" "$init_said"
+  check "... install.sh prints no sudo pmset line against it" bash -c 'grep -q "not bosun'"'"'s to set (BOSUN_WAKE=0)" <<<"$1" && ! grep -q "run once:  sudo pmset" <<<"$1"' _ "$init_said"
+  check "... and doctor says the wake was declined, in a warning" contains "$init_said" "warn  no repeating pmset wake, and bosun sets none (BOSUN_WAKE=0)"
   check "init writes the config" bash -c 'grep -q "BOSUN_DAYS=\"MWF\"" "$1/bosun.env" && grep -q "name: init-api" "$1/sessions.yml" && [ -f "$1/setup.sh" ]' _ "$INIT_CFG"
   check "what it writes loads as config" env BOSUN_CONFIG_DIR="$INIT_CFG" bash -c 'source "$1/lib/common.sh"; load_config; [ "$BOSUN_START_TIME" = 09:00 ] && [ "$BOSUN_EVENTS_ENABLED" = 1 ] && [ "$BOSUN_REPOS_DIR" = "$HOME/Development" ]' _ "$ROOT"
   check "... and as windows" env BOSUN_CONFIG_DIR="$INIT_CFG" bash -c 'source "$1/lib/common.sh"; load_config; window_specs | grep -q "^init-api	$HOME/Development/init-api	session"' _ "$ROOT"

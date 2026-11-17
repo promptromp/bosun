@@ -26,7 +26,7 @@ Another destination is one more sink in `lib/watchdog.py` (`SINKS`).
 
 | Check | Fires when | Alerts once per |
 |---|---|---|
-| `morning-missing` | On one of your days, `BOSUN_WATCHDOG_GRACE_MINUTES` (15) after the morning run was due (start time plus wake delay), today's morning log has no real (not dry) run | day |
+| `morning-missing` | On one of your days, `BOSUN_WATCHDOG_GRACE_MINUTES` (15) after the morning run was due (start time plus wake delay), today's morning log has no real (not dry) run. Not on a day its job was loaded after the start time, such as install day | day |
 | `morning-failed` | Today's morning run reported problems (a setup step such as an AWS SSO login failed, the network, a window that could not start, an `ERROR`), crashed, or is not done after 45 minutes | day |
 | `session-missing` | After today's morning run, there is no tmux session, unless you ran `bosun stop` today or quit bosun | day |
 | `checkin-missing` | The session runs, but the `checkin` window is gone or not running the check-in loop | day |
@@ -52,8 +52,15 @@ Another destination is one more sink in `lib/watchdog.py` (`SINKS`).
 <details class="note" markdown>
 <summary>More on each check</summary>
 
-- **`morning-failed`**: a crash is launchd's exit code.
-- **`session-missing`**: also not while bosun is quit with `bosun quit`.
+- **`morning-missing`**: not on a day its launchd job was loaded after the start time (a first install, the start
+  time moved to before now, or today added to your days), since launchd runs no time that passed before a load. The
+  load is `loaded-morning` in the state folder, which a fresh load of the job, or one that moves its time or its days,
+  writes.
+- **`morning-failed`**: a crash is launchd's exit code. A run that bosun quit made skip (the morning start paused, or
+  a quit while it set up) ends with `morning run skipped`, which is neither a failure nor a missing run.
+- **`session-missing`**: also not while bosun is quit with `bosun quit`. On a day no morning run is owed (its job
+  loaded after the start time, as on install day), the session is watched from when `bosun start` made it
+  (`started-<session>` in the state folder), as after the wizard's "Start the windows now?".
 - **`orchestrator-down`**: events, check-ins and reports wait meanwhile; 0 turns it off. With
   `BOSUN_WATCHDOG_ORCHESTRATOR_RESTART=1` (the default) a full run restarts the orchestrator once per outage with
   `bosun refresh --unless-active <orchestrator>`, which never replaces a running command or acts while you type.
@@ -76,7 +83,8 @@ Another destination is one more sink in `lib/watchdog.py` (`SINKS`).
   (`awaiting-review`, `approved`).
 - **`long-shell`**: the orchestrator or a repo window. Meanwhile `refresh` does not restart that Claude. Turns in
   between (a check-in, an event) do not end it; any other status does (0 turns it off).
-- **`learn`**: with `BOSUN_LEARN_ENABLED=1`. A crash is a run that ended without an outcome.
+- **`learn`**: with `BOSUN_LEARN_ENABLED=1`. Not on a day its job was loaded after `BOSUN_LEARN_AT`
+  (`loaded-learn`). A crash is a run that ended without an outcome.
 - **`events`**: with `BOSUN_EVENTS_ENABLED=1`. Not a stall while the loop holds events back because the orchestrator
   needs `/login`, which `login-expired` reports, as long as the watchdog's own reading of the orchestrator agrees: a
   hold past a sign that the login works is a loop running older code.
@@ -119,8 +127,9 @@ See [what windows do not have yet](design/harnesses.md#what-windows-do-not-have-
   HH:MM): skipping this run" and exits, before it looks at anything, until `bosun start` (as it skips while an update
   holds its work).
 - **Only in your hours.** Alerts go out on your days (`BOSUN_DAYS`) between `BOSUN_START_TIME` and
-  `BOSUN_AWAKE_UNTIL`; an end at or before the start runs past midnight (08:00 to 01:00 ends at 1 am the next day).
-  Anything found outside them is held, and log lines are not consumed until then. A session that is missing outside
+  `BOSUN_AWAKE_UNTIL`; an end at or before the start runs past midnight (08:00 to 01:00 ends at 1 am the next day),
+  and until then the day is still the one it began on, for the morning run, the session and their alerts. Anything
+  found outside them is held, and log lines are not consumed until then. A session that is missing outside
   your hours is no finding: `bosun status` and the menu bar app show "Resting: outside your hours", with a grey dot.
 - **Confirmed first.** A missing morning run, session or check-in loop, or an unfinished morning run, must be seen by
   two runs in a row (5 minutes apart): after a wake the morning job may start a few seconds after the watchdog, and a

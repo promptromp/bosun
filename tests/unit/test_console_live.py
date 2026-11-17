@@ -236,6 +236,19 @@ class CollectTestCase(unittest.TestCase):
         self.assertIn("orch got a reply at", facts.window_logins["exporter"].detail)
 
 
+class MorningLogTestCase(unittest.TestCase):
+    def test_the_morning_log_is_the_workday_s_as_the_watchdog_reads_it(self) -> None:
+        env = {**environment(Path("/srv/state")), "BOSUN_AWAKE_UNTIL": "01:00"}
+        settings = Settings.from_env(env)
+        night = datetime(2026, 11, 13, 0, 30)  # Friday 00:30, in Thursday's 08:00-01:00 window
+        self.assertEqual(console_live.morning_log(settings, night).name, "morning-2026-11-12.log")
+        self.assertEqual(
+            console_live.morning_log(settings, datetime(2026, 11, 13, 9)).name, "morning-2026-11-13.log"
+        )
+        broken = Settings.from_env({**env, "BOSUN_START_TIME": "soon"})
+        self.assertEqual(console_live.morning_log(broken, night).name, "morning-2026-11-13.log")  # today's
+
+
 class RunCommandTestCase(unittest.TestCase):
     def test_output_and_failures(self) -> None:
         self.assertEqual(console_live.run_command(["/bin/echo", "hi"]), "hi\n")

@@ -377,23 +377,22 @@ check_models() {
     warn "your login shell sets ANTHROPIC_MODEL / CLAUDE_CODE_EFFORT_LEVEL ($login_env); they override bosun's model and effort in every session"
 }
 
-# The watchdog's launchd agent: loaded, and when it last ran (it runs every few minutes while the
-# Mac is awake, so a stale time means it is failing; see watchdog.launchd.err in the log dir).
+# The watchdog's launchd agent: loaded, and whether it runs (every few minutes while the Mac is awake), judged as
+# `bosun status --json` judges it (lib/menu_status_live.py --doctor-watchdog): a run it skipped while bosun is quit
+# or an update holds it counts, and so do the Mac's last wake and boot.
 check_watchdog() {
-  local label last last_epoch age
+  local label said
   label="$(watchdog_label)"
   if ! launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; then
     warn "watchdog agent $label not loaded: nothing alerts you when the morning run or the session fails; run install.sh"
     return
   fi
-  last="$(jq -r '.last_run // empty' "$BOSUN_STATE_DIR/watchdog.json" 2>/dev/null)"
-  last_epoch="$(date -j -f '%Y-%m-%d %H:%M:%S' "$last" +%s 2>/dev/null)"
-  age=$(($(date +%s) - ${last_epoch:-0}))
-  if [ -z "$last_epoch" ] || [ "$age" -gt $((3 * WATCHDOG_INTERVAL_SECONDS)) ]; then
-    warn "watchdog agent $label loaded, but its last full run was ${last:-never}; see $BOSUN_LOG_DIR/watchdog.launchd.err"
-  else
-    ok "watchdog agent $label loaded; last full run $last (bosun watchdog --status shows its checks)"
-  fi
+  said="$(python3 "$BOSUN_ROOT/lib/menu_status_live.py" --doctor-watchdog --state-dir "$BOSUN_STATE_DIR" --log-dir "$BOSUN_LOG_DIR" </dev/null 2>&1)"
+  case "$said" in
+    "ok"$'\t'*) ok "watchdog agent $label loaded; ${said#*$'\t'} (bosun watchdog --status shows its checks)" ;;
+    "warn"$'\t'*) warn "${said#*$'\t'}" ;;
+    *) warn "watchdog agent $label loaded, but whether it runs could not be told: $said" ;;
+  esac
 }
 
 # The learning agent, only with BOSUN_LEARN_ENABLED=1 (install.sh removes it otherwise).
@@ -437,8 +436,33 @@ check_console_job() {
   fi
 }
 
+# The Mac's repeating wake, whose it is as `bosun settings` judges it (wake_owner, lib/common.sh): a failure only
+# while it is bosun's to set (BOSUN_WAKE=1) and not the one bosun sets; with BOSUN_WAKE=0 (said no to in bosun
+# init, or another app's left on purpose: pmset keeps one) a line that says so, and a warning for bosun's own left
+# from before the no.
+check_wake() {
+  local wake_hm wake_label wake_cmd schedule repeat owner
+  local turn_on="to have bosun wake the Mac: bosun init, answering yes to the wake"
+  wake_hm="$(shift_time "$BOSUN_START_TIME" "$BOSUN_WAKE_DELAY_MINUTES")"
+  wake_label="$(python3 "$BOSUN_ROOT/lib/init_plan.py" pmset-label "$wake_hm")" # pmset prints e.g. 8:01AM, 0:01AM
+  wake_cmd="sudo pmset repeat wakeorpoweron $BOSUN_DAYS $wake_hm:00"
+  schedule="$(pmset -g sched)"
+  repeat="$(sed -n '/Repeating power events/,/^[A-Z]/p' <<<"$schedule" | grep -iE 'wake' | head -1 || true)"
+  if ! owner="$(wake_owner "$schedule" 2>&1)"; then
+    warn "could not tell whose the Mac's repeating wake is: $owner"
+    return
+  fi
+  case "$BOSUN_WAKE:$owner" in
+    *:ours) ok "pmset repeating wake:$repeat ($BOSUN_WAKE_DELAY_MINUTES min after the job, which runs on wake)" ;;
+    1:none) fail "no repeating pmset wake; run: $wake_cmd" ;;
+    1:*) fail "pmset repeating wake is$repeat, expected $wake_label on $BOSUN_DAYS; run: $wake_cmd" ;;
+    *:none) warn "no repeating pmset wake, and bosun sets none (BOSUN_WAKE=0): the morning run starts the next time the Mac is awake after $BOSUN_START_TIME; $turn_on" ;;
+    *:leftover) warn "pmset still has bosun's repeating wake:$repeat, though BOSUN_WAKE=0 says bosun sets none: sudo pmset repeat cancel cancels it (and every other repeating event); or $turn_on" ;;
+    *) ok "pmset repeating wake:$repeat is another app's, left as it is (BOSUN_WAKE=0; pmset keeps one), so the Mac does not wake for bosun at $wake_label; $turn_on" ;;
+  esac
+}
+
 check_schedule() {
-  local wake_hm wake_label wake_cmd repeat
   if launchctl print "gui/$(id -u)/$BOSUN_LAUNCHD_LABEL" >/dev/null 2>&1; then
     ok "launchd job $BOSUN_LAUNCHD_LABEL loaded (runs at $BOSUN_START_TIME on $BOSUN_DAYS)"
   else
@@ -448,17 +472,7 @@ check_schedule() {
   check_console_job
   check_watchdog
   check_learn_agent
-  wake_hm="$(shift_time "$BOSUN_START_TIME" "$BOSUN_WAKE_DELAY_MINUTES")"
-  wake_label="$(python3 "$BOSUN_ROOT/lib/init_plan.py" pmset-label "$wake_hm")" # pmset prints e.g. 8:01AM, 0:01AM
-  wake_cmd="sudo pmset repeat wakeorpoweron $BOSUN_DAYS $wake_hm:00"
-  repeat="$(pmset -g sched | sed -n '/Repeating power events/,/^[A-Z]/p' | grep -iE 'wake' || true)"
-  if [ -z "$repeat" ]; then
-    fail "no repeating pmset wake; run: $wake_cmd"
-  elif grep -q " at $wake_label" <<<"$repeat"; then
-    ok "pmset repeating wake:$(echo "$repeat" | head -1) ($BOSUN_WAKE_DELAY_MINUTES min after the job, which runs on wake)"
-  else
-    fail "pmset repeating wake is$(echo "$repeat" | head -1), expected $wake_label; run: $wake_cmd"
-  fi
+  check_wake
 }
 
 check_power() {

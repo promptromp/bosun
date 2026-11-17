@@ -375,6 +375,8 @@ twice. On a disk without them (exFAT, some network shares), writes stop and say 
 | `logs/` | A file per command and day, `<command>-YYYY-MM-DD.log`, with what it said on its screen (`morning-…` has the whole morning run, `launch-…` each window's start), and what launchd captured from each job (`launchd.{out,err}`, `watchdog.launchd.{out,err}`, ...). A day's file stops at 2 MB; each morning run deletes files older than 30 days and cuts launchd's files past 1 MB to their last 256 KB |
 | `watchdog.json` | The watchdog's memory of what it already alerted |
 | `quit.json`, `stopped-<session>`, `keep-awake-<session>.pid` and `.json`, `login-reload`, `console/wanted`, `update-skip.json` | What starting and stopping leave: a `bosun quit`, a `bosun stop` today, the keep-awake and until when, a reload of the jobs, the console job's switch, and a release `bosun update --skip` passed over |
+| `loaded-<morning\|learn\|watchdog>` | When bosun's morning, learning and watchdog jobs were last loaded (a fresh load, or one that moves the job's time or days). The watchdog owes no run that was due before then, and counts a watchdog job that never ran from it |
+| `started-<session>` | When `bosun start` last made the session. On a day no morning run is owed, as on install day, the watchdog watches the session from then |
 | `login.json` | The last Claude Code login check |
 | `codex-sessions.json` | Which Codex session each window's name stands for |
 | `connectors.json` | What `claude mcp list` last showed for the connectors a list names, for a launch whose lookup fails |

@@ -117,7 +117,7 @@ echo
 echo "Waiting on others (open outreach)"
 "$BOSUN" ledger outreach --open | sed 's/^/  /'
 
-log_file="$BOSUN_LOG_DIR/morning-$(date +%F).log"
+log_file="$(morning_log_file)"
 echo
 echo "Today's morning log ($log_file)"
 if [ -f "$log_file" ]; then tail -15 "$log_file" | sed 's/^/  /'; else echo "  none yet"; fi

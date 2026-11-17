@@ -62,6 +62,7 @@ start_fresh() {
       tmux_cmd new-session -d -s "$SESSION" -n "$name" -c "$dir" "${launch_cmd[@]}" ||
         die "tmux could not start session '$SESSION'"
       created=1
+      date '+%F %T' >"$(start_marker)" || log "WARN: could not write $(start_marker)"
     else
       tmux_cmd new-window -d -t "=$SESSION:" -n "$name" -c "$dir" "${launch_cmd[@]}" ||
         log "$name: tmux could not open the window"
