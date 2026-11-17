@@ -1206,6 +1206,7 @@ set_connector_settings() { # <name>
   is_orchestrator "$1" && [ "${CONNECTOR_LOOKUP:-1}" != 0 ] && alert=1
   connector_settings_json="$(resolve_connectors "$1" "$list" "$PWD" "$alert")" ||
     die "'$1' does not start: its connectors were refused or could not be resolved (lib/connectors_claude.py, above)"
+  connector_settings_list="$list" # its list as read, for set_plugin_settings
   connector_settings_window="$1"
 }
 
@@ -1220,15 +1221,21 @@ connector_settings() { # <name>
 
 # Sets plugin_settings_json to the Claude Code settings that hold window <name>, launched in this folder, to
 # its plugin list (window_plugins), as resolve_plugins makes them: {"enabledPlugins": {...}}, or {} for
-# `all`. Once per process, as set_connector_settings, and in the shell itself, not in $(...), which would lose
-# both the result and a die. Reads files only, so a fingerprint (CONNECTOR_LOOKUP=0) runs it as a launch does.
+# `all`. Its connectors list is the one set_connector_settings read, when it ran for this window. The
+# orchestrator's settings file (BOSUN_ORCHESTRATOR_SETTINGS, read from this version's folder as
+# build_model_effort_args reads it) keeps the plugins it enables on. Once per process, as
+# set_connector_settings, and in the shell itself, not in $(...), which would lose both the result and a die.
+# Reads files only, so a fingerprint (CONNECTOR_LOOKUP=0) runs it as a launch does.
 set_plugin_settings() { # <name>
   [ "${plugin_settings_window-}" = "$1" ] && return 0
-  local list connectors
+  local list connectors="${connector_settings_list-}" site=""
   list="$(window_plugins "$1")" || die "could not read the plugins of '$1' in $BOSUN_SESSIONS_FILE"
-  connectors="$(window_connectors "$1")" || die "could not read the connectors of '$1' in $BOSUN_SESSIONS_FILE"
-  plugin_settings_json="$(resolve_plugins "$1" "$list" "$connectors" "$PWD")" ||
-    die "'$1' does not start: its plugins could not be resolved (lib/plugins_claude.py, above)"
+  if [ "${connector_settings_window-}" != "$1" ]; then
+    connectors="$(window_connectors "$1")" || die "could not read the connectors of '$1' in $BOSUN_SESSIONS_FILE"
+  fi
+  is_orchestrator "$1" && site="${BOSUN_ORCHESTRATOR_SETTINGS/#"$BOSUN_INSTALL"\//$BOSUN_ROOT/}"
+  plugin_settings_json="$(resolve_plugins "$1" "$list" "$connectors" "$PWD" "$site")" ||
+    die "'$1' does not start: its plugins were refused or could not be resolved (lib/plugins_claude.py, above)"
   plugin_settings_window="$1"
 }
 
@@ -1241,16 +1248,20 @@ plugin_settings() { # <name>
 }
 
 # The Claude Code settings that hold <window> to <plugin list>, given its <connector list> (a plugin they need
-# stays on), as lib/plugins_claude.py makes them in <dir>; its lines (a name not found, a plugin managed
-# settings force on) are logged (log_connector_lines). Prints nothing and fails on a list it cannot read, on a
-# failure of its own, and on anything but one JSON object: {} for `all` (lists_everything), else one with an
-# enabledPlugins object, so a garbled answer is never taken for no limit.
-resolve_plugins() { # <window> <plugin list> <connector list> <dir>
+# stays on) and, for the orchestrator, its <settings file> (a plugin it enables stays on), as
+# lib/plugins_claude.py makes them in <dir>; its lines (a name not found, a plugin managed settings force on, a
+# settings file that does not parse) are logged (log_connector_lines). Prints nothing and fails on a list it
+# cannot read, on an installed_plugins.json that does not parse, on a failure of its own, and on anything but
+# one JSON object: {} for `all` (lists_everything), else one with an enabledPlugins object, so a garbled
+# answer is never taken for no limit.
+resolve_plugins() { # <window> <plugin list> <connector list> <dir> [settings file]
   local errors json code=0
+  local -a site=()
+  [ -z "${5:-}" ] || site=(--settings-file "$5")
   errors="$(mktemp "${TMPDIR:-/tmp}/bosun-plugins.XXXXXX")" || return 1
   # Each list is its own argument, so one that starts with "-" is no flag.
-  json="$(python3 "$BOSUN_ROOT/lib/plugins_claude.py" --plugins="$2" --connectors="$3" --cwd "$4" 2>"$errors")" ||
-    code=$?
+  json="$(python3 "$BOSUN_ROOT/lib/plugins_claude.py" --plugins="$2" --connectors="$3" --cwd "$4" \
+    ${site[@]+"${site[@]}"} 2>"$errors")" || code=$?
   log_connector_lines "$1" "$errors"
   rm -f "$errors"
   [ "$code" = 0 ] && plugin_settings_valid "$2" "$json" || return 1

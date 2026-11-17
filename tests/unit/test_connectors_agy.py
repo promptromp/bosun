@@ -56,6 +56,7 @@ class AgyCase(ScratchCase):
         return capture(
             connectors_agy.main,
             f"--list={value}",
+            "--plugins=all",
             *("--agent-bin", str(agent or self.agent), "--cwd", str(cwd or self.below)),
         )
 

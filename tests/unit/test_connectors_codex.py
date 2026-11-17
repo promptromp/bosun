@@ -8,6 +8,7 @@ import sys
 import tomllib
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -157,7 +158,16 @@ class CommandTest(connector_fakes.ScratchCase):
     """connectors_codex.py's command line."""
 
     def run_main(self, *argv: str) -> tuple[int, str, str]:
-        return connector_fakes.capture(connectors_codex.main, *argv)
+        """The command run with <argv>, and `--plugins=all` when <argv> gives no plugin list."""
+        plugins_given = any(arg.startswith("--plugins") for arg in argv)
+        return connector_fakes.capture(
+            connectors_codex.main, *argv, *(() if plugins_given else ("--plugins=all",))
+        )
+
+    def test_a_missing_plugin_list_is_never_taken_for_all(self) -> None:
+        with self.assertRaises(SystemExit) as raised, mock.patch("sys.stderr"):
+            connectors_codex.main(["--list", "all", "--agent-bin", "x"])
+        self.assertEqual(raised.exception.code, 2)
 
     def test_all_with_names_is_refused(self) -> None:
         self.assertEqual(self.run_main("--list", "all,x", "--agent-bin", "x")[0], 2)
@@ -299,7 +309,15 @@ class DoctorTest(connector_fakes.DoctorMixin, connector_fakes.ScratchCase):
         code, _, _ = connector_fakes.capture(
             connectors.main,
             *("doctor", "--window", "cx", "--kind", "session", "--harness", "codex", "--list", ""),
-            *("--cwd", str(folder), "--state-dir", str(self.state), "--agent-bin", str(agent)),
+            *(
+                "--cwd",
+                str(folder),
+                "--state-dir",
+                str(self.state),
+                "--agent-bin",
+                str(agent),
+                "--plugins=all",
+            ),
         )
         self.assertEqual(code, 0)
         self.assertEqual(Path((self.root / "where").read_text().strip()).resolve(), folder.resolve())

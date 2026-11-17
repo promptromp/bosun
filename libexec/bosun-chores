@@ -84,7 +84,8 @@ set_rehearsal_args() {
   connectors="$(resolve_connectors "$BOSUN_ORCHESTRATOR" "$BOSUN_ORCHESTRATOR_CONNECTORS" "$BOSUN_ORCHESTRATOR_DIR" 0)" ||
     die "the orchestrator's connectors were refused or could not be resolved (lib/connectors_claude.py, above)"
   plugins="$(resolve_plugins "$BOSUN_ORCHESTRATOR" "$BOSUN_ORCHESTRATOR_PLUGINS" "$BOSUN_ORCHESTRATOR_CONNECTORS" \
-    "$BOSUN_ORCHESTRATOR_DIR")" || die "the orchestrator's plugins could not be resolved (lib/plugins_claude.py, above)"
+    "$BOSUN_ORCHESTRATOR_DIR" "${BOSUN_ORCHESTRATOR_SETTINGS/#"$BOSUN_INSTALL"\//$BOSUN_ROOT/}")" ||
+    die "the orchestrator's plugins were refused or could not be resolved (lib/plugins_claude.py, above)"
   build_model_effort_args "$BOSUN_ORCHESTRATOR_MODEL" "$BOSUN_ORCHESTRATOR_EFFORT" "$BOSUN_ORCHESTRATOR_SETTINGS" \
     "$(printf '%s\n' "$(guard_hook_settings)" "$connectors" "$plugins" | merge_settings)"
   require_connector_limit "$BOSUN_ORCHESTRATOR" "$connectors"

@@ -7,15 +7,15 @@ between windows and change the person's Antigravity app. So before a launch this
 would start in the window's folder, and the window starts only if its list names each one (or is `all`).
 Nothing is written, and no server's command, arguments, environment or URL is ever read out, only its name.
 
-Usage: connectors_agy.py --list <value> --agent-bin <agy> [--cwd <dir>] [--plugins <value>]
+Usage: connectors_agy.py --list <value> --plugins <value> --agent-bin <agy> [--cwd <dir>]
            Nothing, exit 0, when the list is `all` or names every server agy would start in <dir> (default:
            the current folder); otherwise exit 1 with a line on stderr per server the list does not name,
            and where it comes from. A line on stderr per name of the list agy has no server by, which does
            not refuse. The servers are those of the global file (~/.gemini/config/mcp_config.json), of each
            `.agents/mcp_config.json` from <dir> up to its repo's root (the folder holding `.git`; none: <dir>
            alone), and of the enabled plugins (`agy plugin list --json`, named `<plugin>_<server>`); a server
-           marked `"disabled": true` is not started. A plugin list (--plugins, lib/plugins.py; default
-           `all`) other than `all` refuses the window (exit 1) before anything is listed: agy cannot switch
+           marked `"disabled": true` is not started. A plugin list (--plugins, lib/plugins.py) other
+           than `all` refuses the window (exit 1) before anything is listed: agy cannot switch
            plugins off per window either.
 
 Exit codes: 0 done, 1 a server beyond the list, the servers could not be listed, or a plugin list but `all`; 2
@@ -241,7 +241,7 @@ def parser() -> argparse.ArgumentParser:
     top.add_argument("--list", required=True)
     top.add_argument("--agent-bin", required=True)
     top.add_argument("--cwd", default=".")
-    top.add_argument("--plugins", default=connectors.EVERYTHING)
+    top.add_argument("--plugins", required=True)
     top.set_defaults(run=cmd_agy)
     return top
 

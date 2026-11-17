@@ -170,7 +170,7 @@ check_after_update() {
 # (window_plugins, docs/design/connectors.md "Plugins"), from the files its launch reads. A window list that
 # cannot be read is check_config's.
 check_connectors() {
-  local specs name dir kind harness list plugins said
+  local specs name dir kind harness list plugins plugins_read said
   local -a site
   [ -z "$BOSUN_ORCHESTRATOR" ] || check_orchestrator_connectors_set
   if specs="$(window_specs 2>/dev/null)"; then
@@ -180,24 +180,28 @@ check_connectors() {
         fail "$name: could not read its connectors: $(window_connectors "$name" 2>&1 >/dev/null | tail -n 1)"
         continue
       fi
-      if ! plugins="$(window_plugins "$name" 2>/dev/null)"; then
-        fail "$name: could not read its plugins: $(window_plugins "$name" 2>&1 >/dev/null | tail -n 1)"
-        continue
-      fi
       site=()
       [ "$kind" = orchestrator ] && site=(--settings-file "$BOSUN_ORCHESTRATOR_SETTINGS")
+      # A plugin list that cannot be read is failed after the connectors line, which reads a Codex window's
+      # connectors as with no plugin list then.
+      plugins_read=1
+      plugins="$(window_plugins "$name" 2>/dev/null)" || plugins_read=0
+      [ "$plugins_read" = 1 ] || plugins=all
       said="$(python3 "$BOSUN_ROOT/lib/connectors.py" doctor --window "$name" --kind "$kind" --harness "$harness" \
         --list="$list" --plugins="$plugins" --cwd "$dir" --state-dir "$BOSUN_STATE_DIR" \
         --agent-bin "$(harness_bin "$harness")" ${site[@]+"${site[@]}"} </dev/null 2>&1)"
       say_window_line "$name" connectors "$said"
-      said="$(python3 "$BOSUN_ROOT/lib/connectors.py" plugins-doctor --window "$name" --harness "$harness" \
-        --plugins="$plugins" --list="$list" --cwd "$dir" </dev/null 2>&1)"
-      say_window_line "$name" plugins "$said"
+      if [ "$plugins_read" = 1 ]; then
+        say_window_line "$name" plugins "$(python3 "$BOSUN_ROOT/lib/plugins.py" doctor --window "$name" \
+          --harness "$harness" --plugins="$plugins" --connectors="$list" --cwd "$dir" ${site[@]+"${site[@]}"} </dev/null 2>&1)"
+      else
+        fail "$name: could not read its plugins: $(window_plugins "$name" 2>&1 >/dev/null | tail -n 1)"
+      fi
     done <<<"$specs"
   fi
 }
 
-# One of lib/connectors.py's doctor lines (<said>: `ok` or `warn`, a tab, the line) as doctor's own; anything
+# One of lib/connectors.py's or lib/plugins.py's doctor lines (<said>: `ok` or `warn`, a tab, the line) as doctor's own; anything
 # else as a warning that <window>'s <what> could not be checked.
 say_window_line() { # <window> <what> <said>
   case "$3" in

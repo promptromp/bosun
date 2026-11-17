@@ -394,10 +394,22 @@ and doctor says why ("keeps … for its server in connectors"); otherwise switch
 a connector such as a Slack plugin's server. A server named by URL pattern does not keep its plugin: name the
 plugin.
 
+**A plugin the orchestrator's settings file enables stays on.** That file (`BOSUN_ORCHESTRATOR_SETTINGS`) is merged
+into the orchestrator's `--settings`, under the launch's own settings, so a `false` there would win over its
+`true`. The launch reads its `enabledPlugins` (`--settings-file` to `lib/plugins_claude.py`, as `chores --dry-run`
+and doctor do) and leaves each plugin it switches on alone: the site chose it, and doctor says so ("kept: the
+orchestrator's settings file enables …").
+
 **What cannot be switched off.** A plugin the managed settings force on (`managed-settings.json` and
 `managed-settings.d/*.json` in `/Library/Application Support/ClaudeCode` on macOS) loads anyway: the launch logs it
 and doctor warns. A name of the list that no scope enables, mentions or installs is left out, logged, and doctor
 says it is not found, never fatal, as for a connector.
+
+**Files that do not parse.** A settings scope that is there but does not parse is read as nothing, as Claude Code
+reads it: the launch logs it, doctor warns on the window's plugin line, and the installed plugins still get their
+`false`. An `installed_plugins.json` that is there but does not parse refuses a window with a list (not one with
+`all`): nothing could tell which plugins to switch off, so the launch says so and does not start, and doctor says
+it does not start, as for the connectors' refusals.
 
 **Other agents**, through the profile (`Profile.plugins` names the module with each agent's `plugins_doctor_line`),
 never an `if` on a name: Claude Code limits per plugin, as above. Codex can only switch every plugin off: a plugin
@@ -416,15 +428,17 @@ the same and are not restarted; an orchestrator whose list is none now gets an `
 so an update restarts it, which is meant.
 
 **Seeing it.** `bosun doctor` prints a line per window beside its connectors line: `plugins: all of yours`, or
-`plugins: none of yours` / `plugins: keeps <ids>`, with how many it switches off, what it keeps for its connectors,
-each name not found and each plugin managed settings force on. A Codex window's says every plugin goes; an agy
+`plugins: none of yours` / `plugins: keeps <ids>`, with how many it switches off, what it keeps for its connectors
+and for the orchestrator's settings file, each name not found, each plugin managed settings force on and each
+settings scope that does not parse. Its connectors line comes first, so a `plugins:` that cannot be read does not
+hide it. The entry point is `lib/plugins.py doctor`, which asks the module the window's profile names, as
+`lib/connectors.py doctor` does for connectors. A Codex window's says every plugin goes; an agy
 window's says it does not start.
 
 **Best effort.** Only the managed settings files are read, not an MDM profile or server-managed settings. A
 plugin synced from claude.ai (`@synced`) or kept in a skills folder (`@skills-dir`) is switched off only when a
 settings scope mentions it. A plugin enabled only in an `--add-dir` folder's settings is not looked for (bosun's
-windows get none). A plugin the orchestrator's own settings file (`BOSUN_ORCHESTRATOR_SETTINGS`) enables, and no
-scope of mine, stays on: the site chose it.
+windows get none).
 
 ## Antigravity: a refusal
 

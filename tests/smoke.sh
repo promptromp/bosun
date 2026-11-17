@@ -1758,6 +1758,37 @@ echo '{"enabledPlugins": {"probe@local": false}}' >"$REPO_A/.claude/settings.loc
 check "a plugin my user settings enable and the repo's local settings switch off is not switched off again" \
   switches "$(cd "$REPO_A" && "${PS[@]}" "$BOSUN" launch alpha 2>&1)" '$p == {"acme-helper@acme-market": false}'
 rm -f "$REPO_A/.claude/settings.local.json"
+# A site settings file that enables a plugin: its own enabledPlugins merges under the launch's, so the launch
+# leaves that plugin on instead of overriding the file.
+jq '. + {enabledPlugins: {"acme-site@acme-market": true}}' "$ROOT/orchestrator/settings.json" >"$WORK/site-plugin-settings.json"
+out="$(cd "$REPO_A" && "${PL[@]}" BOSUN_ORCHESTRATOR_SETTINGS="$WORK/site-plugin-settings.json" "$BOSUN" launch orch 2>&1)"
+check "a plugin the orchestrator's settings file enables stays on, as the file says" \
+  switches "$out" '$p == {"acme-helper@acme-market": false, "acme-site@acme-market": true, "probe@local": false}'
+check "... and doctor says why" contains "$("${PL[@]}" BOSUN_ORCHESTRATOR_SETTINGS="$WORK/site-plugin-settings.json" "$BOSUN" doctor 2>&1)" \
+  "ok    orch: plugins: none of yours (2 switched off); kept: the orchestrator's settings file enables acme-site@acme-market"
+# A settings scope that does not parse: said, and the installed plugin still switched off; an installed_plugins.json
+# that does not parse: the launch refuses, as nothing can tell which plugins to switch off.
+mkdir -p "$REPO_A/.claude"
+echo '{not json' >"$REPO_A/.claude/settings.json"
+out="$(cd "$REPO_A" && "${PS[@]}" "$BOSUN" launch alpha 2>&1)"
+check "a settings file that does not parse is logged, and the window still starts with its plugins off" bash -c '
+  grep -qF "alpha: plugins: $2/.claude/settings.json does not parse, so what it says of plugins is not read" <<<"$1"' _ "$out" "$REPO_A"
+check "... the installed ones still off" switches "$out" '$p == {"acme-helper@acme-market": false, "probe@local": false}'
+check "... and doctor warns" contains "$("${PS[@]}" "$BOSUN" doctor 2>&1)" \
+  "warn  alpha: plugins: none of yours (2 switched off); does not parse, so what it says of plugins is not read: $REPO_A/.claude/settings.json"
+rm -f "$REPO_A/.claude/settings.json"
+cp "$HOME/.claude/plugins/installed_plugins.json" "$WORK/installed_plugins.kept"
+echo '[not an object]' >"$HOME/.claude/plugins/installed_plugins.json"
+check "an installed_plugins.json that does not parse keeps a window with a list from starting" fails_with \
+  "plugins: $HOME/.claude/plugins/installed_plugins.json does not parse, so bosun cannot tell which plugins to switch off" \
+  bash -c 'cd "$1" && "${@:2}" launch alpha' _ "$REPO_A" "${PS[@]}" "$BOSUN"
+check "... and doctor says it does not start" contains "$("${PS[@]}" "$BOSUN" doctor 2>&1)" \
+  "warn  alpha: does not start: $HOME/.claude/plugins/installed_plugins.json does not parse"
+check "... but a window with all starts" switches "$(cd "$REPO_A" && "$BOSUN" launch alpha 2>&1)" '$p == "no key"'
+mv "$WORK/installed_plugins.kept" "$HOME/.claude/plugins/installed_plugins.json"
+check "doctor says what it reaches before a plugins: it cannot read" bash -c '
+  grep -q "  ok    epsilon: none (no MCP server or connector)" <<<"$1" && grep -q "FAIL  epsilon: could not read its plugins: .*the plugins of epsilon must be" <<<"$1"' \
+  _ "$("${PS[@]}" "$BOSUN" doctor 2>&1)"
 out="$("${PL[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="plugin:acme-helper:helper" "$BOSUN" doctor 2>&1)"
 check "doctor says what plugins each window loads: the orchestrator's" contains "$out" \
   "ok    orch: plugins: none of yours (1 switched off); keeps acme-helper@acme-market for its server in connectors"
@@ -1786,7 +1817,7 @@ check "settings that lost a plugin's false are refused" fails_with "lost its plu
   require_plugin_limit alpha "{\"enabledPlugins\":{\"probe@local\":false}}"' _ "$ROOT"
 check "... and settings asked for before the plugins were resolved" fails_with "were not resolved before" bash -c '
   source "$1/lib/common.sh"; load_config; plugin_settings alpha' _ "$ROOT"
-rm -rf "$HOME/.claude/settings.json" "$HOME/.claude/plugins" "$WORK/plugins"
+rm -rf "$HOME/.claude/settings.json" "$HOME/.claude/plugins" "$WORK/plugins" "$WORK/site-plugin-settings.json"
 
 section knowledge "knowledge (kg, fixture acme knowledge base)" covers 'libexec/bosun-kg,libexec/bosun-context,tests/fixtures/knowledge/**'
 # kg runs from a terminal here: kg asks the agent session that ran it for my words, and this run's own process

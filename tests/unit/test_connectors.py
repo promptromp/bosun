@@ -51,6 +51,7 @@ class DoctorTest(connector_fakes.ScratchCase):
             connectors.main,
             *("doctor", "--window", "alpha", "--kind", "session", "--harness", harness, "--list", "x"),
             *("--cwd", str(self.root), "--state-dir", str(self.state), "--agent-bin", "no-agent"),
+            "--plugins=all",
         )
 
     def claude_names(
@@ -92,57 +93,6 @@ class DoctorTest(connector_fakes.ScratchCase):
             self.assertEqual(
                 self.doctor("claude"),
                 (0, "warn\talpha: could not check its connectors (RuntimeError: boom)\n", ""),
-            )
-
-
-STANDS_ALONE = "`all` means every plugin, so it stands alone, but the list also names probe"
-
-
-class PluginsDoctorTest(connector_fakes.ScratchCase):
-    """`connectors.py plugins-doctor` asks the module its window's agent names for plugins."""
-
-    def plugins_doctor(self, plugin_list: str, harness: str = "claude") -> tuple[int, str, str]:
-        return connector_fakes.capture(
-            connectors.main,
-            *("plugins-doctor", "--window", "alpha", "--harness", harness, f"--plugins={plugin_list}"),
-            *("--list", "plugin:acme-slack:slack", "--cwd", str(self.root)),
-        )
-
-    def claude_plugins(
-        self, plugins_doctor_line: Callable[[Any, Allowed, Allowed], tuple[str, str]]
-    ) -> AbstractContextManager[Any]:
-        stub = types.SimpleNamespace(plugins_doctor_line=plugins_doctor_line)
-        profile = dataclasses.replace(claude_state.PROFILE, plugins="stub_plugins")
-        stack = contextlib.ExitStack()
-        stack.enter_context(mock.patch.dict(sys.modules, {"stub_plugins": stub}))
-        stack.enter_context(mock.patch.object(claude_state, "PROFILE", profile))
-        return stack
-
-    def test_it_hands_the_module_both_lists_parsed(self) -> None:
-        seen: list[tuple[Allowed, Allowed]] = []
-
-        def line(args: Any, plugin_list: Allowed, connector_list: Allowed) -> tuple[str, str]:
-            seen.append((plugin_list, connector_list))
-            return "ok", "stub"
-
-        with self.claude_plugins(line):
-            self.assertEqual(self.plugins_doctor("probe"), (0, "ok\tstub\n", ""))
-        self.assertEqual(seen, [(Allowed(("probe",)), Allowed(("plugin:acme-slack:slack",)))])
-
-    def test_a_list_that_cannot_be_read_does_not_start(self) -> None:
-        self.assertEqual(
-            self.plugins_doctor("all, probe", harness="codex"),
-            (0, f"warn\talpha: does not start: {STANDS_ALONE}\n", ""),
-        )
-
-    def test_it_says_when_the_module_cannot_check(self) -> None:
-        def broken(args: Any, plugin_list: Allowed, connector_list: Allowed) -> tuple[str, str]:
-            raise RuntimeError("boom")
-
-        with self.claude_plugins(broken):
-            self.assertEqual(
-                self.plugins_doctor(""),
-                (0, "warn\talpha: could not check its plugins (RuntimeError: boom)\n", ""),
             )
 
 

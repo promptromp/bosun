@@ -66,6 +66,7 @@ class DoctorMixin(unittest.TestCase):
             connectors.main,
             *("doctor", "--window", window, "--kind", kind, "--harness", harness, "--list", value),
             *("--cwd", str(self.root), "--state-dir", str(self.state), "--agent-bin", str(agent), *site),
+            "--plugins=all",
         )
         self.assertEqual((code, err), (0, ""))
         self.assertEqual(len(out.splitlines()), 1, out)

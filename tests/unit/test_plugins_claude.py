@@ -18,7 +18,7 @@ import claude_state  # noqa: E402
 import connector_fakes  # noqa: E402
 import plugins  # noqa: E402
 import plugins_claude  # noqa: E402
-from connectors import parse  # noqa: E402
+from connectors import ConnectorsError, parse  # noqa: E402
 
 
 HELPER = "acme-helper@acme-market"
@@ -145,6 +145,46 @@ class CommandTest(PluginsCase):
     def test_nothing_to_switch_off_is_an_empty_table(self) -> None:
         self.assertEqual(self.run_main(""), (0, '{"enabledPlugins":{}}\n', ""))
 
+    def test_a_plugin_the_orchestrator_s_settings_file_enables_stays_on(self) -> None:
+        """Its file merges under the launch's settings, so a `false` there would win over its `true`."""
+        self.switches(self.home_settings, {PROBE: True})
+        write(self.installed, {"plugins": {HELPER: [{"scope": "user"}]}})
+        site = self.root / "orchestrator-settings.json"
+        self.switches(site, {HELPER: True, "acme-off@acme-market": False})
+        code, out, err = connector_fakes.capture(
+            plugins_claude.main,
+            "--plugins=",
+            "--connectors=",
+            "--cwd",
+            str(self.repo),
+            "--settings-file",
+            str(site),
+        )
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(json.loads(out), {"enabledPlugins": {PROBE: False}})
+
+    def test_a_scope_that_does_not_parse_is_said_and_the_installed_still_go(self) -> None:
+        self.home_settings.parent.mkdir(parents=True)
+        self.home_settings.write_text("{not json")
+        write(self.installed, {"plugins": {HELPER: [{"scope": "user"}]}})
+        code, out, err = self.run_main("")
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out), {"enabledPlugins": {HELPER: False}})
+        self.assertEqual(
+            err, f"plugins: {self.home_settings} does not parse, so what it says of plugins is not read\n"
+        )
+
+    def test_an_installed_plugins_file_that_does_not_parse_refuses(self) -> None:
+        self.switches(self.home_settings, {PROBE: True})
+        self.installed.parent.mkdir(parents=True)
+        self.installed.write_text("[not an object]")
+        code, out, err = self.run_main("")
+        self.assertEqual((code, out), (2, ""))
+        self.assertEqual(
+            err,
+            f"plugins: {self.installed} does not parse, so bosun cannot tell which plugins to switch off\n",
+        )
+
     def test_a_list_that_cannot_be_read_is_exit_2(self) -> None:
         code, out, err = self.run_main(f"all, {PROBE}")
         self.assertEqual((code, out), (2, ""))
@@ -153,8 +193,33 @@ class CommandTest(PluginsCase):
 
 class DoctorTest(PluginsCase):
     def line(self, plugin_list: str, connector_list: str = "") -> tuple[str, str]:
-        args = argparse.Namespace(window="orch", cwd=self.repo)
+        args = argparse.Namespace(window="orch", cwd=self.repo, settings_file=None)
         return plugins_claude.plugins_doctor_line(args, plugins.parse(plugin_list), parse(connector_list))
+
+    def test_doctor_says_why_a_plugin_stays_on_and_what_it_could_not_read(self) -> None:
+        self.switches(self.home_settings, {PROBE: True, HELPER: True})
+        self.project.parent.mkdir(parents=True)
+        self.project.write_text("{not json")
+        site = self.root / "orchestrator-settings.json"
+        self.switches(site, {HELPER: True})
+        args = argparse.Namespace(window="orch", cwd=self.repo, settings_file=site)
+        self.assertEqual(
+            plugins_claude.plugins_doctor_line(args, plugins.parse(""), parse("")),
+            (
+                "warn",
+                (
+                    f"orch: plugins: none of yours (1 switched off); does not parse, so what it says of "
+                    f"plugins is not read: {self.project}; kept: the orchestrator's settings file "
+                    f"enables {HELPER}"
+                ),
+            ),
+        )
+
+    def test_doctor_says_an_installed_plugins_file_that_does_not_parse_refuses(self) -> None:
+        self.installed.parent.mkdir(parents=True)
+        self.installed.write_text("{not json")
+        with self.assertRaisesRegex(ConnectorsError, "does not parse, so bosun cannot tell which plugins"):
+            self.line("")
 
     def test_doctor_reads_what_the_launch_reads(self) -> None:
         self.switches(self.home_settings, {PROBE: True, HELPER: True, SLACK: True})

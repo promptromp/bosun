@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
+import contextlib
+import dataclasses
 import sys
+import types
 import unittest
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from pathlib import Path
+from typing import Any
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "lib"))
+import claude_state  # noqa: E402
+import connector_fakes  # noqa: E402
 import connectors  # noqa: E402
 import plugins  # noqa: E402
 import plugins_claude  # noqa: E402
@@ -116,6 +125,25 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(result.kept, (HELPER,))
 
 
+class SiteTest(unittest.TestCase):
+    """A plugin the orchestrator's own settings file enables stays on, even one my settings switch off."""
+
+    def test_it_stays_on_with_its_reason(self) -> None:
+        facts = PluginFacts({PROBE: True, HELPER: False}, installed=(SLACK,), site=(HELPER, SLACK))
+        result = plugins.plan(plugins.parse(""), connectors.parse(""), facts)
+        self.assertEqual((result.for_site, result.off), ((HELPER, SLACK), (PROBE,)))
+
+    def test_its_list_and_connectors_come_first(self) -> None:
+        facts = PluginFacts({}, site=(HELPER, SLACK))
+        result = plugins.plan(plugins.parse("acme-helper"), connectors.parse("plugin:acme-slack:s"), facts)
+        self.assertEqual((result.kept, result.for_connectors, result.for_site), ((HELPER,), (SLACK,), ()))
+
+    def test_a_name_only_the_settings_file_has_is_found(self) -> None:
+        self.assertEqual(plan("acme-helper", {}).not_found, ("acme-helper",))
+        facts = PluginFacts({}, site=(HELPER,))
+        self.assertEqual(plugins.plan(plugins.parse("acme-helper"), NONE, facts).not_found, ())
+
+
 class ReportTest(unittest.TestCase):
     def test_all(self) -> None:
         self.assertEqual(plugins.report("w", PluginPlan(everything=True)), ("ok", "w: plugins: all of yours"))
@@ -133,6 +161,19 @@ class ReportTest(unittest.TestCase):
             ("ok", f"w: plugins: none of yours (1 switched off); keeps {SLACK} for its server in connectors"),
         )
 
+    def test_kept_for_the_settings_file_is_a_note_and_an_unread_scope_a_warning(self) -> None:
+        self.assertEqual(
+            plugins.report("w", PluginPlan(for_site=(HELPER,))),
+            ("ok", f"w: plugins: none of yours; kept: the orchestrator's settings file enables {HELPER}"),
+        )
+        self.assertEqual(
+            plugins.report("w", PluginPlan(unread=(Path("/s.json"),))),
+            (
+                "warn",
+                "w: plugins: none of yours; does not parse, so what it says of plugins is not read: /s.json",
+            ),
+        )
+
     def test_not_found_and_managed_warn(self) -> None:
         self.assertEqual(
             plugins.report("w", PluginPlan(managed=(HELPER,), not_found=("acme-gone",))),
@@ -144,6 +185,57 @@ class ReportTest(unittest.TestCase):
                 ),
             ),
         )
+
+
+STANDS_ALONE = "`all` means every plugin, so it stands alone, but the list also names probe"
+
+
+class DoctorCommandTest(connector_fakes.ScratchCase):
+    """`plugins.py doctor` asks the module its window's agent names for plugins (Profile.plugins)."""
+
+    def plugins_doctor(self, plugin_list: str, harness: str = "claude") -> tuple[int, str, str]:
+        return connector_fakes.capture(
+            plugins.main,
+            *("doctor", "--window", "alpha", "--harness", harness, f"--plugins={plugin_list}"),
+            *("--connectors", "plugin:acme-slack:slack", "--cwd", str(self.root)),
+        )
+
+    def claude_plugins(
+        self, plugins_doctor_line: Callable[[Any, Allowed, Allowed], tuple[str, str]]
+    ) -> AbstractContextManager[Any]:
+        stub = types.SimpleNamespace(plugins_doctor_line=plugins_doctor_line)
+        profile = dataclasses.replace(claude_state.PROFILE, plugins="stub_plugins")
+        stack = contextlib.ExitStack()
+        stack.enter_context(mock.patch.dict(sys.modules, {"stub_plugins": stub}))
+        stack.enter_context(mock.patch.object(claude_state, "PROFILE", profile))
+        return stack
+
+    def test_it_hands_the_module_both_lists_parsed(self) -> None:
+        seen: list[tuple[Allowed, Allowed]] = []
+
+        def line(args: Any, plugin_list: Allowed, connector_list: Allowed) -> tuple[str, str]:
+            seen.append((plugin_list, connector_list))
+            return "ok", "stub"
+
+        with self.claude_plugins(line):
+            self.assertEqual(self.plugins_doctor("probe"), (0, "ok\tstub\n", ""))
+        self.assertEqual(seen, [(Allowed(("probe",)), Allowed(("plugin:acme-slack:slack",)))])
+
+    def test_a_list_that_cannot_be_read_does_not_start(self) -> None:
+        self.assertEqual(
+            self.plugins_doctor("all, probe", harness="codex"),
+            (0, f"warn\talpha: does not start: {STANDS_ALONE}\n", ""),
+        )
+
+    def test_it_says_when_the_module_cannot_check(self) -> None:
+        def broken(args: Any, plugin_list: Allowed, connector_list: Allowed) -> tuple[str, str]:
+            raise RuntimeError("boom")
+
+        with self.claude_plugins(broken):
+            self.assertEqual(
+                self.plugins_doctor(""),
+                (0, "warn\talpha: could not check its plugins (RuntimeError: boom)\n", ""),
+            )
 
 
 if __name__ == "__main__":

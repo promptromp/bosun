@@ -14,7 +14,7 @@ less than its list, never more.
 
 Usage: connectors.py doctor --window <name> --kind <kind> --harness <agent> --list <value>
                             --cwd <dir> --state-dir <dir> --agent-bin <agent> [--settings-file <file>]
-                            [--plugins <value>]
+                            --plugins <value>
            bosun doctor's line for a window: `ok` or `warn`, a tab, then what it reaches (names only;
            on Claude Code a plain name is only allowed by name and a URL pattern by pattern), each name
            not found, for the orchestrator with `all` to name its connectors, and on Claude Code another
@@ -23,14 +23,9 @@ Usage: connectors.py doctor --window <name> --kind <kind> --harness <agent> --li
            its line is the `doctor_line` of the module its profile names (Profile.connectors).
            Claude Code's is from what earlier lookups kept (never `claude mcp list`, which connects to
            every server); Codex's from `codex mcp list --json` in <dir>, which starts none, and its plugin
-           list (--plugins, default all), with which every plugin's servers go. Always exit 0
-           with one line, but for a command line that cannot be read (2).
-       connectors.py plugins-doctor --window <name> --harness <agent> --plugins <value> --list <value>
-                                    --cwd <dir>
-           bosun doctor's line for a window's plugins (lib/plugins.py; <value> after --list: its connectors,
-           whose plugins stay on): `ok` or `warn`, a tab, then what plugins of mine it loads, from the module
-           its profile names (Profile.plugins). Always exit 0 with one line, but for a command line that
-           cannot be read (2).
+           list (--plugins, lib/plugins.py), with which every plugin's servers go. Always exit 0 with one
+           line, but for a command line that cannot be read (2). A window's plugins have a doctor line of
+           their own: lib/plugins.py.
 
 Exit codes of every module: 0 done, 2 a list or command line that cannot be read; the others are in the
 agent modules' usage.
@@ -54,7 +49,6 @@ from agent_state import AGENTS
 
 
 EVERYTHING = "all"
-PLUGINS_EVERYTHING = "every plugin"  # what `all` means in a window's plugin list (lib/plugins.py)
 LOOKUP_TIMEOUT_SECONDS = 30.0
 URL_SCHEMES = ("http://", "https://")
 # Claude Code's rule for a serverName in an allow list, and TOML's for a bare key: the same characters.
@@ -149,32 +143,26 @@ def everything_report(window: str, kind: str, site: SiteAllowList | None = None)
 def cmd_doctor(args: argparse.Namespace) -> int:
     """One line, whatever goes wrong: a list that cannot be read is a window that does not start. The line
     is the window's agent's: the `doctor_line` of the module its profile names."""
-    try:
+
+    def line() -> tuple[str, str]:
         module = importlib.import_module(AGENTS[args.harness].PROFILE.connectors)
         doctor_line: Callable[[argparse.Namespace, Allowed], tuple[str, str]] = module.doctor_line
-        level, line = doctor_line(args, parse(args.list))
-    except ConnectorsError as exc:
-        level, line = WARN, f"{args.window}: does not start: {exc}"
-    except Exception as exc:  # noqa: BLE001 - doctor says it could not check, and goes on
-        level, line = WARN, f"{args.window}: could not check its connectors ({type(exc).__name__}: {exc})"
-    print(f"{level}\t{' '.join(line.split())}")
-    return 0
+        return doctor_line(args, parse(args.list))
+
+    return print_doctor_line(args.window, "connectors", line)
 
 
-def cmd_plugins_doctor(args: argparse.Namespace) -> int:
-    """One line for a window's plugins, whatever goes wrong, as cmd_doctor's: the `plugins_doctor_line` of the
-    module the window's agent's profile names (Profile.plugins), given its plugin list and its connectors."""
+def print_doctor_line(window: str, what: str, line: Callable[[], tuple[str, str]]) -> int:
+    """Print the doctor's line <line> makes for <window> (`ok` or `warn`, a tab, the line on one line),
+    whatever goes wrong: a list that cannot be read is a window that does not start, and anything else says
+    its <what> could not be checked. Exit 0."""
     try:
-        module = importlib.import_module(AGENTS[args.harness].PROFILE.plugins)
-        plugins_line: Callable[[argparse.Namespace, Allowed, Allowed], tuple[str, str]] = (
-            module.plugins_doctor_line
-        )
-        level, line = plugins_line(args, parse(args.plugins, PLUGINS_EVERYTHING), parse(args.list))
+        level, said = line()
     except ConnectorsError as exc:
-        level, line = WARN, f"{args.window}: does not start: {exc}"
+        level, said = WARN, f"{window}: does not start: {exc}"
     except Exception as exc:  # noqa: BLE001 - doctor says it could not check, and goes on
-        level, line = WARN, f"{args.window}: could not check its plugins ({type(exc).__name__}: {exc})"
-    print(f"{level}\t{' '.join(line.split())}")
+        level, said = WARN, f"{window}: could not check its {what} ({type(exc).__name__}: {exc})"
+    print(f"{level}\t{' '.join(said.split())}")
     return 0
 
 
@@ -205,17 +193,8 @@ def parser() -> argparse.ArgumentParser:
     doctor.add_argument("--state-dir", required=True, type=Path)
     doctor.add_argument("--agent-bin", required=True)
     doctor.add_argument("--settings-file", type=Path)  # the orchestrator's (BOSUN_ORCHESTRATOR_SETTINGS)
-    doctor.add_argument(
-        "--plugins", default=EVERYTHING
-    )  # its plugin list: Codex drops every plugin's servers
+    doctor.add_argument("--plugins", required=True)  # its plugin list: Codex drops every plugin's servers
     doctor.set_defaults(run=cmd_doctor)
-    plugins = commands.add_parser("plugins-doctor", help="bosun doctor's line for a window's plugins")
-    plugins.add_argument("--window", required=True)
-    plugins.add_argument("--harness", required=True, choices=list(AGENTS))
-    plugins.add_argument("--plugins", required=True)
-    plugins.add_argument("--list", required=True)  # its connectors: a plugin they need stays on
-    plugins.add_argument("--cwd", required=True, type=Path)
-    plugins.set_defaults(run=cmd_plugins_doctor)
     return top
 
 

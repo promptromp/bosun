@@ -538,9 +538,32 @@ def managed_plugins(managed_dir: Path | None = None) -> dict[str, bool]:
     return merged
 
 
+class UnreadableFile(ValueError):
+    """A file of Claude Code's that is there but is no JSON object bosun can read (<path>)."""
+
+    def __init__(self, path: Path) -> None:
+        super().__init__(str(path))
+        self.path = path
+
+
+def unparsable(path: Path) -> bool:
+    """Whether <path> is there but is no JSON object bosun can read (Claude Code reads it as nothing too)."""
+    return path.exists() and read_object(path) is None
+
+
+def unread_scopes(cwd: Path) -> tuple[Path, ...]:
+    """The settings scopes of a window started in <cwd> (settings_scopes) that are there but do not parse:
+    what they say of plugins is not read."""
+    return tuple(path for path in settings_scopes(cwd) if unparsable(path))
+
+
 def installed_plugin_ids(installed: Path | None = None) -> tuple[str, ...]:
-    """The id (`name@marketplace`) of every plugin installed_plugins.json records, at any scope."""
-    plugins = (read_object(installed or INSTALLED_PLUGINS) or {}).get("plugins")
+    """The id (`name@marketplace`) of every plugin installed_plugins.json records, at any scope; none without
+    the file. UnreadableFile when it is there but does not parse: nothing can tell what is installed then."""
+    path = installed or INSTALLED_PLUGINS
+    if unparsable(path):
+        raise UnreadableFile(path)
+    plugins = (read_object(path) or {}).get("plugins")
     return tuple(str(key) for key in plugins) if isinstance(plugins, dict) else ()
 
 

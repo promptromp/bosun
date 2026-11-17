@@ -3,11 +3,11 @@
 turned into the arguments of its launch. What every agent's module shares is lib/connectors.py. Design:
 docs/design/connectors.md.
 
-Usage: connectors_codex.py --list <value> --agent-bin <codex> [--plugins <value>]
+Usage: connectors_codex.py --list <value> --plugins <value> --agent-bin <codex>
            Codex's launch arguments, one per line, from `codex mcp list --json` with plugins and
            without: each configured server the list does not name switched off, every plugin when it
-           does not name one of their servers or when the window's plugin list (lib/plugins.py; default
-           `all`) is not `all` (Codex cannot keep some plugins and not others), and ChatGPT's connectors.
+           does not name one of their servers or when the window's plugin list (lib/plugins.py) is not
+           `all` (Codex cannot keep some plugins and not others), and ChatGPT's connectors.
            For the connectors list `all`: nothing, or only `--disable plugins` for a plugin list that is
            not `all` (no listing then). A line on stderr per name of the list Codex has no server by.
 
@@ -223,7 +223,7 @@ def cmd_codex(args: argparse.Namespace) -> int:
 def parser() -> argparse.ArgumentParser:
     top = argparse.ArgumentParser(prog="connectors_codex.py", description="Codex's launch arguments.")
     top.add_argument("--list", required=True)
-    top.add_argument("--plugins", default=connectors.EVERYTHING)
+    top.add_argument("--plugins", required=True)
     top.add_argument("--agent-bin", required=True)
     top.set_defaults(run=cmd_codex)
     return top

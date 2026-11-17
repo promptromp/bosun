@@ -155,9 +155,11 @@ sessions:
 ```
 
 bosun's own orchestrator plugin always loads. A plugin one of whose servers the window's connectors name
-(`plugin:acme-slack:slack`) stays on, so a connector never breaks for it. The launch switches the others off with a
+(`plugin:acme-slack:slack`) stays on, so a connector never breaks for it, and so does one your orchestrator
+settings file (`BOSUN_ORCHESTRATOR_SETTINGS`) enables. The launch switches the others off with a
 `false` for each in its `--settings`, which outranks your own, the project's and the local settings, but not managed
-settings: a plugin those force on loads anyway, and the launch logs it. A name no plugin has is left out and logged.
+settings: a plugin those force on loads anyway, and the launch logs it. A name no plugin has is left out and logged, as is a settings file that does not parse; an
+`installed_plugins.json` that does not parse keeps a window with a list from starting.
 On Codex a list other than `all` switches every plugin off (Codex cannot keep some and not others); an Antigravity
 window with one does not start. `bosun doctor` has a line for each window: all of yours, or none or the ones it
 keeps, how many it switches off, and what it keeps for its connectors. An install from before this setting keeps
