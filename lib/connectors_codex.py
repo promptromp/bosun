@@ -186,7 +186,7 @@ def plugins_doctor_line(
     """The doctor's line for a Codex window's plugins: all of mine, or none (every plugin switched off), a
     warning naming those of its list it cannot keep. What goes with them is in its connectors line."""
     if plugin_list.everything:
-        return connectors.OK, f"{args.window}: {plugins.EVERYTHING_LINE}"
+        return plugins.everything_report(args.window, args.kind)
     return connectors.report(args.window, PLUGINS_OFF, [connectors.part(CANNOT_KEEP, plugin_list.names)])
 
 

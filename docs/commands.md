@@ -294,7 +294,10 @@ or an update holds it, and a watchdog job that never ran warns three intervals a
   Claude Code window that another settings file would widen, which does not start. See
   [Connectors](configuration.md#connectors-what-each-window-may-reach).
 - **Which of your plugins each window loads**: all of yours, or none or the ones it keeps, how many it switches off,
-  what it keeps for its connectors; it warns for a name not found and a plugin managed settings force on. See
+  what it keeps for its connectors. It warns while the orchestrator's list is `all` (a plugin's hook or skill can
+  stop its unattended runs at a question: name the ones it needs, or set it empty for none), for a name not found, a
+  plugin managed settings force on and a settings file that does not parse (what it says of plugins is not read),
+  and says a window with a list does not start while `installed_plugins.json` does not parse. See
   [Plugins](configuration.md#plugins-which-of-yours-each-window-loads).
 - **What the last `bosun update` left to you**: what to change by hand in your own files (warns), and the config keys
   it added that `bosun.env` does not set, with the value each has now and what it means.

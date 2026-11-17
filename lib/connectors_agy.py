@@ -206,7 +206,7 @@ def plugins_doctor_line(
 ) -> tuple[str, str]:
     """The doctor's line for an agy window's plugins: all of mine, or a window that does not start."""
     if plugin_list.everything:
-        return connectors.OK, f"{args.window}: {plugins.EVERYTHING_LINE}"
+        return plugins.everything_report(args.window, args.kind)
     return connectors.WARN, f"{args.window}: does not start: {NO_PLUGIN_LIMIT}"
 
 

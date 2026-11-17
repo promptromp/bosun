@@ -1806,6 +1806,9 @@ out="$("${PL[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="plugin:acme-helper:helper" "$BO
 check "doctor says what plugins each window loads: the orchestrator's" contains "$out" \
   "ok    orch: plugins: none of yours (1 switched off); keeps acme-helper@acme-market for its server in connectors"
 check "... and a repo window's" contains "$out" "ok    alpha: plugins: all of yours"
+check "... and warns of an orchestrator kept at all, saying how to narrow it" contains \
+  "$("${PL[@]}" BOSUN_ORCHESTRATOR_PLUGINS=all "$BOSUN" doctor 2>&1)" \
+  "warn  orch: plugins: all of yours: a plugin's hook or skill can stop its unattended runs at a question: name the ones it needs in BOSUN_ORCHESTRATOR_PLUGINS, or set it empty for none"
 check "... and warns of a name not found" contains "$(BOSUN_PLUGINS=acme-gone "$BOSUN" doctor 2>&1)" \
   "warn  alpha: plugins: none of yours (2 switched off); plugins not found, so it starts without: acme-gone"
 (cd "$REPO_A" && "${PL[@]}" "$BOSUN" launch orch >/dev/null 2>&1)

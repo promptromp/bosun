@@ -13,13 +13,13 @@ plugin's servers, `plugin:<plugin>:<server>`) stays on, as does one the orchestr
 enables. bosun's own orchestrator plugin, which the launch loads with --plugin-dir (an `@inline` id), is
 never one of mine.
 
-Usage: plugins.py doctor --window <name> --harness <agent> --plugins <value> --connectors <value> --cwd <dir>
-                         [--settings-file <file>]
+Usage: plugins.py doctor --window <name> [--kind <kind>] --harness <agent> --plugins <value>
+                         --connectors <value> --cwd <dir> [--settings-file <file>]
            bosun doctor's line for a window's plugins: `ok` or `warn`, a tab, then what plugins of mine it
            loads, from the module its agent's profile names (Profile.plugins); <value> after --connectors is
            its connectors list, whose plugins stay on, and --settings-file the orchestrator's settings file
-           (BOSUN_ORCHESTRATOR_SETTINGS). Always exit 0 with one line, but for a command line that cannot be
-           read (2).
+           (BOSUN_ORCHESTRATOR_SETTINGS); <kind>, its kind in the window list, warns of `all` for the
+           orchestrator. Always exit 0 with one line, but for a command line that cannot be read (2).
 """
 
 from __future__ import annotations
@@ -44,6 +44,10 @@ SESSION_ONLY = "@inline"  # a plugin a launch loads by --plugin-dir, such as bos
 
 # bosun doctor's words, which every agent's module shares
 EVERYTHING_LINE = "plugins: all of yours"
+NARROW_THEM = (
+    "a plugin's hook or skill can stop its unattended runs at a question: name the ones it needs in "
+    "BOSUN_ORCHESTRATOR_PLUGINS, or set it empty for none"
+)
 NONE_LINE = "plugins: none of yours"
 KEEPS_LINE = "plugins: keeps {}"
 NOT_FOUND = "plugins not found, so it starts without: {}"
@@ -183,6 +187,14 @@ def plan(plugin_list: Allowed, connector_list: Allowed, facts: PluginFacts) -> P
     )
 
 
+def everything_report(window: str, kind: str) -> tuple[str, str]:
+    """A window with `all`, whatever its agent: all of mine, which the orchestrator should not keep, as it
+    runs unattended (an older install's, which bosun update kept at `all`)."""
+    if kind == connectors.ORCHESTRATOR:
+        return connectors.WARN, f"{window}: {EVERYTHING_LINE}: {NARROW_THEM}"
+    return connectors.OK, f"{window}: {EVERYTHING_LINE}"
+
+
 def report(window: str, plugin_plan: PluginPlan) -> tuple[str, str]:
     """A Claude Code window's doctor line: what it loads of mine, how many it switches off, what it keeps
     for its connectors and its settings file (notes), and each name not found, each plugin managed settings
@@ -226,6 +238,7 @@ def parser() -> argparse.ArgumentParser:
     commands = top.add_subparsers(dest="command", required=True)
     doctor = commands.add_parser("doctor", help="bosun doctor's line for a window's plugins")
     doctor.add_argument("--window", required=True)
+    doctor.add_argument("--kind", default="session")  # its kind in the window list: see everything_report
     doctor.add_argument("--harness", required=True, choices=list(AGENTS))
     doctor.add_argument("--plugins", required=True)
     doctor.add_argument("--connectors", required=True)  # a plugin they need stays on

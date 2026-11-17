@@ -221,6 +221,24 @@ class DoctorCommandTest(connector_fakes.ScratchCase):
             self.assertEqual(self.plugins_doctor("probe"), (0, "ok\tstub\n", ""))
         self.assertEqual(seen, [(Allowed(("probe",)), Allowed(("plugin:acme-slack:slack",)))])
 
+    def test_an_orchestrator_kept_at_all_warns_and_says_how_to_narrow_it(self) -> None:
+        """Item 9: as its connectors line does (an older install's, which bosun update kept at all), whatever
+        the agent's module; a repo window's all is fine."""
+        for harness in ("claude", "codex", "agy"):
+            code, out, err = connector_fakes.capture(
+                plugins.main,
+                *("doctor", "--window", "orch", "--kind", "orchestrator", "--harness", harness),
+                *("--plugins=all", "--connectors", "", "--cwd", str(self.root)),
+            )
+            warning = (
+                "warn\torch: plugins: all of yours: a plugin's hook or skill can stop its unattended "
+                "runs at a question: name the ones it needs in BOSUN_ORCHESTRATOR_PLUGINS, or set it "
+                "empty for none\n"
+            )
+            self.assertEqual((code, out, err), (0, warning, ""), harness)
+            ok = (0, "ok\talpha: plugins: all of yours\n", "")
+            self.assertEqual(self.plugins_doctor("all", harness), ok, harness)
+
     def test_a_list_that_cannot_be_read_does_not_start(self) -> None:
         self.assertEqual(
             self.plugins_doctor("all, probe", harness="codex"),

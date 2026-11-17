@@ -258,7 +258,7 @@ class PluginListTest(AgyCase):
         self.assertEqual(self.run_main("all", self.root / "no-agy"), (0, "", ""))
 
     def test_the_doctor_line_for_its_plugins(self) -> None:
-        args = argparse.Namespace(window="ag")
+        args = argparse.Namespace(window="ag", kind="session")
         self.assertEqual(
             connectors_agy.plugins_doctor_line(args, parse("all"), parse("")),
             ("ok", "ag: plugins: all of yours"),

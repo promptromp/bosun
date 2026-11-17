@@ -136,7 +136,7 @@ class PluginListTest(unittest.TestCase):
         self.assertTrue(plan.plugins_off)
 
     def test_the_doctor_line_for_its_plugins(self) -> None:
-        args = argparse.Namespace(window="cx")
+        args = argparse.Namespace(window="cx", kind="session")
         self.assertEqual(
             connectors_codex.plugins_doctor_line(args, plugins.parse("all"), parse("")),
             ("ok", "cx: plugins: all of yours"),

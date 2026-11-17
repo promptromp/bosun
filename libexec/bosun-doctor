@@ -167,8 +167,8 @@ check_after_update() {
 # one. A warning for the orchestrator with `all`, for a name not found, and for a Claude Code window that
 # another settings scope would widen, which does not start (the launch's own check); for the orchestrator,
 # what its settings file's allowedMcpServers comes to. Then a line for the plugins of mine it loads
-# (window_plugins, docs/design/connectors.md "Plugins"), from the files its launch reads. A window list that
-# cannot be read is check_config's.
+# (window_plugins, docs/design/connectors.md "Plugins"), from the files its launch reads: a warning for the
+# orchestrator with `all`, as for its connectors. A window list that cannot be read is check_config's.
 check_connectors() {
   local specs name dir kind harness list plugins plugins_read said
   local -a site
@@ -192,7 +192,7 @@ check_connectors() {
         --agent-bin "$(harness_bin "$harness")" ${site[@]+"${site[@]}"} </dev/null 2>&1)"
       say_window_line "$name" connectors "$said"
       if [ "$plugins_read" = 1 ]; then
-        say_window_line "$name" plugins "$(python3 "$BOSUN_ROOT/lib/plugins.py" doctor --window "$name" \
+        say_window_line "$name" plugins "$(python3 "$BOSUN_ROOT/lib/plugins.py" doctor --window "$name" --kind "$kind" \
           --harness "$harness" --plugins="$plugins" --connectors="$list" --cwd "$dir" ${site[@]+"${site[@]}"} </dev/null 2>&1)"
       else
         fail "$name: could not read its plugins: $(window_plugins "$name" 2>&1 >/dev/null | tail -n 1)"

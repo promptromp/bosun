@@ -193,7 +193,7 @@ class CommandTest(PluginsCase):
 
 class DoctorTest(PluginsCase):
     def line(self, plugin_list: str, connector_list: str = "") -> tuple[str, str]:
-        args = argparse.Namespace(window="orch", cwd=self.repo, settings_file=None)
+        args = argparse.Namespace(window="orch", kind="session", cwd=self.repo, settings_file=None)
         return plugins_claude.plugins_doctor_line(args, plugins.parse(plugin_list), parse(connector_list))
 
     def test_doctor_says_why_a_plugin_stays_on_and_what_it_could_not_read(self) -> None:
@@ -202,7 +202,7 @@ class DoctorTest(PluginsCase):
         self.project.write_text("{not json")
         site = self.root / "orchestrator-settings.json"
         self.switches(site, {HELPER: True})
-        args = argparse.Namespace(window="orch", cwd=self.repo, settings_file=site)
+        args = argparse.Namespace(window="orch", kind="orchestrator", cwd=self.repo, settings_file=site)
         self.assertEqual(
             plugins_claude.plugins_doctor_line(args, plugins.parse(""), parse("")),
             (

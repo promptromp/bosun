@@ -79,7 +79,7 @@ def plugins_doctor_line(
 ) -> tuple[str, str]:
     """The doctor's level and line for a Claude Code window's plugins, from the files its launch reads."""
     if plugin_list.everything:
-        return plugins.report(args.window, plugins.PluginPlan(everything=True))
+        return plugins.everything_report(args.window, args.kind)
     window_facts = facts(args.cwd, args.settings_file)
     return plugins.report(args.window, plugins.plan(plugin_list, connector_list, window_facts))
 

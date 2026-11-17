@@ -430,7 +430,8 @@ so an update restarts it, which is meant.
 **Seeing it.** `bosun doctor` prints a line per window beside its connectors line: `plugins: all of yours`, or
 `plugins: none of yours` / `plugins: keeps <ids>`, with how many it switches off, what it keeps for its connectors
 and for the orchestrator's settings file, each name not found, each plugin managed settings force on and each
-settings scope that does not parse. Its connectors line comes first, so a `plugins:` that cannot be read does not
+settings scope that does not parse. An orchestrator at `all` (an older install's, kept by the update) warns, as
+its connectors line does at `all`, saying how to narrow it (`plugins.everything_report`, whatever the agent). Its connectors line comes first, so a `plugins:` that cannot be read does not
 hide it. The entry point is `lib/plugins.py doctor`, which asks the module the window's profile names, as
 `lib/connectors.py doctor` does for connectors. A Codex window's says every plugin goes; an agy
 window's says it does not start.
