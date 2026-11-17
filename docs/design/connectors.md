@@ -353,7 +353,8 @@ claude.ai names as meaning nothing there.
 
 ## Plugins
 
-Status: built 2026-11-17, not yet run in the VM (its check is in `tests/sandbox/live.sh`).
+Status: built 2026-11-17, and run in the VM the same day (`tests/sandbox.sh mac live claude`, 109 passed, 0
+failed): the probe plugin's hook ran in a repo window's start and in none of the orchestrator's sessions.
 
 **What a plugin brings.** A Claude Code window loads every plugin I enabled (`enabledPlugins` in my
 `~/.claude/settings.json`, and in the folder's `.claude/settings.json` and `.claude/settings.local.json`): its

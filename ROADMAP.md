@@ -269,7 +269,8 @@ findings that came back, not yet against when their fix was applied); sandboxed 
 transcript excerpts; proposals as diffs to the generic prompts (reviewed as PRs); a second harness
 adapter, for Codex windows. Open: whether `learn apply` should also need a permission prompt once
 phone approvals are verified; and the analysis call, which still loads every Claude Code plugin of mine (the
-Slack watcher's loads no settings files; the orchestrator's plugin list, 2026-11-17, is the other way).
+Slack watcher's loads no settings files, and the orchestrator loads none of my plugins since 2026-11-17,
+`BOSUN_ORCHESTRATOR_PLUGINS`).
 
 ### 6. Sync and sharing
 
