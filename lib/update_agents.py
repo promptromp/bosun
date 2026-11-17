@@ -495,16 +495,21 @@ def _prompt_name(path: str) -> str:
     return path.rsplit(f"/{PROMPTS_DIR}/", 1)[-1]
 
 
+def _done(entry: Sequence[str], asked: str) -> list[str]:
+    """What was done to a window whose record is <entry>, <asked> for its re-read."""
+    return [asked if what == ASKED_REREAD else what for what in entry[2:] if what != ANSWERED]
+
+
 def _what_came(window: str, entry: Sequence[str], notes: Notes, asked: str) -> str:
     """What came of <window>, whose record is <entry>: what was done (<asked> for its re-read), then
     its answer, or where the background work it listed is kept when it started its next conversation."""
-    done = [asked if what == ASKED_REREAD else what for what in entry[2:] if what != ANSWERED]
+    done = _done(entry, asked)
     line = ", ".join(done) or "nothing yet"
     if NEXT_CONVERSATION in done:
         listed = notes.read(window, STOCK) is not None
         return line + (f" (the background work it listed: {notes.where(window, STOCK)})" if listed else "")
     if _not_started(done):
-        return f"{line}; {NOT_STARTED_HINT.format(window=window)}"
+        return line
     answer = notes.read(window, STATUS)
     return line + (f"; {answer.splitlines()[0]}" if answer and ANSWERED in entry else "")
 
@@ -512,7 +517,8 @@ def _what_came(window: str, entry: Sequence[str], notes: Notes, asked: str) -> s
 def outcomes(state: UpdateState, notes: Notes) -> list[tuple[str, str]]:
     """Each window brought along, and what came of it in a line: what was done (the files it was asked
     to re-read named), its answer, where the background work it listed is kept when it never got it
-    back (it started its next conversation), or that it is still waited for."""
+    back (it started its next conversation), or that it is still waited for; whether the last update
+    owed it too; last, what to do about one that did not start."""
     asked = f"{ASKED_REREAD} {', '.join(map(_prompt_name, state.reread))}" if state.reread else ASKED_REREAD
     carried = _carried(state)
     return [
@@ -520,7 +526,8 @@ def outcomes(state: UpdateState, notes: Notes) -> list[tuple[str, str]]:
             window,
             _what_came(window, entry, notes, asked)
             + ("; still waited for" if window in state.pending else "")
-            + (f" {OWED_TOO}" if window in carried else ""),
+            + (f" {OWED_TOO}" if window in carried else "")
+            + (f"; {NOT_STARTED_HINT.format(window=window)}" if _not_started(_done(entry, asked)) else ""),
         )
         for window, entry in state.windows.items()
     ]

@@ -539,6 +539,25 @@ class TakeOverTest(unittest.TestCase):
             ],
         )
 
+    def test_one_that_did_not_start_says_it_was_owed_before_what_to_do(self) -> None:
+        """Item 10: the hint ends the line, after "owed by the last update too"."""
+        last = self.last({"api": ("repo", "restart")})
+        state = dataclasses.replace(
+            update_state.advanced(
+                bringing({"api": ("repo", Treatment.RESTART)}),
+                "done",
+                pending=(),
+                windows={"api": ("repo", "restart", "did not start: plugins: a.json does not parse")},
+            ),
+            carried=update_state.as_object(last),
+            taken_over=("api",),
+        )
+        self.assertEqual(
+            dict(update_agents.outcomes(state, MemoryNotes()))["api"],
+            "did not start: plugins: a.json does not parse (owed by the last update too); "
+            "fix that, then bosun refresh api",
+        )
+
     def test_a_turn_gives_way_between_windows_when_an_update_waits(self) -> None:
         """Decision 5: the check-in loop's turn stops after the window it is on once an update waits for
         the lock; the rest stay pending for that update to take over."""
