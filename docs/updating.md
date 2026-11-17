@@ -75,6 +75,12 @@ as `bosun.env.pre-update-<time>`, and the plan shows the change before you say y
   repo's own `.mcp.json` servers included: give one back with `BOSUN_CONNECTORS`, or `connectors:` in its
   `sessions.yml` entry. A checkout you update with `git pull` gets no such change: set the key yourself, or the
   orchestrator starts with none.
+- **`BOSUN_ORCHESTRATOR_PLUGINS="all"`:** an install from before
+  [plugin lists](configuration.md#plugins-which-of-yours-each-window-loads) keeps loading every Claude Code plugin of
+  yours in its orchestrator, as before. A plugin's hook or skill can stop its unattended runs at a question, so name
+  the ones it needs in `BOSUN_ORCHESTRATOR_PLUGINS`, or set it empty for none; `bosun doctor` says what it loads.
+  A checkout you update with `git pull` gets no such change, and the update's plan and summary say so if there is
+  no `bosun.env` to write it to: set the key yourself, or the orchestrator loads none of your plugins.
 - **`BOSUN_UPDATE_CHANNEL="main"`:** an install that was updating before releases existed goes on following the
   head of `main`, and the plan and summary say how to follow the releases instead.
 - **`BOSUN_MENU_APP`, `BOSUN_CONSOLE_ALWAYS` and `BOSUN_START_AT_LOGIN`, all `"0"`:** an install from before the
