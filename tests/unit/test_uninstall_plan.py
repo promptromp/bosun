@@ -242,9 +242,12 @@ class Folders(unittest.TestCase):
             "watchdog-2026-11-02.log",
             "slack-watch-2026-11-02.log",
             "settings-2026-11-02.log",
+            # what an agent writes there, by its profile (agy's window logs, and the dated ones rolled over)
+            "agy-api.log",
+            "agy-api-2026-11-02-1.log",
         ):
             self.assertEqual(up.kind_of(name, up.LOG_FILES), up.WORKING, name)
-            if name.endswith(".log"):
+            if name.endswith(".log") and not name.startswith("agy-"):
                 self.assertIsNotNone(log_files.day_of(name), name)  # what the morning run prunes, too
         for name in (
             "Zoom.log",

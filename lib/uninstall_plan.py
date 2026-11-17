@@ -138,6 +138,7 @@ LOG_FILES = tuple(
         # A day's file, `<writer>-YYYY-MM-DD.log`, of bosun's own writers only (lib/log_files.py's WRITERS,
         # what the morning run prunes): another program's day files in a shared folder stay
         *(f"{writer}-[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].log" for writer in log_files.WRITERS),
+        *log_files.agent_logs(),  # what the agents write there (agy's logs, say: each one's profile)
         "hook-*.log*",
         "launchd.out",
         "launchd.err",
