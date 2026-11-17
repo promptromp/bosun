@@ -1432,6 +1432,10 @@ check "approvals on: both approval hooks, next to the settings' own guard" bash 
 check "approvals on: the post hook runs on PostToolUse and PostToolUseFailure" bash -c 'grep -qE "PostToolUse[^F]" <<<"$1" && grep -q PostToolUseFailure <<<"$1" && [ "$(grep -o -- "--post-tool-use" <<<"$1" | wc -l)" -eq 2 ]' _ "$out"
 # State of its own, so the rest of the suite sees the ledger it expects.
 ap() { BOSUN_STATE_DIR="$WORK/approvals-state" BOSUN_APPROVALS_GATED_COMMANDS=touch "$BOSUN" "$@"; }
+# ledger approve runs from a terminal here: run from an agent session it checks my words there, and refuses
+# where it cannot, and this run's own process is a running Claude's record with no transcript (above), so
+# the record is set aside until the section ends, as the knowledge section does.
+mv "$HOME/.claude/sessions/$$.json" "$WORK/own-session.json"
 transcript="$WORK/orchestrator-transcript.jsonl"
 : >"$transcript"
 event="$(jq -nc --arg t "$transcript" --arg c "touch $WORK/approved" '{tool_name: "Bash", tool_input: {command: $c}, transcript_path: $t}')"
@@ -1442,6 +1446,9 @@ check "the plain guard is unchanged with approvals on" test -z "$(ap guard <<<"$
 ap ledger upsert 'mypr:acme/api#7' --kind my-pr >/dev/null
 check "approve needs a proposal with an action spec" fails_with "no pending proposal with an action spec" ap ledger approve 'mypr:acme/api#7' --quote yes
 ap ledger propose 'mypr:acme/api#7' --run "touch $WORK/approved" >/dev/null
+mv "$WORK/own-session.json" "$HOME/.claude/sessions/$$.json"
+check "approve in an agent session whose transcript is not there is refused" fails_with "transcript is not there to check the quote in" ap ledger approve 'mypr:acme/api#7' --quote '1 and 3 yes'
+mv "$HOME/.claude/sessions/$$.json" "$WORK/own-session.json"
 printf '{"type":"user","timestamp":"%s","origin":{"kind":"human"},"message":{"role":"user","content":"1 and 3 yes"}}\n' \
   "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$transcript"
 ap ledger approve 'mypr:acme/api#7' --quote '1 and 3 yes' >/dev/null
@@ -1467,6 +1474,7 @@ check "... listed as needing a new approval" contains "$(ap ledger list --propos
 check "resolve-carried-out finds nothing left to settle" contains "$(ap ledger resolve-carried-out --dry-run)" "no pending proposal has a used approval"
 unset BOSUN_APPROVALS_ENABLED
 check "with approvals off the post hook does nothing" test -z "$(ap guard --post-tool-use <<<"$post")"
+mv "$WORK/own-session.json" "$HOME/.claude/sessions/$$.json"
 
 section connectors "connectors (fake claude mcp list)" covers 'libexec/bosun-doctor,libexec/bosun-launch,lib/connectors*.py,lib/claude_state.py,lib/codex_state.py'
 # `claude mcp list` prints $WORK/mcp-list.out, or fails while there is none; each call is recorded.
