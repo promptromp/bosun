@@ -48,6 +48,7 @@ ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = ROOT / "tests" / "fixtures" / "knowledge" / "acme-import.jsonl"
 START = datetime(2026, 10, 21, 9, 0, tzinfo=UTC)
 QUOTE = "smoke tests gate every release"
+SLACK = "slack:https://acme.slack.com/archives/C0/p1"
 
 
 def stamp(moment: datetime) -> str:
@@ -538,41 +539,116 @@ class SessionQuoteTest(KnowledgeTestCase):
             self.assertIsNone(self.fact(fact)["valid_to"])
             self.assertIsNone(self.fact(fact).get("superseded_by"))
 
-    def test_a_correction_to_a_recorded_fact_is_a_replacement_by_it(self) -> None:
-        """review round 1: `--value <B's value>` on a source closed A by B, which is `--by B` without my
-        words, and revived a rejected B. It is `--by B`: from a session it needs my words, from a terminal
-        it is mine."""
+    def test_a_correction_on_sources_to_a_recorded_fact_re_observes_it(self) -> None:
+        """review rounds 1 and 2: on its sources alone, a correction to a value already recorded neither
+        replaces the fact by it (that is --by, a decision) nor confirms or revives it on untrusted text: it
+        re-observes it as `kg propose` would, from a terminal too, and the fact it corrects stays open."""
         self.seed()
         nightly, hourly = self.proposed("runs nightly"), self.proposed("runs hourly")
         weekly = self.proposed("runs weekly")
         self.run_kg("confirm", nightly)
         self.run_kg("confirm", hourly)
         self.run_kg("reject", weekly)
-        self.session(typed("it runs hourly now, not nightly", START + timedelta(hours=1)))
-        self.later(1 / 12)
-        for value, source in [
-            ("runs hourly", "slack:https://acme.slack.com/archives/C0/p1"),
-            ("runs weekly", "memory:z.md"),
-        ]:
-            with self.subTest(value=value):
-                with self.assertRaisesRegex(KnowledgeError, "--by .* --from-user --quote"):
-                    self.run_kg(
-                        "supersede", nightly, "--value", value, "--source", source, "--source", "ledger:q"
-                    )
+        for session in (typed("something else", START), None):
+            with self.subTest(session=session):
+                if session:
+                    self.session(session)
+                else:
+                    self.in_session(None)
+                out = self.run_kg("supersede", nightly, "--value", "runs hourly", "--source", SLACK)
+                self.assertIn(f"{hourly} says that and is confirmed already, so {nightly} stays open", out)
+                out = self.run_kg(
+                    "supersede",
+                    nightly,
+                    "--value",
+                    "runs weekly",
+                    "--source",
+                    "memory:z.md",
+                    "--source",
+                    "ledger:q",
+                )
+                self.assertIn(f"{weekly} says that and is rejected, so {nightly} stays open", out)
+                self.assertEqual(self.fact(weekly)["status"], km.REJECTED)
                 self.assertIsNone(self.fact(nightly)["valid_to"])
-        self.assertEqual(self.fact(weekly)["status"], km.REJECTED)
+
+    def test_a_correction_to_a_proposed_copy_settles_it(self) -> None:
+        """review round 2 (test_corr3): an earlier correction on Slack text left a proposed copy of the value;
+        a later one on two trusted kinds re-observes that copy and confirms it, closing the fact, from a
+        session as from a terminal; on Slack text alone it stays proposed."""
+        self.seed()
+        nightly = self.proposed("runs nightly")
+        self.run_kg("confirm", nightly)
+        self.session(typed("something else", START))
+        out = self.run_kg("supersede", nightly, "--value", "runs hourly", "--source", SLACK)
+        hourly = list(self.kb().facts)[-1]
+        self.assertIn(f"{hourly} proposed as the correction of {nightly}", out)
+        out = self.run_kg("supersede", nightly, "--value", "runs hourly", "--source", SLACK)
+        self.assertEqual(self.fact(hourly)["status"], km.PROPOSED)
+        self.assertIsNone(self.fact(nightly)["valid_to"])
         out = self.run_kg(
-            "supersede", nightly, "--value", "runs hourly", "--from-user", "--quote", "it runs hourly now"
+            "supersede", nightly, "--value", "runs hourly", "--source", "memory:b.md", "--source", "ledger:y"
         )
         self.assertIn(f"{nightly} closed, superseded by {hourly}", out)
-        self.in_session(None)  # from a terminal, the replacement by a recorded fact is mine
-        other = self.proposed("runs on demand")
-        self.run_kg("confirm", other)
+        self.assertEqual(self.fact(hourly)["status"], km.CONFIRMED)
+        # Single-valued: the fact it corrects is no contradiction when the copy is re-observed either
+        # (settle's ignoring, through observe), so a profile source confirms the copy and closes it.
+        self.run_kg("propose", "person/dana", "timezone", "--value", "Europe/Berlin", "--source", "profile:a")
+        berlin = list(self.kb().facts)[-1]
+        self.run_kg("supersede", berlin, "--value", "America/New_York", "--source", SLACK)
+        new_york = list(self.kb().facts)[-1]
+        self.assertEqual(self.fact(new_york)["status"], km.PROPOSED)
+        out = self.run_kg("supersede", berlin, "--value", "America/New_York", "--source", "profile:b")
+        self.assertIn(f"{berlin} superseded by {new_york}", out)
+        self.assertEqual(self.fact(new_york)["status"], km.CONFIRMED)
+
+    def test_a_correction_in_my_words_to_a_recorded_fact_is_a_replacement_by_it(self) -> None:
+        """With my words it is --by that fact, and the words must come after that fact was proposed too."""
+        self.seed()
+        nightly = self.proposed("runs nightly")
+        self.run_kg("confirm", nightly)
+        self.later(1 / 24)
+        self.session(typed("note that the exporter runs hourly now", self.now))
+        self.later(1 / 24)
+        hourly = self.proposed("runs hourly")
+        self.later(1 / 24)
+        with self.assertRaisesRegex(KnowledgeError, "since what it decides on was proposed"):
+            self.run_kg(
+                "supersede",
+                nightly,
+                "--value",
+                "runs hourly",
+                "--from-user",
+                "--quote",
+                "the exporter runs hourly now",
+            )
+        self.session(typed("note that the exporter runs hourly now", self.now))
+        self.later(1 / 24)
         out = self.run_kg(
-            "supersede", other, "--value", "runs weekly", "--source", "slack:https://acme.slack.com/x"
+            "supersede",
+            nightly,
+            "--value",
+            "runs hourly",
+            "--from-user",
+            "--quote",
+            "the exporter runs hourly now",
         )
-        self.assertIn(f"{other} closed, superseded by {weekly}", out)
-        self.assertEqual(self.fact(weekly)["status"], km.CONFIRMED)
+        self.assertIn(f"{nightly} closed, superseded by {hourly}", out)
+        self.assertEqual(self.fact(hourly)["status"], km.CONFIRMED)
+        self.assertEqual(self.fact(hourly)["reviewed_by"]["quote"], "the exporter runs hourly now")
+
+    def test_a_correction_on_untrusted_text_from_a_terminal_waits_too(self) -> None:
+        """review round 2 (test_corr3): from a terminal, a Slack-only correction neither confirms a proposed
+        copy nor closes the fact."""
+        self.seed()
+        self.run_kg("propose", "environment/staging-2", "status", "--value", "active", "--source", "memory:a")
+        active = self.f(1)
+        self.run_kg("confirm", active)
+        self.run_kg("propose", "environment/staging-2", "status", "--value", "retired", "--source", SLACK)
+        retired = self.f(2)
+        out = self.run_kg("supersede", active, "--value", "retired", "--source", SLACK)
+        self.assertIn(f"{active} stays open", out)
+        self.assertEqual(self.fact(retired)["status"], km.PROPOSED)
+        self.assertIsNone(self.fact(active)["valid_to"])
 
     def test_closing_or_replacing_by_another_fact_from_a_session_needs_my_words(self) -> None:
         self.seed()

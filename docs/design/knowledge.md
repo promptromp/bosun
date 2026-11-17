@@ -339,11 +339,12 @@ Where the design was silent (plan: [ontology-mvp3](../plans/ontology-mvp3.md)):
    Since 2026-11-16 such a correction is confirmed only as the auto-confirm rules would confirm a proposal on its
    sources (the fact it corrects not counting as a contradiction); otherwise it waits for review and the fact it
    corrects stays open (a single-valued one closes when the correction is confirmed). Before, it was confirmed as
-   a decision, so a Slack, PR, ticket or doc source alone replaced a confirmed fact. A correction whose value or
-   object is already a current fact is a replacement by that fact (`--by`), which from a session needs my words,
-   and one to the corrected fact's own value is refused (it closed the fact as superseded by itself); the fact is
-   closed only when the correction itself confirmed its replacement (`settle`'s `ignoring`). Also since
-   2026-11-16 a fact proposed in my words from a session needs the same 8 characters (a verified one confirms over
+   a decision, so a Slack, PR, ticket or doc source alone replaced a confirmed fact. A correction to a value or
+   object already a current fact re-observes that fact on its sources alone, as `kg propose` would, from a
+   terminal too (a rejected one stays rejected), and is a replacement by it (`--by`) in my words, typed after that
+   fact was proposed too; one to the corrected fact's own value is refused (it closed the fact as superseded by
+   itself). The fact is closed only when this supersede confirmed its replacement (`settle`'s `ignoring` keeps
+   the corrected fact from counting as a contradiction). Also since 2026-11-16 a fact proposed in my words from a session needs the same 8 characters (a verified one confirms over
    a contradiction and revives a rejected fact, so "yes" said too little), and every quote of my words counts only
    as whole words of the prompt (`approvals.words_in`: it never begins or ends inside a word), the matching
    approvals use; before, any substring counted.

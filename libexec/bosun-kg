@@ -44,9 +44,9 @@
 #                                      agent's session, --by and --close need one too, as confirm
 #                                      (a correction with a --source needs none). A correction with
 #                                      only --source is confirmed only as propose would confirm it;
-#                                      otherwise it waits for kg batch and the fact stays open. One to
-#                                      a value already recorded is --by that fact; one to the fact's
-#                                      own value is refused
+#                                      otherwise it waits for kg batch and the fact stays open. To a
+#                                      value already recorded, it re-observes that fact (in my words:
+#                                      --by that fact); to the fact's own value, it is refused
 #   batch [--cap N] [--max-facts N] [--json]
 #                                      the review batch: proposals grouped by entity and axis, one
 #                                      numbered list, rework-preventing groups first; at most --cap

@@ -1230,15 +1230,16 @@ def needs_words(args: argparse.Namespace) -> bool:
 
 
 def supersede_words(
-    kb: KB, args: argparse.Namespace, session: agent_state.CallingSession | None
+    kb: KB, args: argparse.Namespace, session: agent_state.CallingSession | None, existing: str | None = None
 ) -> Record | None:
-    """The words a supersede stands on (needs_words). From an agent's session (<session>), checked as a
-    review's are (decision_words). From a terminal, words given are checked as a proposal's are
-    (--transcript)."""
+    """The words a supersede stands on (needs_words), typed after the facts it decides on were proposed:
+    the fact it closes, and the one that replaces it (--by, or <existing>, the recorded fact a correction
+    names). From an agent's session (<session>), checked as a review's are (decision_words). From a
+    terminal, words given are checked as a proposal's are (--transcript)."""
     if not needs_words(args):
         return None
-    facts = [km.get_fact(kb, args.id), *([km.get_fact(kb, args.by)] if args.by else [])]
-    words = decision_words(args, session, facts)
+    replacing = [km.get_fact(kb, fact_id) for fact_id in (args.by, existing) if fact_id]
+    words = decision_words(args, session, [km.get_fact(kb, args.id), *replacing])
     if words is None and args.from_user:
         words = user_source(args, None)
         if not words["verified"]:
@@ -1258,32 +1259,19 @@ def replacement_of(kb: KB, args: argparse.Namespace, words: Record | None) -> Pr
     return proposal_from(args, old["subject"], old["predicate"], args.object, sources)
 
 
-def recorded_replacement(
-    kb: KB, args: argparse.Namespace, replacement: km.Proposal | None, words: Record | None
-) -> str | None:
-    """The recorded fact a correction names (km.same_fact), which makes it a replacement by that fact
-    (--by): a decision, which from an agent's session needs my words, as --by does (refused here
-    without them); None for a correction that names a new fact, or none."""
-    existing = km.same_fact(kb, args.id, replacement) if replacement is not None else None
-    if existing is not None and words is None and agent_state.calling_session() is not None:
-        raise KnowledgeError(
-            f"the correction is {existing}, recorded already: replacing {args.id} by it is a decision, which "
-            f"from a session needs your words: kg supersede {args.id} --by {existing} --from-user --quote "
-            "'<your exact words>'"
-        )
-    return existing
-
-
 def cmd_supersede(args: argparse.Namespace) -> str:
+    """Close a fact (km.supersede). A correction in my words to a value already recorded is a replacement by
+    that fact (--by); one on its sources alone, from a terminal too, re-observes it as `kg propose` would."""
     chosen = [args.value is not None, args.object is not None, args.by is not None, args.close]
     if sum(chosen) != 1:
         raise KnowledgeError("supersede takes exactly one of --value, --object, --by or --close")
     session = deciding_session(args) if needs_words(args) else None
     with opened(True, f"supersede {args.id}") as kb:
-        words = supersede_words(kb, args, session)
-        replacement = replacement_of(kb, args, words)
-        existing = recorded_replacement(kb, args, replacement, words)
-        by, replacement = (existing, None) if existing is not None else (args.by, replacement)
+        correcting = args.value is not None or args.object is not None
+        existing = km.recorded_correction(kb, args.id, args.object, args.value) if correcting else None
+        words = supersede_words(kb, args, session, existing)
+        by = existing if existing is not None and words is not None else args.by
+        replacement = None if by is not None else replacement_of(kb, args, words)
         note = decision_note(args.note or "", words)
         messages = km.supersede(kb, args.id, replacement, by, note, reviewer=reviewer(words))
     return "\n".join(messages)

@@ -713,19 +713,30 @@ def review(
     return messages
 
 
-def same_fact(kb: KB, old_id: str, replacement: Proposal) -> str | None:
-    """The current fact a correction of <old_id> would be (the same subject, predicate and object or value),
-    if one is recorded; refused when it is <old_id> itself, which a correction to its own value would only
-    close as superseded by itself."""
-    subject, obj, predicate = check_claim(kb, replacement)
-    value = replacement.value.strip() if replacement.value is not None else None
-    existing = find_same(kb, fact_key(subject, predicate.name, obj, value))
+def recorded_correction(kb: KB, old_id: str, obj: str | None, value: str | None) -> str | None:
+    """The current fact a correction of <old_id> to <obj> or <value> would be (the same subject, predicate
+    and object or value), if one is recorded; refused when it is <old_id> itself, which a correction to its
+    own value would only close as superseded by itself."""
+    old = get_fact(kb, old_id)
+    target = resolve(kb, obj) if obj is not None else None
+    key = fact_key(old["subject"], old["predicate"], target, value.strip() if value is not None else None)
+    existing = find_same(kb, key)
     if existing is not None and existing["id"] == old_id:
         raise KnowledgeError(
             f"{old_id} already says that: a correction to its own value replaces nothing (to end it: "
             f"kg supersede {old_id} --close)"
         )
     return None if existing is None else str(existing["id"])
+
+
+@dataclass(frozen=True)
+class Replacement:
+    """The fact that replaces another, what its confirmation said, and whether this supersede confirmed it
+    (a decision, or a correction its sources confirm now): only then is the other closed."""
+
+    fact_id: str | None
+    messages: list[str]
+    confirmed: bool
 
 
 def replacement_fact(
@@ -735,32 +746,35 @@ def replacement_fact(
     by: str | None,
     note: str,
     reviewer: Record | None = None,
-) -> tuple[str | None, list[str]]:
-    """The fact that replaces <old_id>, if any, and what confirming it said: an existing one (<by>),
-    confirmed, as replacing a fact by another is a decision; or a new one (<replacement>), confirmed only
-    as a proposal of it would be (settle, <old_id> counting as no contradiction). A correction on its
-    sources alone is no decision: Slack, PR, ticket and doc text never confirms a fact, nor a
-    correction's. A replacement already recorded is a replacement by it (`by`; same_fact)."""
+) -> Replacement:
+    """The fact that replaces <old_id>, if any: an existing one (<by>), confirmed, as replacing a fact by
+    another is a decision; or the correction <replacement>, proposed as `kg propose` would (settle; <old_id>
+    counting as no contradiction): a new fact, or one recorded already, re-observed. A correction on its
+    sources alone is no decision: Slack, PR, ticket and doc text never confirms a fact, nor a correction's,
+    it never revives a rejected one, and one already confirmed was not confirmed by it."""
     if by is not None:
         new = get_fact(kb, by)
-        return by, [] if new["status"] == CONFIRMED else confirm_fact(kb, new, CORRECTION, note, by=reviewer)
+        messages = [] if new["status"] == CONFIRMED else confirm_fact(kb, new, CORRECTION, note, by=reviewer)
+        return Replacement(by, messages, True)
     if replacement is None:
-        return None, []
-    existing = same_fact(kb, old_id, replacement)
-    if existing is not None:
-        raise KnowledgeError(
-            f"the correction is {existing}, recorded already: kg supersede {old_id} --by {existing}"
-        )
+        return Replacement(None, [], False)
+    existing = recorded_correction(kb, old_id, replacement.object, replacement.value)
+    was_confirmed = existing is not None and kb.facts[existing]["status"] == CONFIRMED
     outcome = propose(kb, replacement, ignoring=old_id)
-    return outcome.fact_id, outcome.messages
+    return Replacement(outcome.fact_id, outcome.messages, outcome.status == CONFIRMED and not was_confirmed)
 
 
 def left_open(kb: KB, old_id: str, new_id: str) -> str:
-    """What a correction that confirmed nothing says: its replacement waits, and <old_id> holds until then."""
+    """What a correction that confirmed nothing says: what its replacement is, and that <old_id> holds."""
     new = get_fact(kb, new_id)
     status = effective_status(new, kb.now)
+    if status == CONFIRMED:
+        return (
+            f"note: {new_id} says that and is confirmed already, so {old_id} stays open: replacing it by "
+            f"{new_id} is a decision (kg supersede {old_id} --by {new_id}; from a session, with your words)"
+        )
     if status != PROPOSED:
-        return f"note: {new_id} is {status}, so {old_id} stays open"
+        return f"note: {new_id} says that and is {status}, so {old_id} stays open"
     then = (
         f"confirming {new_id} closes it"
         if kb.schema.predicate(new["predicate"]).single
@@ -784,7 +798,7 @@ def supersede(
 ) -> list[str]:
     """Close a current fact: replaced by an existing fact (--by), by a new one (replacement_fact: a
     correction in my words is confirmed, one on its sources alone only as the auto-confirm rules would
-    confirm it), or by nothing (it simply stopped holding). A new replacement that this correction did not
+    confirm it), or by nothing (it simply stopped holding). A replacement that this supersede did not
     confirm leaves the fact open. <reviewer> says who decided (recorded as reviewed_by on what it confirms
     and closes)."""
     old = get_fact(kb, old_id)
@@ -794,8 +808,9 @@ def supersede(
         )
     if by == old_id:
         raise KnowledgeError("a fact cannot supersede itself")
-    new_id, messages = replacement_fact(kb, old_id, replacement, by, note, reviewer)
-    if new_id is not None and kb.facts[new_id]["status"] != CONFIRMED:
+    found = replacement_fact(kb, old_id, replacement, by, note, reviewer)
+    new_id, messages = found.fact_id, found.messages
+    if new_id is not None and not found.confirmed:
         return [*messages, left_open(kb, old_id, new_id)]
     if is_current(kb.facts[old_id]):
         default = f"superseded by {new_id}" if new_id else "no longer holds"
