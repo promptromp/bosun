@@ -345,6 +345,7 @@ class TestCommandLine(unittest.TestCase):
         self.assertEqual(json.loads(run("get", *self.common, "--schedule", ours)[1])["wake"], "other")
         text = run("get", *self.common, "--schedule", ours, "--text")[1]
         self.assertIn("bosun's from before, though BOSUN_WAKE=0", text)
+        self.assertIn("sudo pmset repeat cancel ends it; it removes any other repeating event too", text)
 
     def test_write(self) -> None:
         status, out, _ = run("write", *self.common, "--stamp", "20261114-090000", "BOSUN_START_TIME=09:00")
@@ -410,6 +411,7 @@ class TestCommandLine(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()) as out:
             settings.main(["say", "--wake-leftover", "--json"], stdin=io.StringIO(changes))
         self.assertEqual(json.loads(out.getvalue())["notes"], [settings.WAKE_LEFTOVER])
+        self.assertIn("cancels it (it removes any other repeating event too)", settings.WAKE_LEFTOVER)
 
     def test_error(self) -> None:
         self.assertEqual(json.loads(run("error", "no")[1]), {"contract": 1, "error": "no"})

@@ -65,7 +65,8 @@ WAKE_LEFT = (
 )
 WAKE_LEFTOVER = (
     "bosun's own repeating wake is still set, though BOSUN_WAKE=0 says bosun sets none, and was left as is: "
-    f"{init_plan.CANCEL_WAKE} cancels it, --replace-wake makes it bosun's again"
+    f"{init_plan.CANCEL_WAKE} cancels it ({init_plan.CANCEL_TAKES_ALL}), "
+    "--replace-wake makes it bosun's again"
 )
 
 
@@ -311,7 +312,10 @@ WAKE_WORDS = {
     OURS: "bosun's (bosun moves it with the days and the start time)",
     NONE: "none",
     OTHER: "another app's (pmset keeps one: bosun leaves it, unless set with --replace-wake)",
-    LEFTOVER: f"bosun's from before, though BOSUN_WAKE=0 says it sets none ({init_plan.CANCEL_WAKE} ends it)",
+    LEFTOVER: (
+        f"bosun's from before, though BOSUN_WAKE=0 says it sets none ({init_plan.CANCEL_WAKE} ends it; "
+        f"{init_plan.CANCEL_TAKES_ALL})"
+    ),
 }
 
 

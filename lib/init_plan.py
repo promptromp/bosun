@@ -38,6 +38,7 @@ DEFAULT_CHANNEL = "releases"  # what bosun update follows: the dated releases (l
 UPDATE_CHANNEL = "BOSUN_UPDATE_CHANNEL"
 WAKE_KEY = "BOSUN_WAKE"  # whether the Mac's repeating wake is bosun's to set: the wake answer
 CANCEL_WAKE = "sudo pmset repeat cancel"  # cancels every repeating event: asked only when bosun's is the one
+CANCEL_TAKES_ALL = "it removes any other repeating event too"  # said where you are told to run it
 DEFAULT_WAKE_DELAY_MINUTES = 1
 MINUTES_PER_DAY = 24 * 60
 HALF_HOUR = 30
