@@ -335,6 +335,17 @@ class LockTest(unittest.TestCase):
         with update_state.marking(self.dir, update_state.RUN_MARKER):
             self.assertEqual(update_state._live_marker(self.dir, update_state.RUN_MARKER), (os.getpid(), ""))
 
+    def test_a_claim_outlasts_a_status_probe_s_brief_shared_lock(self) -> None:
+        """Round 2, item 6: a reader holding a shared lock at the instant of the claim never leaves the
+        run without its marker; it tries for CLAIM_SECONDS."""
+        lock = self.dir / update_state.UPDATE_DIR / update_state.MARKER_LOCK.format(update_state.RUN_MARKER)
+        lock.parent.mkdir(parents=True)
+        fd = os.open(lock, os.O_RDWR | os.O_CREAT)
+        fcntl.flock(fd, fcntl.LOCK_SH)
+        threading.Timer(0.15, os.close, (fd,)).start()  # the probe lets go
+        with update_state.marking(self.dir, update_state.RUN_MARKER):
+            self.assertEqual(update_state._live_marker(self.dir, update_state.RUN_MARKER), (os.getpid(), ""))
+
     def test_a_marker_is_made_exclusively_and_a_stale_one_replaced(self) -> None:
         marker = self.dir / update_state.UPDATE_DIR / update_state.RUN_MARKER
         with update_state.marking(self.dir, update_state.RUN_MARKER):

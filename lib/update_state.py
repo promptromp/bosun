@@ -76,6 +76,10 @@ BEFORE_FREEZE = ("planned", "rehearsed", "holding")  # nothing had changed but t
 RUN_MARKER = "run"
 TURN_MARKER = "turn"
 MARKER_LOCK = "{}.lock"
+# How long a process tries to lock a marker's lock file before taking it for a live owner's: a status probe
+# holds a shared lock on it for an instant (_owned), and a claim at that instant must not lose its marker.
+CLAIM_SECONDS = 0.5
+CLAIM_POLL_SECONDS = 0.05
 # The most an update waits for update.lock while the check-in loop takes its turn at the windows: a turn
 # restarts a window or two (each a stop, a launch and its start) and lets go.
 TURN_SECONDS = 180.0
@@ -491,13 +495,19 @@ def marked(state_dir: Path, name: str) -> bool:
 
 def _claimed(state_dir: Path, name: str) -> int | None:
     """The open lock file of marker <name>, locked exclusively by this process, which now owns the marker
-    (written anew: one left by a crash is replaced); None while another live process owns it."""
+    (written anew: one left by a crash is replaced); None while another live process owns it, tried for
+    CLAIM_SECONDS, past a reader's brief shared lock."""
     fd = os.open(_lock_path(state_dir, name), os.O_RDWR | os.O_CREAT, 0o644)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        os.close(fd)
-        return None
+    deadline = time.monotonic() + CLAIM_SECONDS
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except OSError:
+            if time.monotonic() >= deadline:  # a live owner: a reader's shared lock is gone long before
+                os.close(fd)
+                return None
+            time.sleep(CLAIM_POLL_SECONDS)
     _write_marker(_marker(state_dir, name), f"{os.getpid()}\n")
     return fd
 
