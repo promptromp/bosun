@@ -98,14 +98,18 @@ the orchestrator's next start; design: [docs/design/approvals.md](design/approva
   --channel C --text -`, `--run '<command>'`, `--tool <tool> --args-json -`). When you approve
   ("1 and 3 yes"), it records your words (`ledger approve <id> --quote '1 and 3 yes'`) and makes
   the call; a PermissionRequest hook (`bosun guard --permission-request`) lets exactly that
-  call through, once, if your words say yes in a prompt you typed (or sent from your phone) in that
-  session after the proposal: all of the prompt holding an approving word (yes, ok, send, go ahead,
-  lgtm, ...), the item's id or a bare choice ("1 and 3", "all"); or at least 8 characters of its
-  whole words holding an approving word or the id. A no, not, never, wait, stop, hold, cancel or a
-  word ending in n't in the same sentence, or a question without an approving word, never counts;
-  nor do tool results, pasted and injected text. `ledger approve` refuses a quote that does not
-  count. It cannot tell what your yes answered: a "yes" to another question after the proposal
-  counts for it too, and so does a yes you take back in a later sentence or prompt.
+  call through, once, if your words say yes, as far as a list of phrases can tell, in a prompt you typed
+  (or sent from your phone) in that session after the proposal. The prompt holds no negation anywhere
+  (no, not, never, wait, stop, hold, cancel, abort, later, nevermind, scratch that, forget it, no way, not
+  now, or a word ending in n't, with or without the apostrophe) and no question mark, text you put in
+  quotation marks left out; and your words are all of it holding an approving phrase (yes, yeah, yep,
+  yup, ok, okay, sure, go ahead, do it, send it, send them, ship it, lgtm, approved, confirmed) or a bare
+  choice ("1 and 3", "all"), or at least 8 characters of its whole words holding an approving phrase. The
+  item's id alone, "approve 2" or "fine" is no yes. Tool results, pasted and injected text never count,
+  and `ledger approve` refuses a quote that does not count. It cannot tell what your yes answered: a "yes"
+  to another question after the proposal counts for it too, a bare number does not say which plan it picks
+  from, and a request that holds "go ahead", someone's words you pass on without quotation marks or a yes
+  you take back in a later prompt still count.
 - A tool call whose arguments hold a decimal number (`{"story_points": 2.5}`) cannot be proposed:
   the ledger's journal holds whole numbers and text only, so `propose` refuses it, naming the
   field. Make such a call yourself, or set `BOSUN_APPROVALS_DENY_UNAPPROVED=0` so that it asks at

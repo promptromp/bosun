@@ -9,11 +9,10 @@ stores proposals and approvals, lib/guard.py runs the checks as hooks.
   string, the same tool and arguments.
 - An approval (`ledger approve <id> --quote '<my words>'`) is good for one call, and only while
   the quote says yes in a prompt I typed (or sent from my phone) in the calling session, between
-  the proposal and the approval (approval_quote_in, QUOTE_RULE): all of that prompt holding an
-  approving word, the proposal's id or a bare choice, or at least MIN_QUOTE_CHARS of its whole words
-  holding an approving word or the id; never beside a negation, nor in a question without an
-  approving word. Text bosun pasted, other sessions' messages, tool results and context summaries
-  never count.
+  the proposal and the approval (approval_quote_in, QUOTE_RULE): in a prompt with no negation and no
+  question anywhere (quoted text left out), all of it holding an approving phrase or a bare choice, or
+  at least MIN_QUOTE_CHARS of its whole words holding an approving phrase. Text bosun pasted, other
+  sessions' messages, tool results and context summaries never count.
 - Standing classes (BOSUN_STANDING_CLASSES) allow routine PR traffic without a chat approval,
   under the conditions in STANDING_CLASSES below.
 - After the call (PostToolUse / PostToolUseFailure): which used approval the call carried out, and
@@ -27,7 +26,7 @@ import hashlib
 import json
 import re
 import unicodedata
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -152,10 +151,11 @@ def is_genuine(text: str, speaker: Speaker) -> bool:
 
 
 # A quote that is not a whole prompt counts for an approval only at this length, and only holding an
-# approving word or the proposal's id: "e" or "today" is in nearly every prompt and says nothing of it.
-# The ontology's quotes from a session need it too (lib/knowledge.py, MIN_DECISION_QUOTE).
+# approving phrase: "e" or "today" is in nearly every prompt and says nothing of it. The ontology's quotes
+# from a session need it too (lib/knowledge.py, MIN_DECISION_QUOTE).
 MIN_QUOTE_CHARS = 8
-APPROVING_WORDS = (
+# Phrases that approve: not bare verbs ("send me the link", "who needs to approve this").
+APPROVING_PHRASES = (
     "yes",
     "yeah",
     "yep",
@@ -164,66 +164,87 @@ APPROVING_WORDS = (
     "okay",
     "sure",
     "go ahead",
-    "approve",
-    "approved",
-    "send",
     "do it",
-    "lgtm",
+    "send it",
+    "send them",
     "ship it",
-    "proceed",
-    "confirm",
+    "lgtm",
+    "approved",
     "confirmed",
-    "fine",
 )
-# Words that take a yes back or hold it: in the sentence a quote stands in, any of them, or a word ending in
-# n't, means it approves nothing ("don't send it", "not fine", "yes, but wait").
-NEGATING_WORDS = (
+# Words that take a yes back, put it off or hold it: any of them anywhere in the prompt, or a word ending in
+# n't (don't, isn't, with the apostrophe or without), means it approves nothing.
+NEGATING_PHRASES = (
     "no",
     "nope",
     "nah",
     "not",
     "never",
-    "dont",
-    "doesnt",
-    "didnt",
-    "cant",
-    "wont",
-    "shouldnt",
     "wait",
     "stop",
     "hold",
     "cancel",
+    "abort",
+    "later",
+    "nevermind",
+    "never mind",
+    "scratch that",
+    "forget it",
+    "no way",
+    "not now",
 )
-NEGATION = re.compile(r"(?<!\w)(?:" + "|".join(NEGATING_WORDS) + r")(?!\w)|\w+n't(?!\w)")
-# What ends a sentence: ! ? ; or a full stop before a space or the end (not one of an ellipsis, a version
-# or a host name).
-SENTENCE_END = re.compile(r"[!?;]+|(?<!\.)\.(?=\s|$)")
+WITHOUT_APOSTROPHE: tuple[str, ...] = (
+    *("dont", "doesnt", "didnt", "isnt", "arent", "wasnt", "werent", "cant", "couldnt", "wont"),
+    *("wouldnt", "shouldnt", "hasnt", "havent", "hadnt", "aint"),
+)
+NEGATION = re.compile(
+    r"(?<!\w)(?:"
+    + "|".join(re.escape(word) for word in (*NEGATING_PHRASES, *WITHOUT_APOSTROPHE))
+    + r")(?!\w)"
+    r"|\w+n't(?!\w)"
+)
 QUESTION = "?"
 # A bare choice from a numbered plan, which says yes only as all of a prompt: "1 and 3", "1, 3", "2b",
-# "all", "both", "all of them".
+# "all", "both", "all of them". A bare number cannot say which plan it answers.
 SELECTION = re.compile(r"all(?: of them)?|both|\d+[a-z]?(?:\s*(?:,|&|\+|and)\s*\d+[a-z]?)*")
+# Text in quotation marks inside a prompt is someone else's words, left out before the yes is looked for:
+# "...", '...' (not an apostrophe: it stands where a word starts or ends) and their typographic forms, folded.
+QUOTED = re.compile(r'"[^"]*"|(?<!\w)\'[^\']*\'(?!\w)')
+LEFT_OUT = " ... "
 QUOTE_RULE = (
-    "a quote counts only from a prompt typed (or sent from the phone) in this session after the proposal, "
-    "and only when it says yes: all of that prompt, holding an approving word "
-    f'({", ".join(APPROVING_WORDS[:9])}, ...), the item\'s id or a bare choice ("1 and 3", "all"); or at '
-    f"least {MIN_QUOTE_CHARS} characters of its whole words holding an approving word or the item's id. "
-    "A no, not, never, wait, stop, hold, cancel or a word ending in n't in its sentence, or a question "
-    "without an approving word, never counts; nor do tool results, pasted and injected text"
+    "a quote counts only from a prompt typed (or sent from the phone) in this session after the proposal "
+    "that holds no negation and no question: no, not, never, wait, stop, hold, cancel, abort, later, "
+    "nevermind, never mind, scratch that, forget it, no way, not now or a word ending in n't (with the "
+    "apostrophe or without), anywhere in it, nor a question mark; text in quotation marks in it is someone "
+    "else's and left out. And it counts only when it says yes: all of that prompt holding an approving "
+    f'phrase ({", ".join(APPROVING_PHRASES)}) or a bare choice ("1 and 3", "all"), or at least '
+    f"{MIN_QUOTE_CHARS} characters of its whole words holding an approving phrase. The item's id alone "
+    "says no yes; tool results, pasted and injected text never count"
 )
 WORD_CHAR = re.compile(r"\w")
 EDGE_PUNCTUATION = re.compile(r"^\W+|\W+$")
-APOSTROPHES = str.maketrans({"\u2019": "'", "\u2018": "'", "\u02bc": "'"})
+APOSTROPHES = str.maketrans(
+    {"\u2019": "'", "\u2018": "'", "\u02bc": "'", "\u00b4": "'", "`": "'", "\u201c": '"', "\u201d": '"'}
+)
 
 
 def folded(text: str) -> str:
     """Text as quotes and prompts are compared: Unicode compatibility forms folded (NFKC: fullwidth
-    letters are letters), typographic apostrophes as ', runs of whitespace as one space, case-folded."""
-    return normalize(unicodedata.normalize("NFKC", str(text)).translate(APOSTROPHES)).casefold()
+    letters are letters), invisible format characters (a zero-width space) taken out, typographic
+    apostrophes and quotation marks as ' and " (before NFKC too, which would make an acute accent a
+    combining one), runs of whitespace as one space, case-folded."""
+    text = unicodedata.normalize("NFKC", str(text).translate(APOSTROPHES)).translate(APOSTROPHES)
+    return normalize("".join(char for char in text if unicodedata.category(char) != "Cf")).casefold()
 
 
 def comparable(text: str) -> str:
     """A prompt as a quote is compared with it: as typed (activity.unwrap), folded."""
     return folded(activity.unwrap(text))
+
+
+def unquoted(text: str) -> str:
+    """Folded <text> without what it puts in quotation marks (QUOTED): someone else's words."""
+    return normalize(QUOTED.sub(LEFT_OUT, text))
 
 
 def edge_pattern(wanted: str) -> re.Pattern[str]:
@@ -253,54 +274,24 @@ def words_in(quote: str, texts: Iterable[str]) -> bool:
     return any(at_word_edges(wanted, text) for text in map(comparable, texts))
 
 
-@dataclass(frozen=True)
-class Spot:
-    """Where a quote stands in a prompt: the sentence or sentences around it, and whether it is all of it."""
-
-    sentence: str
-    whole: bool
-
-
-def sentence_around(text: str, start: int, end: int) -> str:
-    """The sentence(s) of <text> that hold text[start:end], with the mark that ends the last."""
-    begin = max((m.end() for m in SENTENCE_END.finditer(text, 0, start)), default=0)
-    after = SENTENCE_END.search(text, max(end - 1, start))
-    return text[begin : after.end() if after else len(text)]
-
-
-def spots(wanted: str, text: str) -> Iterator[Spot]:
-    """Each place <wanted> stands in <text> (both folded): all of it, or each run of its whole words."""
-    if whole_prompt(wanted, text):
-        yield Spot(text, True)
-    elif wanted:
-        for match in edge_pattern(wanted).finditer(text):
-            yield Spot(sentence_around(text, match.start(), match.end()), False)
-
-
-def holds_any(text: str, marks: Iterable[str]) -> bool:
-    return any(at_word_edges(mark, text) for mark in marks)
-
-
-def says_yes(wanted: str, spot: Spot, item_id: str) -> bool:
-    """Whether a quote standing at <spot> says yes to <item_id>: no negation in its sentence; at least
-    MIN_QUOTE_CHARS unless it is all of the prompt; in a question, only with an approving word; else an
-    approving word, the id, or (all of a prompt) a bare choice."""
-    if NEGATION.search(spot.sentence) or not (spot.whole or len(wanted) >= MIN_QUOTE_CHARS):
+def says_yes(wanted: str, prompt: str) -> bool:
+    """Whether the quote <wanted> says yes in <prompt> (both folded, quoted text left out, QUOTE_RULE): the
+    prompt holds no negation and no question; the quote is all of it, holding an approving phrase or a bare
+    choice, or at least MIN_QUOTE_CHARS of its whole words holding an approving phrase."""
+    if NEGATION.search(prompt) or QUESTION in prompt:
         return False
-    if holds_any(wanted, APPROVING_WORDS):
-        return True
-    if QUESTION in spot.sentence:
+    whole = whole_prompt(wanted, prompt)
+    if not (whole or (len(wanted) >= MIN_QUOTE_CHARS and at_word_edges(wanted, prompt))):
         return False
-    named = bool(item_id) and holds_any(wanted, (folded(item_id),))
-    return named or (spot.whole and SELECTION.fullmatch(EDGE_PUNCTUATION.sub("", wanted)) is not None)
+    approving = any(at_word_edges(phrase, wanted) for phrase in APPROVING_PHRASES)
+    return approving or (whole and SELECTION.fullmatch(EDGE_PUNCTUATION.sub("", wanted)) is not None)
 
 
-def approval_quote_in(quote: str, texts: Iterable[str], item_id: str) -> bool:
-    """Whether <quote> is my approval of proposal <item_id> in one of <texts> (QUOTE_RULE, says_yes)."""
-    wanted = folded(quote)
-    return any(
-        says_yes(wanted, spot, item_id) for text in map(comparable, texts) for spot in spots(wanted, text)
-    )
+def approval_quote_in(quote: str, texts: Iterable[str]) -> bool:
+    """Whether <quote> is my approval in one of <texts> (QUOTE_RULE, says_yes). The item's id says no yes
+    on its own: a quote that names the item says yes only with an approving phrase ("yes, <id>")."""
+    wanted = unquoted(folded(quote))
+    return any(says_yes(wanted, unquoted(text)) for text in map(comparable, texts))
 
 
 PromptSource = Callable[[datetime], list[claude_state.Prompt]]
@@ -320,14 +311,14 @@ def transcript_prompts(transcript: str) -> PromptSource:
 
 
 def quote_verified(
-    approval: dict[str, Any], proposed_at: str, prompts: PromptSource, speaker: Speaker, item_id: str
+    approval: dict[str, Any], proposed_at: str, prompts: PromptSource, speaker: Speaker
 ) -> bool:
-    """The approval's quote approves proposal <item_id> (approval_quote_in) in a genuine prompt made
-    after the proposal and before the approval."""
+    """The approval's quote says yes (approval_quote_in) in a genuine prompt made after the proposal and
+    before the approval."""
     start = datetime.fromisoformat(proposed_at)
     end = datetime.fromisoformat(approval["at"]) + APPROVAL_GRACE
     texts = [p.text for p in prompts(start) if p.at <= end and is_genuine(p.text, speaker)]
-    return approval_quote_in(str(approval.get("quote", "")), texts, item_id)
+    return approval_quote_in(str(approval.get("quote", "")), texts)
 
 
 # ---- verdicts ---------------------------------------------------------------------------------
@@ -358,10 +349,8 @@ def pending_specs(items: dict[str, Item]) -> Iterable[tuple[Item, dict[str, Any]
             yield item, proposal
 
 
-def approval_problem(
-    proposal: dict[str, Any], prompts: PromptSource, speaker: Speaker, item_id: str
-) -> str | None:
-    """Why the approval of <item_id>'s matching proposal does not let the call through, or None."""
+def approval_problem(proposal: dict[str, Any], prompts: PromptSource, speaker: Speaker) -> str | None:
+    """Why a matching proposal's approval does not let the call through, or None."""
     approval = proposal.get("approval")
     if not approval:
         return "is proposed but not approved yet"
@@ -369,7 +358,7 @@ def approval_problem(
         return "was approved in an earlier version; the proposal changed since"
     if approval.get("used_at"):
         return f"had its one approval used at {approval['used_at']}; propose and approve it again"
-    if not quote_verified(approval, proposal["proposed_at"], prompts, speaker, item_id):
+    if not quote_verified(approval, proposal["proposed_at"], prompts, speaker):
         return f"has an approval whose quote ({approval.get('quote', '')!r}) does not count: {QUOTE_RULE}"
     return None
 
@@ -380,7 +369,7 @@ def approved(items: dict[str, Item], call: Call, prompts: PromptSource, speaker:
     for item, proposal in pending_specs(items):
         if not call_matches(proposal["spec"], call.tool, call.tool_input):
             continue
-        problem = approval_problem(proposal, prompts, speaker, item["id"])
+        problem = approval_problem(proposal, prompts, speaker)
         if problem is None:
             return Verdict(APPROVED, item["id"])
         problems.append(f"{item['id']} {problem}")

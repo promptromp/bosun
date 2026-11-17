@@ -2048,7 +2048,7 @@ def check_approval_quote(
     the session that records it; from no session there is nothing to check it in yet."""
     if session is None:
         return
-    if approvals.quote_verified(approval, proposal["proposed_at"], session.prompts, session.speaker, item_id):
+    if approvals.quote_verified(approval, proposal["proposed_at"], session.prompts, session.speaker):
         return
     raise LedgerError(
         f"the quote {approval['quote']!r} does not count as my approval of {item_id} in this session, so "

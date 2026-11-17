@@ -92,23 +92,27 @@ call only when all of these hold:
   (case and punctuation count). A command: the same string, trimmed. Another MCP tool: the same
   tool name (under any server) and equal arguments.
 - **The approval is for this version.** Its hash matches the spec; a new proposal drops it.
-- **My words are mine.** The quote says yes, in a prompt of the calling session's transcript
-  (`transcript_path`) made between the proposal and the approval (plus two minutes). Compared as
-  typed (Unicode compatibility forms folded, typographic apostrophes as `'`, runs of whitespace as one
-  space, case ignored), it is either all of that prompt, punctuation at either end aside, holding an
-  approving word, the proposal's id or a bare choice from the plan ("1 and 3", "1, 3", "all", "both",
-  "all of them"); or a run of its whole words (it begins and ends at word boundaries, so `e` is not in
-  "yes") at least 8 characters long holding an approving word or the id. The approving words are
-  yes, yeah, yep, yup, ok, okay, sure, go ahead, approve, approved, send, do it, lgtm, ship it,
-  proceed, confirm, confirmed, fine (`APPROVING_WORDS`). It never counts with a negation in the
-  sentence it stands in, its own words or the prompt's around it up to the sentence's end (no,
-  nope, nah, not, never, wait, stop, hold, cancel, or a word ending in n't: "don't send it", "yes,
-  but wait"), nor in a question unless it holds an approving word ("why is <id> still open?" names
-  the id but says no yes). Before 2026-11-16 any substring counted, as short as one letter, and in
-  the first fix any whole prompt did ("no", or an unrelated question quoted whole). Run from the
-  orchestrator's session, `ledger approve` makes the same check there and refuses a quote that does
-  not count, saying what does; from a terminal it records the quote, and the guard checks it when
-  the call is made. Only prompts the session received from its user count, read through
+- **My words are mine.** The quote stands in a prompt of the calling session's transcript
+  (`transcript_path`) made between the proposal and the approval (plus two minutes), and it counts only
+  to the extent a list of phrases and negations can tell a yes (`approvals.says_yes`). Both are compared
+  folded (Unicode compatibility forms, invisible format characters out, typographic apostrophes and
+  quotation marks as `'` and `"`, runs of whitespace as one space, case ignored), and text in quotation
+  marks inside the prompt ("...", '...', “...”) is someone else's words, left out first. The prompt must
+  hold no negation anywhere (no, nope, nah, not, never, wait, stop, hold, cancel, abort, later,
+  nevermind, never mind, scratch that, forget it, no way, not now, or a word ending in n't, with the
+  apostrophe or without: dont, isnt, cant, wont, ...) and no question mark. Then the quote counts when
+  it is all of the prompt (punctuation at either end aside) holding an approving phrase or a bare choice
+  from the plan ("1 and 3", "1, 3", "all", "both", "all of them"), or a run of its whole words (it begins
+  and ends at word boundaries, so `e` is not in "yes") at least 8 characters long holding an approving
+  phrase. The approving phrases are yes, yeah, yep, yup, ok, okay, sure, go ahead, do it, send it, send
+  them, ship it, lgtm, approved, confirmed (`APPROVING_PHRASES`); a bare verb (send, approve, proceed) or
+  "fine" is none, and the item's id says no yes on its own ("yes, <id>" or "ok for <id>" does, "approve
+  <id>" does not). Before 2026-11-16 any substring counted, as short as one letter; the first fix let
+  any whole prompt count ("no", an unrelated question quoted whole), the second a negation in another
+  sentence. Run from the orchestrator's session, `ledger approve` makes the same check there and refuses
+  a quote that does not count, saying what does; in an agent's session it cannot check, it refuses; from
+  a terminal it records the quote, and the guard checks it when the call is made. Only prompts the
+  session received from its user count, read through
   `claude_state.delivered_prompts`: typed, sent from the phone (Remote Control), queued while busy,
   or delivered into a running turn. Remote Control prompts appear in the transcript as ordinary
   user turns (verified on 2026-10-20 transcripts: a `queue-operation` enqueue, then a `user`
@@ -124,13 +128,19 @@ call only when all of these hold:
   The failure is recorded (`approval-failed`, section 4), so the proposal is back under *Needs
   you*.
 
-So a forged approval needs a prompt I typed after the proposal that says yes, with no negation beside
-it: text from Slack, a PR or another session that reaches the orchestrator as a tool result or an
-injected message never counts, nor a word picked out of an unrelated prompt, nor a prompt that says no.
-What the check cannot prove is what my yes was about: a "yes" I typed to an unrelated question after the
-proposal, "ok, what's next?", or a question holding an approving word ("is it ok to skip the
-standup?") counts for every proposal pending then, and only a quote that holds the item's id names
-one. Nor does it see a yes taken back in a later sentence or a later prompt ("Send it. Actually, no.").
+So a forged approval needs a prompt I typed after the proposal, with no negation and no question in it,
+that holds one of the approving phrases or is a bare choice: text from Slack, a PR or another session that
+reaches the orchestrator as a tool result or an injected message never counts, nor a word picked out of an
+unrelated prompt, nor someone's words I quote in quotation marks. What the check cannot prove, and what
+still counts:
+
+- what my yes answered: a "yes", "ok" or "go ahead" I typed to an unrelated question after the proposal
+  counts for every proposal pending then, and a bare number ("2") cannot say which plan it picks from;
+- a request that holds an approving phrase ("go ahead and tell me what's pending");
+- someone's words I pass on without quotation marks ("Dana wrote: ok, ship it");
+- a yes with a condition or a time that is no negation ("yes, after lunch");
+- a negation spelled with look-alike letters (a Greek omicron in "no");
+- a yes I take back in a later prompt ("yes", then "wait, no"), as the check reads each prompt alone.
 
 ## 2. Standing approvals
 

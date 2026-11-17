@@ -183,14 +183,100 @@ class MatchingTest(unittest.TestCase):
         )
 
 
-class QuoteRuleTest(unittest.TestCase):
-    """What counts as my approval of a proposal (approvals.approval_quote_in, QUOTE_RULE): a quote that
-    says yes. All of a prompt holding an approving word, the id or a bare choice; or at least
-    MIN_QUOTE_CHARS of its whole words holding an approving word or the id. Never with a negation in its
-    sentence, nor in a question without an approving word."""
+# The review's round-2 quotes (scratchpad rv2/q2.py) with what each gets. Those that count and should not, as
+# docs/design/approvals.md lists: a request that holds "go ahead", someone's words without quotation marks, a
+# yes with a time on it, a homoglyph negation (a Greek omicron), a bare number.
+ROUND_TWO_QUOTES: tuple[tuple[str, str, bool], ...] = (
+    ("sure, but not yet", "sure, but not yet", False),
+    ("sure", "sure, but not yet", False),
+    ("ok \u2014 actually no", "ok \u2014 actually no", False),
+    ("ok", "ok \u2014 actually no", False),
+    ("yes?", "yes?", False),
+    ("approve 2", "approve 2", False),
+    ("1", "1", True),
+    ("all", "all", True),
+    ("go ahead and tell me what's pending", "go ahead and tell me what's pending", True),
+    ("go ahead", "go ahead and tell me what's pending", True),
+    ("send me the link", "send me the link", False),
+    ("can you send me the link", "can you send me the link?", False),
+    ("how should we proceed", "how should we proceed?", False),
+    ("who needs to approve this", "who needs to approve this?", False),
+    ("is the build fine", "is the build fine?", False),
+    ("the build is fine", "the build is fine", False),
+    ('Dana wrote "ok, ship it"', 'Dana wrote "ok, ship it" on the PR, what do you think?', False),
+    ('"ok, ship it"', 'Dana wrote "ok, ship it" on the PR, what do you think?', False),
+    ("ok, ship it", "Dana wrote: ok, ship it. Look at the thread", True),
+    ("don\u2019t send it", "don\u2019t send it", False),
+    ("don\xb4t send it", "don\xb4t send it", False),
+    ("don`t send it", "don`t send it", False),
+    ("dont send it", "dont send it", False),
+    ("isnt fine", "the build isnt fine", False),
+    ("the build isnt fine", "the build isnt fine", False),
+    ("ok nevermind", "ok nevermind", False),
+    ("okay, scratch that", "okay, scratch that", False),
+    ("fine, forget it", "fine, forget it", False),
+    ("ok abort", "ok abort", False),
+    ("yes, after lunch", "yes, after lunch", True),
+    ("send it? No way.", "send it? No way.", False),
+    ("send it?", "send it? No way.", False),
+    ("should we send it", "Should we send it? No.", False),
+    ("yes!!!!!", "yes!!!!! no wait", False),
+    ("yes", "yes. no wait", False),
+    ("Yes, send it.", "No. Yes, send it.", False),
+    ("send it", "No.\nsend it", False),
+    ("ok send it", "no\nok send it", False),
+    ("ok send it", "No!\nok send it", False),
+    ("look into mypr:acme/exporter#102", "look into mypr:acme/exporter#102 and summarize the review", False),
+    ("mypr:acme/exporter#102", "mypr:acme/exporter#102", False),
+    ("why is mypr:acme/exporter#102 open", "why is mypr:acme/exporter#102 open", False),
+    ("NO", "NO", False),
+    ("No.", "No.", False),
+    ("n", "n", False),
+    ("ok send it", "ok send it \uff4e\uff4f\uff54", False),
+    ("ok send it", "ok send it n\u200bot", False),
+    ("ok send it", "ok send it n\u03bf", True),
+    ("ok send it", "ok send it non-stop", False),
+    ("ok send it", "ok send it - no-go", False),
+    ("send it", "e.g. send it", False),
+    ("it. ok send it", "don't do it. ok send it", False),
+    ("ok send it", "don't do it. ok send it", False),
+    ("ok send it", "don't do it; ok send it", False),
+    ("ok send it", "ok send it, not the other one", False),
+    ("approved", "approved... not", False),
+    ("yes", "yes..no", False),
+    ("yes", "yes.no", False),
+    ("yes.", "yes.no", False),
+    ("1, 3", "1, 3", True),
+    ("both", "both", True),
+    ("all of them", "all of them", True),
+    ("1 and 3", "1 and 3?", False),
+    ("2b", "2b", True),
+    ("100", "100", True),
+    ("1+1", "1+1", True),
+    ("3 & 4", "3 & 4", True),
+    ("all?", "all?", False),
+    ("ok send it", "ok send it, holding pattern", True),
+    ("ok send it", "ok send it, I can't wait", False),
+    ("yesterday's deploy", "yesterday's deploy", False),
+    ("okay", "okay", True),
+    ("ok", "ok", True),
+    ("k", "k", False),
+    ("yes sir", "yes sir", True),
+)
 
-    def counts(self, quote: str, *prompts: str, item_id: str = PR) -> bool:
-        return approvals.approval_quote_in(quote, prompts, item_id)
+
+class QuoteRuleTest(unittest.TestCase):
+    """What counts as my approval of a proposal (approvals.approval_quote_in, QUOTE_RULE): in a prompt with no
+    negation and no question anywhere (quoted text left out), all of it holding an approving phrase or a bare
+    choice, or at least MIN_QUOTE_CHARS of its whole words holding an approving phrase."""
+
+    def counts(self, quote: str, *prompts: str) -> bool:
+        return approvals.approval_quote_in(quote, prompts)
+
+    def test_round_two_quotes(self) -> None:
+        for quote, prompt, wanted in ROUND_TWO_QUOTES:
+            with self.subTest(quote=quote, prompt=prompt):
+                self.assertEqual(self.counts(quote, prompt), wanted)
 
     def test_a_whole_prompt_counts_when_it_says_yes(self) -> None:
         for quote, prompt in [
@@ -199,105 +285,90 @@ class QuoteRuleTest(unittest.TestCase):
             ("Yes!", "yes"),
             ("1 and 3", "  1 and\n3 "),
             ("1,3", "1,3"),
-            ("2b", "2b."),
             ("all", "all"),
-            ("both", "Both"),
             ("all of them", "all of them!"),
-            (PR, PR),
             ("Yeah, go ahead", "yeah, go ahead"),
+            ("lgtm", "LGTM"),
+            (f"yes, {PR}", f"yes, {PR}"),
+            (f"ok for {PR}", f"ok for {PR}"),
             ("\uff59\uff45\uff53", "yes"),  # fullwidth letters are letters (NFKC)
-            ("\u201cyes\u201d", "yes"),
         ]:
             with self.subTest(quote=quote):
                 self.assertTrue(self.counts(quote, prompt))
 
-    def test_a_whole_prompt_that_says_no_yes_counts_for_nothing(self) -> None:
-        """review round 1: any whole prompt approved, so "no", or an unrelated question quoted whole, did."""
+    def test_a_prompt_that_says_no_or_asks_approves_nothing(self) -> None:
         for prompt in [
             "what is on my plate today?",
             "no",
-            "wait",
-            "stop",
             "hold on",
-            "cancel that",
-            "no, don't send it",
             "go with option 2",  # not a bare choice
+            "approve 2",  # a bare verb
+            "the build is fine",
+            PR,  # the id alone
+            f"approve {PR}",
             "y",
             "\U0001f44d",  # an emoji: later (M9)
-            "!",
-            "?",
             "",
         ]:
             with self.subTest(prompt=prompt):
                 self.assertFalse(self.counts(prompt, prompt))
 
-    def test_a_negation_in_the_sentence_takes_the_yes_back(self) -> None:
+    def test_a_negation_anywhere_in_the_prompt_voids_it(self) -> None:
         for quote, prompt in [
-            ("don't send it", "no, don't send it yet, I want to reword it"),
-            ("I don't think we should send", "I don't think we should send that message"),
-            ("not fine", "that is not fine at all"),
-            ("do not approve", "do not approve that"),
-            ("never ok", "never ok to merge on friday"),
-            ("go ahead and send it", "go ahead and send it, no wait"),
-            ("ok to send it", "it is not ok to send it"),  # the negation before the quote, same sentence
-            ("yes, send it", "Yes, send it\u2026 actually don\u2019t"),  # a typographic apostrophe
-            ("sure, send it", "sure, send it, but hold the second one"),
-            ("1 yes", "1 yes, 2 no"),
+            ("yes, send it.", "Don't wait for CI. Yes, send it."),  # another sentence
+            ("ok send it", "ok send it, not the other one"),
+            ("ok send it", "no\nok send it"),
+            ("yes, send it", "Yes, send it\u2026 actually don\u2019t"),
+            ("ok send it", "ok send it, isnt that right"),
+            ("go ahead and send it", "go ahead and send it, nevermind the second"),
+            ("ok send it", "ok send it ok send it n\u200bot"),  # a zero-width space inside the not
         ]:
-            with self.subTest(quote=quote):
+            with self.subTest(quote=quote, prompt=prompt):
                 self.assertFalse(self.counts(quote, prompt))
-        self.assertTrue(self.counts("yes, send it.", "Don't wait for CI. Yes, send it."))  # another sentence
 
-    def test_in_a_question_only_an_approving_word_says_yes(self) -> None:
-        self.assertFalse(self.counts(PR, f"why is {PR} still open?"))
-        self.assertFalse(self.counts(f"why is {PR} still open?", f"why is {PR} still open?"))
-        self.assertFalse(self.counts("1 and 3", "1 and 3?"))
-        self.assertTrue(self.counts("can you send it now?", "can you send it now?"))
+    def test_quoted_text_is_someone_elses(self) -> None:
+        self.assertFalse(self.counts("ok, ship it", 'Dana wrote "ok, ship it" on the PR'))
+        self.assertFalse(self.counts("ok, ship it", "Dana wrote \u201cok, ship it\u201d on the PR"))
+        self.assertFalse(self.counts("lgtm", "she said 'lgtm' to me"))
+        self.assertTrue(self.counts("yes, send it", 'yes, send it to Dana: she asked for "the summary"'))
+        self.assertTrue(self.counts("ok, it's fine to send it", "ok, it's fine to send it"))  # apostrophes
 
-    def test_a_part_needs_whole_words_the_length_and_an_approving_word_or_the_id(self) -> None:
+    def test_a_part_needs_whole_words_the_length_and_an_approving_phrase(self) -> None:
         prompt = "1 and 3 YES, 2 skip; also check why the exporter's CI is red today"
         self.assertTrue(self.counts("1 and 3 yes", prompt))
-        self.assertTrue(self.counts("1 and 3 yes, 2 skip", prompt))
-        self.assertTrue(self.counts(f"{PR} go", f"for {PR} go, the rest later"))
-        self.assertTrue(self.counts("ok, send that", "fine by me. OK, send that one"))
         self.assertTrue(self.counts("go ahead with 1 and 3", "sure, go ahead with 1 and 3 and tell me after"))
         for quote in [
-            "e",  # one letter of any prompt
-            "today",  # a whole word, but short and approving nothing
-            "the exporter's CI is red",  # long enough, approving nothing
-            "es, 2 skip",  # cuts "YES" in half
-            "1 and 3 ye",  # cuts it at the other end
-            "yes",  # an approving word, too short as a part of a longer prompt
-            "check why the exporter's",  # long, but no approving word
+            "e",
+            "today",
+            "the exporter's CI is red",
+            "es, 2 skip",
+            "1 and 3 ye",
+            "yes",  # an approving phrase, too short as a part
             "1 and 3",  # a bare choice, but not all of the prompt
         ]:
             with self.subTest(quote=quote):
                 self.assertFalse(self.counts(quote, prompt))
         self.assertFalse(self.counts("yes and look", "yes", "and look"))  # across two prompts
+        self.assertFalse(self.counts(f"{PR} go", f"for {PR} go, the rest later"))  # the id says no yes
 
     def test_an_approving_word_inside_another_word_is_none(self) -> None:
         prompt = "yesterday's okayish draft is in the doc"
         self.assertFalse(self.counts("yesterday's okayish", prompt))
         self.assertFalse(self.counts("okayish draft", prompt))
 
-    def test_the_id_is_this_proposals(self) -> None:
-        prompt = f"{OTHER_PR} looks good to merge now"
-        self.assertTrue(self.counts(f"{OTHER_PR} looks good", prompt, item_id=OTHER_PR))
-        self.assertFalse(self.counts(f"{OTHER_PR} looks good", prompt, item_id=PR))
-
     def test_a_statement_needs_only_whole_words(self) -> None:
-        """approvals.words_in, which an ontology quote of my words uses: no approving word, no length."""
-        prompt = "Yes: smoke tests gate every release."
+        """approvals.words_in, which an ontology quote of my words uses: no approving phrase, no length, and
+        quoted text kept (a statement may quote a name)."""
+        prompt = 'Yes: smoke tests gate every release, the job is "nightly-export".'
         self.assertTrue(approvals.words_in("smoke  tests gate", [prompt]))
         self.assertTrue(approvals.words_in("yes", ["other", prompt]))
-        self.assertTrue(approvals.words_in("every release.", [prompt]))
+        self.assertTrue(approvals.words_in('the job is "nightly-export"', [prompt]))
         for quote in ("moke tests", "every relea", "e", ""):
             with self.subTest(quote=quote):
                 self.assertFalse(approvals.words_in(quote, [prompt]))
 
     def test_text_bosun_pasted_is_compared_as_typed(self) -> None:
         self.assertTrue(self.counts("yes", "<pasted_content>yes</pasted_content>"))
-        self.assertFalse(self.counts("", "anything"))
         self.assertFalse(self.counts("...", "..."))
 
 
