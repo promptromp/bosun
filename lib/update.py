@@ -434,18 +434,21 @@ def _windows_brought_along(state: UpdateState) -> UpdateState:
     open_windows = {name for name, _how in plan.windows}
 
     def finish_last(state: UpdateState, last: UpdateState) -> None:
-        _last_finished(where.state_dir, state, last, open_windows)
+        _last_finished(where.state_dir, state, last, open_windows, update_plan.refused_lines(plan))
 
     return update_windows.bring_along(state, plan, say=Output.say, then=finish_last)
 
 
-def _last_finished(state_dir: Path, state: UpdateState, last: UpdateState, open_windows: set[str]) -> None:
+def _last_finished(
+    state_dir: Path, state: UpdateState, last: UpdateState, open_windows: set[str], refused: Mapping[str, str]
+) -> None:
     """The last update (<last>, settled), whose windows still waited for <state>'s took over (those
     `taken_over`, recorded as it started bringing windows along), finished: its summary saved next to its
-    backup, each window carried into this update, closed, or left alone by it (carried_into)."""
+    backup, each window carried into this update, closed, left as it is as its launch would not start
+    (<refused>, what the plan says of each), or left alone by it (carried_into)."""
     if not last.pending:
         return
-    finished = update_agents.carried_into(last, state.taken_over, open_windows)
+    finished = update_agents.carried_into(last, state.taken_over, open_windows, refused)
     saved = _saved(finished, _text(finished, summary_of(state_dir, finished)), Output.say)
     versions_ = f"{_short(last.from_commit)} -> {_short(last.to_commit)}"
     taken = f"took over {', '.join(state.taken_over)}" if state.taken_over else "took over no window"

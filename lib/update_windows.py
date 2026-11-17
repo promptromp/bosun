@@ -293,6 +293,7 @@ def bring_along(
         dict(plan.windows),
         _reread_files(plan, root),
         last,
+        dict(plan.refused),
     )
     # taken over: each of the last one's windows this update brings along, the ones it restarts afresh too
     taken = tuple(window for window in (last.pending if last else ()) if window in windows)

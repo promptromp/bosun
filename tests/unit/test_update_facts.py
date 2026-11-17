@@ -111,13 +111,29 @@ class PlanForTest(World):
         self.assertEqual(plan.owed_left, ("api",))
         text = update_plan.render_plan(plan)
         self.assertIn(
-            "Also owed by the last update, and left alone: nothing they were launched with differs from the "
-            "newest version: api\n",
+            "Also owed by the last update, and left alone, as nothing they were launched with differs from "
+            "the newest version: api\n",
             text,
         )
         self.assertNotIn("api: a restart", text)
         self.windows = opened("api", "orchestrator", "web")
         self.assertEqual(self.plan().owed_left, ())
+
+    def test_a_window_whose_launch_the_new_version_refuses_is_listed_only_as_refused(self) -> None:
+        """Round 2, item 1: the last update asked it to take stock; it waits at a prompt; its launch on the
+        new version would refuse. Its plan line says so, and Still owed promises it no restart."""
+        why = "plugins: a.json does not parse, so bosun cannot tell which plugins to switch off"
+        self.windows = [update_plan.WindowFacts("orch", "orchestrator", "waiting", True, refused=why)]
+        self.record(
+            "agents",
+            pending=("orch",),
+            windows={"orch": ("orchestrator", "take stock, then restart", "asked to take stock")},
+        )
+        plan = self.plan()
+        self.assertEqual((plan.owed, plan.owed_left, plan.refused), ((), (), (("orch", why),)))
+        text = update_plan.render_plan(plan)
+        self.assertIn(f"  orch: left running, as it would not start on the new version: {why}; ", text)
+        self.assertNotIn("Still owed", text)
 
     def test_a_window_answered_by_hand_is_owed_nothing(self) -> None:
         """No check-in loop took its answer yet: the plan counts it as answered, as bosun update does."""
@@ -357,9 +373,10 @@ class FactsTest(World):
         stub = root / "bin" / "bosun"
         stub.write_text(
             '#!/bin/sh\n[ "$3" = known ] && echo \'{"args": "a", "files": "f"}\' && exit 0\n'
-            '[ "$3" = silent ] && exit 1\n'
+            '[ "$3" = silent ] && exit 4\n'
+            '[ "$3" = crashed ] && echo "Traceback: KeyError" >&2 && exit 1\n'
             "echo \"ERROR: 'refused' does not start: its plugins were refused\" >&2\n"
-            'echo "plugins: a.json does not parse" >&2\necho >&2\nexit 1\n'
+            'echo "plugins: a.json does not parse" >&2\necho >&2\nexit 4\n'
         )
         stub.chmod(0o755)
         record = {"fingerprint": {"args": "a", "files": "f"}}
@@ -372,6 +389,8 @@ class FactsTest(World):
             self.assertEqual(
                 update_facts.launch_compared(root, "silent", self.state, "s"), (True, update_facts.REFUSED)
             )
+            # item 4 of round 2: a crash, a usage error or a timeout is no refusal: changed, as before
+            self.assertEqual(update_facts.launch_compared(root, "crashed", self.state, "s"), (True, ""))
         with mock.patch("launch_record.recorded", return_value={"fingerprint": {"args": "a", "files": "g"}}):
             self.assertEqual(update_facts.launch_compared(root, "known", self.state, "s"), (True, ""))
         with mock.patch("launch_record.recorded", return_value=None):

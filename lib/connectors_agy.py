@@ -46,7 +46,7 @@ MEANS_NOTHING = (
     "means nothing to agy (a URL pattern or a claude.ai connector), so this window starts without it"
 )
 BLOCKED = "agy would also start {}, which its list does not name"
-NOT_NAMED = "is not in this window's list and agy cannot switch it off, so the window does not start"
+NOT_NAMED = "is not in this window's list and agy cannot switch it off"
 WOULD_START = "agy starts nothing else here"
 NO_PLUGIN_LIMIT = (
     "agy cannot switch plugins off per window, so its plugin list must be all (BOSUN_PLUGINS, or plugins: "
@@ -216,14 +216,14 @@ def plugins_doctor_line(
 def cmd_agy(args: argparse.Namespace) -> int:
     allowed = parse(args.list)
     if not plugins.parse(args.plugins).everything:
-        plugins.say(f"{NO_PLUGIN_LIMIT}, so this window does not start")
+        plugins.say(NO_PLUGIN_LIMIT)
         return 1
     if allowed.everything:
         return 0
     try:
         found = sources(args.cwd, args.agent_bin)
     except ConnectorsError as exc:
-        say(f"{exc}, so this window does not start")
+        say(str(exc))
         return 1
     not_found, meaningless = unknown_names(allowed, found)
     for name in not_found:

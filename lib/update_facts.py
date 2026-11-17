@@ -201,15 +201,18 @@ def new_facts(root: Path) -> VersionFacts:
     )
 
 
-REFUSED = "its launch on the new version is refused"  # a refused fingerprint that said nothing
+REFUSED = "its launch gave no reason"  # a refused fingerprint that said nothing
+# `launch --fingerprint`'s exit when the launch would refuse (LAUNCH_REFUSED in lib/common.sh)
+FINGERPRINT_REFUSED = 4
 
 
 def launch_compared(
     root: Path, name: str, state_dir: Path, session: str, kept: Mapping[str, str] | None = None
 ) -> tuple[bool, str]:
     """Whether window <name> would be launched now, by the version in <root>, with anything other
-    than what its last launch recorded; and why that launch would not start, when the fingerprint is
-    refused (its last stderr line: the reason the launch would record), else "". `launch --fingerprint`
+    than what its last launch recorded; and why that launch would not start, when the fingerprint
+    reports a refusal (FINGERPRINT_REFUSED; its last stderr line: the reason the launch would record),
+    else "" (any other failure, a crash or a timeout, counts as changed only). `launch --fingerprint`
     of that version reads the files under the install from <root> itself, so this holds before the
     switch too, and gets the config values the update will write to bosun.env (<kept>,
     migrations.keys_to_keep) as it will have them. One of bosun's windows with no record, or one the
@@ -217,10 +220,10 @@ def launch_compared(
     never gets here: _window)."""
     recorded = launch_record.recorded(state_dir, session, name)
     done = bosun(root, "launch", "--fingerprint", name, env=kept)
-    if done.returncode != 0:
+    if done.returncode == FINGERPRINT_REFUSED:
         said = [line.strip() for line in done.stderr.splitlines() if line.strip()]
         return True, said[-1] if said else REFUSED
-    if recorded is None:
+    if recorded is None or done.returncode != 0:
         return True, ""
     try:
         now = json.loads(done.stdout)
@@ -297,14 +300,13 @@ def owed_last(state_dir: Path) -> update_state.UpdateState | None:
 def owed_windows(state_dir: Path, plan: Plan) -> tuple[tuple[tuple[str, str], ...], tuple[str, ...]]:
     """The windows the last update still waits for (owed_last) that an update with <plan> takes over, each
     with what it is owed (update_agents.owed), by the decision bring_along makes over the plan's
-    treatments (update_agents.taken_or_left); and those it leaves alone (open, given nothing by either)."""
+    treatments (update_agents.taken_or_left); and those it leaves alone (open, given nothing by either). A
+    window whose launch on the new version would not start (plan.refused) is neither: its line is its own."""
     last = owed_last(state_dir)
     if last is None:
         return (), ()
-    taken, left = update_agents.taken_or_left(plan.windows, dict(plan.kinds), last)
-    refused = dict(plan.refused)  # left running for a reason of its own, which its plan line says
-    owed = tuple((window, update_agents.owed(last, window).value) for window in taken)
-    return owed, tuple(window for window in left if window not in refused)
+    taken, left = update_agents.taken_or_left(plan.windows, dict(plan.kinds), last, dict(plan.refused))
+    return tuple((window, update_agents.owed(last, window).value) for window in taken), left
 
 
 def left_running(state_dir: Path, window: str) -> str:

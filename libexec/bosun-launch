@@ -41,8 +41,9 @@
 # window list, opened by `send --new`, with its recorded directory and --model / --effort), in the
 # window's directory from the window list otherwise; it refuses a window with neither. Where the two
 # differ, an update changed something the session was started with, and only a restart gives it the
-# new one. A fingerprint the launch would refuse (its connectors or plugins refused) exits 1, its last
-# line on stderr the reason a launch would record (note_error in lib/common.sh), for an update to say why.
+# new one. A fingerprint the launch would refuse (its connectors or plugins refused: launch_refused in
+# lib/common.sh) exits 4, its last line on stderr the reason a launch would record (note_error), for an update
+# to say why; any other failure (a window it cannot find, a crash) exits otherwise.
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
 load_config
@@ -140,8 +141,8 @@ set_agent_args() { # <name>
 # lookups kept. A Codex window's arguments come from `codex mcp list --json` (lib/launch/codex.sh), so its
 # fingerprint runs it, and an agy window's connector check runs `agy plugin list --json` (lib/connectors_agy.py)
 # on each fingerprint in the same way. When that fails, or another settings scope would widen a Claude Code
-# window's list (refuse_widening, lib/connectors_claude.py), no fingerprint is printed (exit 1), an update
-# reads the window as changed, and its restart then refuses to start it.
+# window's list (refuse_widening, lib/connectors_claude.py), no fingerprint is printed (exit 4, the launch's
+# reason last on stderr), and an update leaves the window running and says why.
 print_fingerprint() { # <name>
   local dir listed=1
   CONNECTOR_LOOKUP=0
@@ -174,13 +175,13 @@ record_launch() {
     log "warning: could not record what '$name' is launched with (lib/launch_record.py)"
 }
 
-# --fingerprint <name>: print_fingerprint, in a subshell whose refusal notes its reason in a file of its own
-# (note_error), said last on stderr.
+# --fingerprint <name>: print_fingerprint, in a subshell whose refusal (launch_refused, exit LAUNCH_REFUSED)
+# notes its reason in a file of its own (note_error), said last on stderr.
 fingerprint_or_why() { # <name>
   local code=0
   LAUNCH_ERROR_FILE="$(mktemp "${TMPDIR:-/tmp}/bosun-fingerprint.XXXXXX")" || exit 1
   (print_fingerprint "$1") || code=$?
-  [ "$code" = 0 ] || [ ! -s "$LAUNCH_ERROR_FILE" ] || tail -n 1 "$LAUNCH_ERROR_FILE" >&2
+  [ "$code" != "$LAUNCH_REFUSED" ] || [ ! -s "$LAUNCH_ERROR_FILE" ] || tail -n 1 "$LAUNCH_ERROR_FILE" >&2
   rm -f "$LAUNCH_ERROR_FILE"
   return "$code"
 }

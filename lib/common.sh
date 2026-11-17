@@ -570,15 +570,16 @@ note_reason() { # <file>
   [ -z "$line" ] || note_error "$line"
 }
 # The launch of <window> stops: "'<window>' does not start: <why>" on stderr and in the log file, as die says it,
-# with "(<module>, above)" after it when a module's lines above say more. The launch's error (note_error) keeps a
-# reason this launch already noted (note_reason: what the module said), which says more than <why>; else it is
-# <why> (and "(<module>)"), without the window, which the update's summary names itself.
+# with "(<module>, above)" after it when a module's lines above say more, and exit LAUNCH_REFUSED. The launch's
+# error (note_error) keeps a reason this launch already noted (note_reason: what the module said), which says
+# more than <why>; else it is <why> (and "(<module>)"), without the window, which the update's summary names.
+LAUNCH_REFUSED=4
 launch_refused() { # <window> <why> [module]
   local where="" said=""
   [ -z "${3:-}" ] || where=" ($3, above)" said=" ($3)"
   [ -n "${LAUNCH_ERROR_FILE:-}" ] && [ -s "$LAUNCH_ERROR_FILE" ] || note_error "$2$said"
   log "ERROR: '$1' does not start: $2$where" >&2
-  exit 1
+  exit "$LAUNCH_REFUSED"
 }
 launch_error_file() { echo "$BOSUN_STATE_DIR/launches/${BOSUN_SESSION_NAME//\//_}/${1//\//_}.error"; } # <window>
 

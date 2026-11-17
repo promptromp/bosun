@@ -249,9 +249,7 @@ class PluginListTest(AgyCase):
             with self.subTest(plugins=value):
                 code, out, err = self.run_with(value)
                 self.assertEqual((code, out), (1, ""))
-                self.assertEqual(
-                    err, f"plugins: {connectors_agy.NO_PLUGIN_LIMIT}, so this window does not start\n"
-                )
+                self.assertEqual(err, f"plugins: {connectors_agy.NO_PLUGIN_LIMIT}\n")
 
     def test_all_and_no_list_start(self) -> None:
         self.assertEqual(self.run_with("all"), (0, "", ""))

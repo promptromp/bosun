@@ -45,7 +45,7 @@ SESSION_ONLY = "@inline"  # a plugin a launch loads by --plugin-dir, such as bos
 # bosun doctor's words, which every agent's module shares
 EVERYTHING_LINE = "plugins: all of yours"
 NARROW_THEM = (
-    "a plugin's hook or skill can stop its unattended runs at a question: name the ones it needs in "
+    "A plugin's hook or skill can stop its unattended runs at a question; name the ones it needs in "
     "BOSUN_ORCHESTRATOR_PLUGINS, or set it empty for none"
 )
 NONE_LINE = "plugins: none of yours"
@@ -191,7 +191,7 @@ def everything_report(window: str, kind: str) -> tuple[str, str]:
     """A window with `all`, whatever its agent: all of mine, which the orchestrator should not keep, as it
     runs unattended (an older install's, which bosun update kept at `all`)."""
     if kind == connectors.ORCHESTRATOR:
-        return connectors.WARN, f"{window}: {EVERYTHING_LINE}: {NARROW_THEM}"
+        return connectors.WARN, f"{window}: {EVERYTHING_LINE}. {NARROW_THEM}"
     return connectors.OK, f"{window}: {EVERYTHING_LINE}"
 
 

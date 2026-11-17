@@ -231,8 +231,8 @@ class DoctorCommandTest(connector_fakes.ScratchCase):
                 *("--plugins=all", "--connectors", "", "--cwd", str(self.root)),
             )
             warning = (
-                "warn\torch: plugins: all of yours: a plugin's hook or skill can stop its unattended "
-                "runs at a question: name the ones it needs in BOSUN_ORCHESTRATOR_PLUGINS, or set it "
+                "warn\torch: plugins: all of yours. A plugin's hook or skill can stop its unattended "
+                "runs at a question; name the ones it needs in BOSUN_ORCHESTRATOR_PLUGINS, or set it "
                 "empty for none\n"
             )
             self.assertEqual((code, out, err), (0, warning, ""), harness)

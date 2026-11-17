@@ -140,13 +140,13 @@ def _agents(plan: Plan, said: Sequence[tuple[str, str]]) -> tuple[tuple[str, str
     checkin window, whose loop the release restarted, is not listed; a window the caller names that
     the plan does not comes last."""
     lines = dict(said)
-    refused = dict(plan.refused)
+    refused = update_plan.refused_lines(plan)
     found: list[tuple[str, str]] = []
     for name, how in plan.windows:
         if name in lines:
             found.append((name, lines.pop(name)))
         elif name in refused:
-            found.append((name, update_plan.refused_line(name, refused[name])))
+            found.append((name, refused[name]))
         elif how in LEFT:
             found.append((name, LEFT[how]))
     return (*found, *lines.items())

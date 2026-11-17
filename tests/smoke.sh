@@ -952,9 +952,9 @@ check "refuse exits 1 with the same line on stderr, and none in the file" bash -
 check "die_usage exits 2 pointing at --help on stderr, and none in the file" bash -c '
   [ "$1" = "2|ERROR: unknown argument (see --help)" ] && [ ! -e "$2" ]' _ "$(ends_with mistyped die_usage "unknown argument")" "$log_dir/mistyped-$log_day.log"
 printf 'connectors: probe not found, so this window starts without it\nplugins: the real reason\n\n' >"$WORK/resolver.err"
-check "launch_refused says the window does not start, with the module above, and keeps the reason the resolver noted" bash -c '
+check "launch_refused says the window does not start, with the module above, exits 4, and keeps the reason the resolver noted" bash -c '
   out="$(LAUNCH_ERROR_FILE="$3" BOSUN_LOG_DIR="$4" bash -c "source \"\$1/lib/common.sh\"; note_reason \"\$2\"; launch_refused w \"it was refused\" lib/x.py" _ "$1" "$2" 2>&1)"
-  [ $? = 1 ] && [[ "$out" == *"ERROR: '"'"'w'"'"' does not start: it was refused (lib/x.py, above)" ]] && [ "$(cat "$3")" = "plugins: the real reason" ]' \
+  [ $? = 4 ] && [[ "$out" == *"ERROR: '"'"'w'"'"' does not start: it was refused (lib/x.py, above)" ]] && [ "$(cat "$3")" = "plugins: the real reason" ]' \
   _ "$ROOT" "$WORK/resolver.err" "$WORK/refused.error" "$log_dir"
 rm -f "$WORK/refused.error"
 check "... and without one, records its own reason, with no window and no \"above\"" bash -c '
@@ -1793,7 +1793,7 @@ check "an installed_plugins.json that does not parse keeps a window with a list 
   bash -c 'cd "$1" && "${@:2}" launch alpha' _ "$REPO_A" "${PS[@]}" "$BOSUN"
 check "... and its fingerprint is refused, the reason last on stderr (what an update says of it)" bash -c '
   out="$("${@:2}" launch --fingerprint alpha 2>&1 >/dev/null)"
-  [ $? = 1 ] && [ "$(tail -n 1 <<<"$out")" = "plugins: $1 does not parse, so bosun cannot tell which plugins to switch off" ]' \
+  [ $? = 4 ] && [ "$(tail -n 1 <<<"$out")" = "plugins: $1 does not parse, so bosun cannot tell which plugins to switch off" ]' \
   _ "$HOME/.claude/plugins/installed_plugins.json" "${PS[@]}" "$BOSUN"
 check "... and doctor says it does not start" contains "$("${PS[@]}" "$BOSUN" doctor 2>&1)" \
   "warn  alpha: does not start: $HOME/.claude/plugins/installed_plugins.json does not parse"
@@ -1808,7 +1808,7 @@ check "doctor says what plugins each window loads: the orchestrator's" contains 
 check "... and a repo window's" contains "$out" "ok    alpha: plugins: all of yours"
 check "... and warns of an orchestrator kept at all, saying how to narrow it" contains \
   "$("${PL[@]}" BOSUN_ORCHESTRATOR_PLUGINS=all "$BOSUN" doctor 2>&1)" \
-  "warn  orch: plugins: all of yours: a plugin's hook or skill can stop its unattended runs at a question: name the ones it needs in BOSUN_ORCHESTRATOR_PLUGINS, or set it empty for none"
+  "warn  orch: plugins: all of yours. A plugin's hook or skill can stop its unattended runs at a question; name the ones it needs in BOSUN_ORCHESTRATOR_PLUGINS, or set it empty for none"
 check "... and warns of a name not found" contains "$(BOSUN_PLUGINS=acme-gone "$BOSUN" doctor 2>&1)" \
   "warn  alpha: plugins: none of yours (2 switched off); plugins not found, so it starts without: acme-gone"
 (cd "$REPO_A" && "${PL[@]}" "$BOSUN" launch orch >/dev/null 2>&1)

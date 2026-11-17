@@ -500,6 +500,32 @@ class TakeOverTest(unittest.TestCase):
         _, reread, _ = update_agents.take_over({}, {"orchestrator": Treatment.LEAVE}, (), asked)
         self.assertEqual(reread, ())  # it was asked already, and only has to answer
 
+    def test_a_window_whose_launch_the_new_version_refuses_is_never_taken_over(self) -> None:
+        """Round 2, item 1: the last update asked it to take stock and it waits at a prompt; the new plan
+        leaves it (its launch would refuse). Not owed, not left alone (its own line says why), never
+        restarted into the refused launch, and what it gave the last update kept."""
+        last = self.last({"orch": ("orchestrator", "take stock, then restart", "asked to take stock")})
+        plan = (("orch", Treatment.LEAVE),)
+        kinds = {"orch": "orchestrator"}
+        self.assertEqual(update_agents.taken_or_left(plan, kinds, last), (("orch",), ()))  # as it was
+        self.assertEqual(update_agents.taken_or_left(plan, kinds, last, ("orch",)), ((), ()))
+        windows, reread, kept = update_agents.take_over(
+            update_agents.to_bring_along(plan, kinds), dict(plan), (), last, ("orch",)
+        )
+        self.assertEqual((windows, reread, kept), ({}, (), ("orch",)))  # bring_along: nothing pending
+        line = "left running, as it would not start on the new version: plugins: a.json does not parse"
+        finished = update_agents.carried_into(last, (), ("orch",), {"orch": line})
+        self.assertEqual(
+            dict(update_agents.outcomes(finished, MemoryNotes()))["orch"], f"asked to take stock, {line}"
+        )
+
+    def test_one_the_last_update_owed_with_nothing_done_is_marked_with_why_not_left_alone(self) -> None:
+        """Round 2, item 2: "nothing it was launched with differs" would be false of it."""
+        last = self.last({"api": ("repo", "restart")})
+        line = "not restarted, as it would not start on the new version: x; fix that, then bosun refresh api"
+        finished = update_agents.carried_into(last, (), ("api",), {"api": line})
+        self.assertEqual(dict(update_agents.outcomes(finished, MemoryNotes()))["api"], line)
+
     def test_a_window_no_longer_open_is_not_taken_over(self) -> None:
         last = self.last({"api": ("repo", "wait until idle")})
         self.assertEqual(update_agents.take_over({}, {}, (), last), ({}, (), ()))

@@ -346,7 +346,7 @@ class LaunchCommandTest(unittest.TestCase):
     def test_a_codex_window_whose_servers_cannot_be_listed_does_not_start(self) -> None:
         self.env["BOSUN_CODEX_BIN"] = str(self.tmp / "no-codex")
         done = self.bosun("launch", "web", cwd=self.repo)
-        self.assertEqual(done.returncode, 1)
+        self.assertEqual(done.returncode, 4)  # refused (launch_refused, lib/common.sh)
         self.assertIn("codex mcp list failed", done.stderr)
         self.assertNotIn("dry-run: would run", done.stdout)
 

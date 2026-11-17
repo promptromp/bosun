@@ -133,6 +133,18 @@ class TestTreatment(unittest.TestCase):
         )
         self.assertEqual(up.from_record(json.loads(json.dumps(up.as_record(made)))), made)
 
+    def test_one_whose_agent_is_not_running_is_said_not_restarted_rather_than_left_running(self) -> None:
+        """Round 2, item 3: nothing runs in it to be left running."""
+        why = "plugins: a.json does not parse"
+        made = plan(windows=[up.WindowFacts("acme-api", "repo", "exited", True, refused=why)])
+        self.assertEqual((made.windows, made.stopped), ((("acme-api", T.LEAVE),), ("acme-api",)))
+        self.assertIn(
+            f"  acme-api: not restarted, as it would not start on the new version: {why}; "
+            "fix that, then bosun refresh acme-api\n",
+            up.render_plan(made),
+        )
+        self.assertEqual(up.from_record(json.loads(json.dumps(up.as_record(made)))), made)
+
 
 class TestMakePlan(unittest.TestCase):
     def test_prompts_changed_are_named_and_counted(self) -> None:

@@ -67,13 +67,14 @@ came of it.
 
 A window whose restart did not start (its launch refused, or its agent exited at once) is not waited for: the
 summary says it did not start, why, and what to do (fix that, then `bosun refresh <window>`). A window whose
-launch the new version would refuse is not restarted at all: it keeps running, and the plan and the summary say
-it would not start on the new version, why, and what to do.
+launch the new version would refuse is not restarted at all, even one the last update still owed: it keeps
+running (one whose agent had exited stays as it is), and the plan and the summary say it would not start on the
+new version, why, and what to do.
 
 With a plugin list (the orchestrator has one by default: none of yours), your own Claude Code plugins count among
 what a window is started with: installing or enabling one (`claude plugin install`, `~/.claude/settings.json`)
-changes what its launch switches off, so the next update restarts the orchestrator, even one that changes nothing
-else.
+changes what its launch switches off, so the next update restarts the orchestrator, even an update that changes
+nothing else.
 
 Tasks already handed to a repo window keep the text they had. The summary lists them, so you can send a
 `bosun delegate --update` where a changed rule matters.

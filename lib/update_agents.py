@@ -422,6 +422,7 @@ def take_over(
     plan: Mapping[str, Treatment],
     reread: Sequence[str],
     last: UpdateState | None,
+    refused: Collection[str] = (),
 ) -> tuple[dict[str, tuple[str, ...]], tuple[str, ...], tuple[str, ...]]:
     """The windows an update brings along (<windows>, to_bring_along's), with those the <last> update
     still waits for taken over, by the new plan (<plan>: each open window's treatment): one it gives
@@ -429,12 +430,17 @@ def take_over(
     update had started it already; one it leaves alone still gets what the last update began or owed
     it a re-read for (else nothing: the newest version gives it nothing). The files to re-read are
     <reread> and the last update's, while its re-read was not asked yet. Returns the windows, the
-    files to re-read, and the windows whose notes are theirs to keep (what they gave the last update)."""
+    files to re-read, and the windows whose notes are theirs to keep (what they gave the last update). A
+    window whose launch on the new version would not start (<refused>, the plan's) is never taken over,
+    whatever the last update began: a restart would stop it for a launch that refuses; its notes are kept."""
     taken = dict(windows)
     files, kept = list(reread), list[str]()
     if last is None:
         return taken, tuple(files), ()
     for window in last.pending:
+        if window in refused:
+            kept.append(window)
+            continue
         entry = _taken_entry(_entry(last, window), taken.get(window), window in plan)
         if entry is None:
             continue
@@ -446,17 +452,25 @@ def take_over(
 
 
 def taken_or_left(
-    windows: Sequence[tuple[str, Treatment]], kinds: Mapping[str, str], last: UpdateState | None
+    windows: Sequence[tuple[str, Treatment]],
+    kinds: Mapping[str, str],
+    last: UpdateState | None,
+    refused: Collection[str] = (),
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Of the windows the <last> update still waits for, those an update whose plan gives each open window
     its treatment (<windows>, with their <kinds>) takes over (take_over's own decision, as bring_along
-    names them), and those it leaves alone: still open, but given nothing by either update."""
+    names them), and those it leaves alone: still open, but given nothing by either update. One whose
+    launch on the new version would not start (<refused>) is neither."""
     if last is None:
         return (), ()
-    brought, _files, _kept = take_over(to_bring_along(windows, kinds), dict(windows), (), last)
+    brought, _files, _kept = take_over(to_bring_along(windows, kinds), dict(windows), (), last, refused)
     still_open = {name for name, _how in windows}
     taken = tuple(window for window in last.pending if window in brought)
-    left = tuple(window for window in last.pending if window not in brought and window in still_open)
+    left = tuple(
+        window
+        for window in last.pending
+        if window not in brought and window in still_open and window not in refused
+    )
     return taken, left
 
 
@@ -474,13 +488,26 @@ def _taken_entry(
     return (kind, planned, *done) if done or planned == Treatment.REREAD.value else None
 
 
-def carried_into(last: UpdateState, taken: Collection[str], open_windows: Collection[str]) -> UpdateState:
+def carried_into(
+    last: UpdateState,
+    taken: Collection[str],
+    open_windows: Collection[str],
+    refused: Mapping[str, str] | None = None,
+) -> UpdateState:
     """The <last> update (settled) finished as the next one takes over the windows it still waited for:
     `done`, each of those the next took over (<taken>, take_over's) named as carried into it, one no
-    longer open (not in <open_windows>, the next plan's) as closed, and any other as left alone by the
-    next update (the newest version gives it nothing)."""
+    longer open (not in <open_windows>, the next plan's) as closed, one whose launch on the newest version
+    would not start with what the next plan says of it (<refused>: update_plan.refused_lines), and any
+    other as left alone by the next update (the newest version gives it nothing)."""
+    refused = refused or {}
     for window in last.pending:
-        what = CARRIED if window in taken else CLOSED if window not in open_windows else LEFT_BY_NEXT
+        what = (
+            CARRIED
+            if window in taken
+            else CLOSED
+            if window not in open_windows
+            else refused.get(window, LEFT_BY_NEXT)
+        )
         last = _with(last, window, what)
     return update_state.advanced(last, "done", pending=())
 
