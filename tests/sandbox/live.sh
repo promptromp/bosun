@@ -21,7 +21,8 @@
 #             background command: the take-stock and update prompts, to the real agents; then connectors:
 #             a window with BOSUN_CONNECTORS reaches only the local test servers it names, also resumed;
 #             on Claude Code a repo whose own settings allow more keeps it from starting until the list
-#             names that, and whether `claude mcp list` writes ~/.claude.json
+#             names that, and whether `claude mcp list` writes ~/.claude.json; then plugins: a local plugin
+#             with a SessionStart hook runs in a repo window's start and not in the orchestrator's
 #             On Claude Code, right after the hand-over (before the update, whose end uninstalls bosun, and before the
 #             connectors, whose list would limit the windows): the ontology end to end, below
 #   ontology  claude only: the install and the real windows, then the ontology step alone (`go` runs it too)
@@ -532,6 +533,59 @@ every_version_clean() { # each version folder in bosun-versions, the old one too
     reads_clean "${folder%/}" || return 1
   done
 }
+waits_for_me() {
+  [ "$(window orchestrator status)" = waiting ]
+}
+waits_for_me_soon() { # <seconds>; if not by then, which assumption failed and what the orchestrator shows
+  wait_for "$1" waits_for_me && return 0
+  echo "ASSUMPTION FAILED: the orchestrator's status never became waiting within $1 s (its status now: $(window orchestrator status)): it did not put the question up with AskUserQuestion, or Claude Code does not show that as waiting"
+  screen_of orchestrator
+  return 1
+}
+update_done() {
+  [ "$(jq -r .step "$STATE/update.json" 2>/dev/null)" = "done" ]
+}
+update_done_soon() { # <seconds>; if not by then, where the update is and what the loop said
+  wait_for "$1" update_done && return 0
+  jq -c '{step, pending, windows}' "$STATE/update.json"
+  tail -20 "$STATE/logs/checkin-$(date +%F).log" 2>/dev/null
+  screen_of orchestrator
+  return 1
+}
+answered_question() { # Enter on its question (the first answer), again while it still waits, a few times at most
+  local _
+  for _ in 1 2 3; do
+    tmux -L bosun send-keys -t "=bosun:=orchestrator" Enter
+    wait_for 60 bash -c '[ "$(bosun sessions --json | jq -r ".[] | select(.name == \"orchestrator\") | .agent.status")" != waiting ]' && return 0
+  done
+  echo "ASSUMPTION FAILED: Enter did not answer its question after 3 tries, 60 s each (its status still: $(window orchestrator status)): the question's screen takes another key"
+  screen_of orchestrator
+  return 1
+}
+# Claude Code only (Codex has no question tool): the orchestrator puts a question to me just before the
+# update, so it waits for my answer, which never ends by itself.
+question_before_update() {
+  local ask="Before anything else: use your AskUserQuestion tool to ask me whether tonight's invoice export should be CSV or JSON, then wait for my answer. Do nothing else, and once I answered reply with just the answer."
+  [ "$AGENT" = "claude" ] || return 0
+  check "the orchestrator puts a question to me with its question tool" bosun send --no-item orchestrator "$ask"
+  check "... and waits for my answer (within 180 s)" waits_for_me_soon 180
+}
+# The update ended without waiting for the orchestrator at its question, said so, and the status calls no
+# update running; once I answer, the check-in loop brings it along and the update's record reaches done.
+handed_over_while_it_waits() {
+  local loop_seconds=900 # the check-in loop takes a turn every 5 minutes; the orchestrator then re-reads and answers
+  [ "$AGENT" = "claude" ] || return 0
+  check "the update stopped waiting by itself, as only the orchestrator, at its question, was left" \
+    says "Stopped waiting: every window still waited for waits for your answer." "$OUT/update.txt"
+  check "... naming it, and who brings it along once I answer" \
+    says "orchestrator waits for your answer at its prompt; once you answer, the check-in loop asks it to re-read its prompts for the update" "$OUT/update.txt"
+  check "... the record at agents, the orchestrator still waited for, handed over" \
+    jq -e '.step == "agents" and .pending == ["orchestrator"] and (.handed_over | length > 0)' "$STATE/update.json"
+  check "... and the status calls no update running, and says what the orchestrator still gets" bash -c '
+    bosun status --json | jq -e ".update.state == \"none\" and (.detail | index(\"orchestrator re-reads its prompts for the update once you answer it\"))"'
+  check "I answer its question" answered_question
+  check "... and within $loop_seconds s the check-in loop brings it along: the update is done" update_done_soon "$loop_seconds"
+}
 the_orchestrator_reread() { # <its agent before>: kept running, asked to re-read, and it answered
   [ "$(windows_entry orchestrator)" = '["orchestrator","re-read","asked to re-read","answered"]' ] &&
     [ "$(pid_of orchestrator)" = "$1" ]
@@ -545,8 +599,10 @@ update_with_agents_at_work() {
   exporter="$(pid_of exporter)"
   orchestrator="$(pid_of orchestrator)"
   check "the version folder reads clean while Claude runs with --plugin-dir into it" reads_clean "$(version_folder)"
+  question_before_update
   the_update
   check "the update ends well, with its summary" bash -c '[ "$1" = 0 ] && grep -q "^bosun updated: " "$2"' _ "$UPDATE_RC" "$OUT/update.txt"
+  handed_over_while_it_waits
   check "the orchestrator, kept running, re-read policy.md and answered" the_orchestrator_reread "$orchestrator"
   echo "  note  the orchestrator's status: $(note_of orchestrator status | head -3 | tr '\n' ' ')"
   if [ "$AGENT" = "claude" ]; then
@@ -828,6 +884,69 @@ widened_by_the_repo() {
   rm -f "$PROBE_REPO/.claude/settings.json"
 }
 
+# Claude Code loads every plugin I enabled; bosun keeps them in repo windows (BOSUN_PLUGINS=all) and switches them off
+# in the orchestrator (BOSUN_ORCHESTRATOR_PLUGINS empty) with a `false` per plugin in its --settings. A tiny plugin,
+# probe-hook, from a local marketplace, whose SessionStart hook notes the session's id and folder in PLUGIN_STARTS: a
+# start that loads the plugin leaves its line there, one that does not leaves none. Lines go by the session's id, so a
+# headless `claude -p` bosun starts meanwhile (a login check) cannot stand for a window (plugins_of_mine sets the
+# names).
+a_claude_plugin() {
+  local kit="$PLUGIN_MARKET/plugins/probe-hook"
+  mkdir -p "$PLUGIN_MARKET/.claude-plugin" "$kit/.claude-plugin" "$kit/hooks"
+  echo '{"name": "probe-local", "owner": {"name": "sandbox"}, "plugins": [{"name": "probe-hook", "source": "./plugins/probe-hook", "description": "notes where a session starts"}]}' \
+    >"$PLUGIN_MARKET/.claude-plugin/marketplace.json"
+  echo '{"name": "probe-hook", "version": "0.1.0", "description": "notes where a session starts"}' >"$kit/.claude-plugin/plugin.json"
+  # Run with sh, so that an exec bit the install does not keep does not matter.
+  echo '{"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/note.sh\""}]}]}}' >"$kit/hooks/hooks.json"
+  printf '#!/bin/sh\njq -r '"'"'"\\(.session_id) \\(.cwd)"'"'"' >>"%s"\n' "$PLUGIN_STARTS" >"$kit/hooks/note.sh"
+  if ! claude plugin marketplace add "$PLUGIN_MARKET" >"$OUT/claude-plugin-add.txt" 2>&1 ||
+    ! claude plugin install "$PLUGIN_ID" >>"$OUT/claude-plugin-add.txt" 2>&1; then
+    cat "$OUT/claude-plugin-add.txt"
+    return 1
+  fi
+  jq -e --arg id "$PLUGIN_ID" '.enabledPlugins[$id] == true' "$HOME/.claude/settings.json" >/dev/null
+}
+# The plugin's hook ran in a session in the probe repo (its path as given, or resolved).
+started_in_probe() {
+  grep -qE " ($PROBE_REPO|$(cd "$PROBE_REPO" && pwd -P))\$" "$PLUGIN_STARTS" 2>/dev/null
+}
+# The plugin's hook ran in no session of <session id> (none known counts as ran: nothing to tell it by).
+not_started_in() {
+  if [ -z "$1" ] || grep -q "^$1 " "$PLUGIN_STARTS" 2>/dev/null; then
+    echo "session '$1'; the hook's lines: $(tr "\n" " " <"$PLUGIN_STARTS")"
+    return 1
+  fi
+}
+# The orchestrator's agent stopped, and started again by bosun refresh.
+orchestrator_restarted() {
+  local pid
+  pid="$(pid_of orchestrator)"
+  [ -n "$pid" ] && kill -TERM "$pid"
+  check "... the orchestrator's agent stopped" wait_for 60 bash -c '[ -n "$1" ] && ! kill -0 "$1"' _ "$pid"
+  bosun refresh orchestrator >>"$OUT/plugin-refresh.txt" 2>&1
+  check "... and it starts again" wait_for 120 idle orchestrator
+}
+plugins_of_mine() {
+  echo "plugins: repo windows keep mine, the orchestrator loads none of them"
+  PLUGIN_MARKET="$HOME/probe-claude-market" PLUGIN_STARTS="$OUT/plugin-starts.log" PLUGIN_ID="probe-hook@probe-local"
+  check "Claude Code installs a local plugin, probe-hook, enabled in my user settings" a_claude_plugin
+  : >"$PLUGIN_STARTS"
+  probe_restarted "relaunched with probe-hook installed, the probe window resumes"
+  check "... and the plugin's SessionStart hook ran in its folder" wait_for 30 started_in_probe
+  : >"$PLUGIN_STARTS"
+  orchestrator_restarted
+  check "... launched with probe-hook switched off in its --settings" bash -c '
+    ps -o command= -p "$1" | grep -qF "\"$2\":false"' _ "$(pid_of orchestrator)" "$PLUGIN_ID"
+  check "... and the plugin's hook ran in none of its sessions" not_started_in "$(window orchestrator sessionId)"
+  bosun doctor >"$OUT/plugin-doctor.txt" 2>&1
+  check "doctor's line: the orchestrator loads none of mine" grep -qF "orchestrator: plugins: none of yours (" "$OUT/plugin-doctor.txt"
+  check "doctor's line: the probe window loads all of mine" grep -q "$PROBE_WINDOW: plugins: all of yours" "$OUT/plugin-doctor.txt"
+  grep ": plugins: " "$OUT/plugin-doctor.txt" | sed 's/^/  note  doctor: /'
+  claude plugin uninstall "$PLUGIN_ID" >>"$OUT/claude-plugin-add.txt" 2>&1 || echo "  note  could not uninstall $PLUGIN_ID"
+  claude plugin marketplace remove probe-local >>"$OUT/claude-plugin-add.txt" 2>&1 || echo "  note  could not remove the marketplace probe-local"
+  rm -rf "$PLUGIN_MARKET"
+}
+
 connectors() {
   echo "connectors: a window reaches only the servers its list names"
   local pid
@@ -865,6 +984,7 @@ connectors() {
     plugin_server
   else
     widened_by_the_repo
+    plugins_of_mine
   fi
 }
 

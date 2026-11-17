@@ -3,11 +3,13 @@
 turned into the arguments of its launch. What every agent's module shares is lib/connectors.py. Design:
 docs/design/connectors.md.
 
-Usage: connectors_codex.py --list <value> --agent-bin <codex>
+Usage: connectors_codex.py --list <value> --plugins <value> --agent-bin <codex>
            Codex's launch arguments, one per line, from `codex mcp list --json` with plugins and
            without: each configured server the list does not name switched off, every plugin when it
-           does not name one of their servers, and ChatGPT's connectors; nothing for `all`. A line on
-           stderr per name of the list Codex has no server by.
+           does not name one of their servers or when the window's plugin list (lib/plugins.py) is not
+           `all` (Codex cannot keep some plugins and not others), and ChatGPT's connectors.
+           For the connectors list `all`: nothing, or only `--disable plugins` for a plugin list that is
+           not `all` (no listing then). A line on stderr per name of the list Codex has no server by.
 
 Exit codes: 0 done, 1 the servers could not be listed, 2 a list or command line that cannot be read.
 """
@@ -24,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import claude_state
 import codex_state
 import connectors
+import plugins
 from connectors import Allowed, is_plain, is_url, parse, say
 
 
@@ -36,6 +39,10 @@ MEANINGLESS = "mean nothing to Codex: {}"
 MEANS_NOTHING = (
     "means nothing to Codex (a URL pattern or a claude.ai connector), so this window starts without it"
 )
+PLUGINS_OFF = "plugins: none of yours (Codex switches every plugin off: it cannot keep some and not others)"
+CANNOT_KEEP = "Codex cannot keep some plugins, so it starts without: {}"
+DROPPED_BY_LIST = "its plugin list switches every plugin off, so it also starts without: {}"
+DISABLE_PLUGINS = ["--disable", "plugins"]
 
 
 def toml_char(char: str) -> str:
@@ -58,42 +65,53 @@ def toml_key(name: str) -> str:
 class CodexPlan:
     """What a Codex window's launch switches off, from its list and its servers: <off>, the configured
     servers it does not name, each by name; every plugin when it does not name one of the plugins'
-    servers (<unnamed>), which also drops those of them it names (<dropped>)."""
+    servers (<unnamed>) or its plugin list is not `all` (<by_list>), which also drops those of the plugins'
+    servers it names (<dropped>)."""
 
     off: tuple[str, ...]
     unnamed: tuple[str, ...]
     dropped: tuple[str, ...]
+    by_list: bool = False
 
     @property
     def plugins_off(self) -> bool:
-        return bool(self.unnamed)
+        return bool(self.unnamed) or self.by_list
 
 
-def codex_plan(allowed: Allowed, servers: codex_state.McpServers) -> CodexPlan:
-    unnamed = tuple(name for name in servers.plugins if name not in allowed.names)
-    dropped = tuple(name for name in servers.plugins if name in allowed.names) if unnamed else ()
-    return CodexPlan(
-        tuple(name for name in servers.configured if name not in allowed.names), unnamed, dropped
-    )
-
-
-def codex_args(allowed: Allowed, servers: codex_state.McpServers) -> list[str]:
-    """Codex's launch arguments; nothing for `all`. Every configured server the list does not name
-    switched off, in one inline table (`-c mcp_servers={<key>={enabled=false},...}`, which Codex merges
-    into its configuration); every plugin (`--disable plugins`) when the list does not name one of
-    their servers, since a plugin's server is not an `mcp_servers` table (naming one there stops Codex)
-    and nothing says which plugin it is from; and ChatGPT's connectors (its `apps` feature). One
-    table, because Codex splits a `-c` key at every dot, quotes included, so
-    `mcp_servers."a.b".enabled` names another server; inside a value its TOML parser reads quoted keys
-    as TOML does. What it prints has the shape `codex_connector_args_valid` (lib/launch/codex.sh) checks
-    before a launch: a change of shape here changes that check with it."""
+def codex_plan(
+    allowed: Allowed, servers: codex_state.McpServers, plugin_list: Allowed = plugins.ALL
+) -> CodexPlan:
+    by_list = not plugin_list.everything
     if allowed.everything:
-        return []
-    plan = codex_plan(allowed, servers)
+        return CodexPlan((), (), (), by_list)
+    unnamed = tuple(name for name in servers.plugins if name not in allowed.names)
+    named = tuple(name for name in servers.plugins if name in allowed.names)
+    dropped = named if unnamed or by_list else ()
+    off = tuple(name for name in servers.configured if name not in allowed.names)
+    return CodexPlan(off, unnamed, dropped, by_list)
+
+
+def codex_args(
+    allowed: Allowed, servers: codex_state.McpServers, plugin_list: Allowed = plugins.ALL
+) -> list[str]:
+    """Codex's launch arguments. For the list `all`: nothing, or `--disable plugins` alone when the
+    plugin list is not `all`. Otherwise every configured server the list does not name switched off,
+    in one inline table (`-c mcp_servers={<key>={enabled=false},...}`, which Codex merges into its
+    configuration); every plugin (`--disable plugins`) when the list does not name one of their
+    servers, since a plugin's server is not an `mcp_servers` table (naming one there stops Codex) and
+    nothing says which plugin it is from, or when the plugin list is not `all` (codex_plan decides
+    both); and ChatGPT's connectors (its `apps` feature). One table, because Codex splits a `-c` key
+    at every dot, quotes included, so `mcp_servers."a.b".enabled` names another server; inside a value
+    its TOML parser reads quoted keys as TOML does. What it prints has the shape
+    `codex_connector_args_valid` (lib/launch/codex.sh) checks before a launch: a change of shape here
+    changes that check with it."""
+    plan = codex_plan(allowed, servers, plugin_list)
+    if allowed.everything:
+        return DISABLE_PLUGINS if plan.plugins_off else []
     off = [f"{toml_key(server)}={{enabled=false}}" for server in plan.off]
     table = ["-c", f"mcp_servers={{{','.join(off)}}}"] if off else []
-    plugins = ["--disable", "plugins"] if plan.plugins_off else []
-    return [*table, *plugins, "--disable", "apps"]
+    every_plugin = DISABLE_PLUGINS if plan.plugins_off else []
+    return [*table, *every_plugin, "--disable", "apps"]
 
 
 # ---- bosun doctor ---------------------------------------------------------------------------------
@@ -107,8 +125,11 @@ def means_nothing_to_codex(name: str) -> bool:
 
 def _codex_off(plan: CodexPlan) -> str:
     """What a Codex window's launch switches off: each configured server its list does not name, every
-    plugin when it does not name one of their servers, and ChatGPT's connectors."""
-    plugins = [f"every plugin (with {', '.join(plan.unnamed + plan.dropped)})"] if plan.plugins_off else []
+    plugin (with the plugin servers it knows of) when it does not name one of their servers or its plugin
+    list is not `all`, and ChatGPT's connectors."""
+    with_servers = ", ".join(plan.unnamed + plan.dropped)
+    every = f"every plugin (with {with_servers})" if with_servers else "every plugin"
+    plugins = [every] if plan.plugins_off else []
     off = [*plan.off, *plugins]
     return CODEX_OFF.format(f"{', '.join(off)} and " if off else "")
 
@@ -121,13 +142,17 @@ def _codex_names(allowed: Allowed, servers: codex_state.McpServers) -> tuple[lis
 
 
 def codex_report(
-    window: str, kind: str, allowed: Allowed, servers: codex_state.McpServers
+    window: str,
+    kind: str,
+    allowed: Allowed,
+    servers: codex_state.McpServers,
+    plugin_list: Allowed = plugins.ALL,
 ) -> tuple[str, str]:
     """A Codex window's line, from its servers: what it keeps, what it switches off, the plugin
     servers it names that go with every plugin, and the names it has no server by."""
     if allowed.everything:
         return connectors.everything_report(window, kind)
-    plan = codex_plan(allowed, servers)
+    plan = codex_plan(allowed, servers, plugin_list)
     if not allowed.names:
         return connectors.OK, f"{window}: none ({_codex_off(plan)})"
     kept = [*servers.configured, *(() if plan.plugins_off else servers.plugins)]
@@ -135,7 +160,7 @@ def codex_report(
     not_found, meaningless = _codex_names(allowed, servers)
     reach = f"reaches {', '.join(reached) or 'nothing'} ({_codex_off(plan)})"
     problems = [
-        connectors.part(connectors.DROPPED, plan.dropped),
+        connectors.part(connectors.DROPPED if plan.unnamed else DROPPED_BY_LIST, plan.dropped),
         connectors.part(connectors.NOT_FOUND, not_found),
         connectors.part(MEANINGLESS, meaningless),
     ]
@@ -144,7 +169,7 @@ def codex_report(
 
 def doctor_line(args: argparse.Namespace, allowed: Allowed) -> tuple[str, str]:
     """The doctor's level and line for a Codex window, from `codex mcp list --json` in its folder,
-    which starts no server."""
+    which starts no server, and its plugin list (all of a plugin's servers go when it is not `all`)."""
     if allowed.everything:
         return connectors.everything_report(args.window, args.kind)
     try:
@@ -152,7 +177,17 @@ def doctor_line(args: argparse.Namespace, allowed: Allowed) -> tuple[str, str]:
     except codex_state.CodexListError as exc:
         why = f"codex mcp list failed ({exc}), so bosun cannot tell which servers to switch off"
         return connectors.WARN, f"{args.window}: does not start: {why}"
-    return codex_report(args.window, args.kind, allowed, servers)
+    return codex_report(args.window, args.kind, allowed, servers, plugins.parse(args.plugins))
+
+
+def plugins_doctor_line(
+    args: argparse.Namespace, plugin_list: Allowed, _connector_list: Allowed
+) -> tuple[str, str]:
+    """The doctor's line for a Codex window's plugins: all of mine, or none (every plugin switched off), a
+    warning naming those of its list it cannot keep. What goes with them is in its connectors line."""
+    if plugin_list.everything:
+        return plugins.everything_report(args.window, args.kind)
+    return connectors.report(args.window, PLUGINS_OFF, [connectors.part(CANNOT_KEEP, plugin_list.names)])
 
 
 # ---- the command line ------------------------------------------------------------------------------
@@ -169,8 +204,10 @@ def say_codex_unknown(allowed: Allowed, servers: codex_state.McpServers) -> None
 
 
 def cmd_codex(args: argparse.Namespace) -> int:
-    allowed = parse(args.list)
+    allowed, plugin_list = parse(args.list), plugins.parse(args.plugins)
     if allowed.everything:
+        for arg in codex_args(allowed, codex_state.McpServers(), plugin_list):
+            print(arg)
         return 0
     try:
         servers = codex_state.mcp_servers(args.agent_bin, connectors.LOOKUP_TIMEOUT_SECONDS)
@@ -178,7 +215,7 @@ def cmd_codex(args: argparse.Namespace) -> int:
         say(f"codex mcp list failed ({exc}), so bosun cannot tell which servers to switch off")
         return 1
     say_codex_unknown(allowed, servers)
-    for arg in codex_args(allowed, servers):
+    for arg in codex_args(allowed, servers, plugin_list):
         print(arg)
     return 0
 
@@ -186,6 +223,7 @@ def cmd_codex(args: argparse.Namespace) -> int:
 def parser() -> argparse.ArgumentParser:
     top = argparse.ArgumentParser(prog="connectors_codex.py", description="Codex's launch arguments.")
     top.add_argument("--list", required=True)
+    top.add_argument("--plugins", required=True)
     top.add_argument("--agent-bin", required=True)
     top.set_defaults(run=cmd_codex)
     return top

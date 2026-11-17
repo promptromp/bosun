@@ -56,6 +56,7 @@ class AgyCase(ScratchCase):
         return capture(
             connectors_agy.main,
             f"--list={value}",
+            "--plugins=all",
             *("--agent-bin", str(agent or self.agent), "--cwd", str(cwd or self.below)),
         )
 
@@ -230,6 +231,40 @@ class RefusalTest(AgyCase):
         after = sorted(p for p in self.root.rglob("*") if p.is_file())
         self.assertEqual(before, [p for p in after if p.name != "calls"])
         self.assertEqual(stamps, [p.stat().st_mtime_ns for p in before])
+
+
+class PluginListTest(AgyCase):
+    """agy cannot switch plugins off per window: a plugin list other than `all` refuses the window."""
+
+    def run_with(self, plugin_list: str) -> tuple[int, str, str]:
+        return capture(
+            connectors_agy.main,
+            "--list=all",
+            f"--plugins={plugin_list}",
+            *("--agent-bin", str(self.root / "no-agy"), "--cwd", str(self.below)),
+        )
+
+    def test_a_plugin_list_refuses_before_anything_is_listed(self) -> None:
+        for value in ("", "acme-helper"):
+            with self.subTest(plugins=value):
+                code, out, err = self.run_with(value)
+                self.assertEqual((code, out), (1, ""))
+                self.assertEqual(err, f"plugins: {connectors_agy.NO_PLUGIN_LIMIT}\n")
+
+    def test_all_and_no_list_start(self) -> None:
+        self.assertEqual(self.run_with("all"), (0, "", ""))
+        self.assertEqual(self.run_main("all", self.root / "no-agy"), (0, "", ""))
+
+    def test_the_doctor_line_for_its_plugins(self) -> None:
+        args = argparse.Namespace(window="ag", kind="session")
+        self.assertEqual(
+            connectors_agy.plugins_doctor_line(args, parse("all"), parse("")),
+            ("ok", "ag: plugins: all of yours"),
+        )
+        self.assertEqual(
+            connectors_agy.plugins_doctor_line(args, parse(""), parse("")),
+            ("warn", f"ag: does not start: {connectors_agy.NO_PLUGIN_LIMIT}"),
+        )
 
 
 class DoctorTest(AgyCase):

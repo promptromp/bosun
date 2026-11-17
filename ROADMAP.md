@@ -268,7 +268,9 @@ watchdog has); check whether an applied change stops its finding from recurring 
 findings that came back, not yet against when their fix was applied); sandboxed on-demand reads of
 transcript excerpts; proposals as diffs to the generic prompts (reviewed as PRs); a second harness
 adapter, for Codex windows. Open: whether `learn apply` should also need a permission prompt once
-phone approvals are verified.
+phone approvals are verified; and the analysis call, which still loads every Claude Code plugin of mine (the
+Slack watcher's loads no settings files, and the orchestrator loads none of my plugins since 2026-11-17,
+`BOSUN_ORCHESTRATOR_PLUGINS`).
 
 ### 6. Sync and sharing
 
@@ -353,9 +355,14 @@ Codex says nowhere which plugin a server is from) and turned off Codex's update 
 restart. Codex's built-in servers stay on, as Claude Code's Chrome does. A plugin's server that `installed_plugins.json`
 does not list (synced from the account, `--plugin-dir`, managed) is allowed by what `claude mcp list` shows for it.
 Claude Code adds up every scope's allow list, so a window whose repo (or my own settings) allows a server its
-list does not name refuses to start, saying which file and what to do. Next: a window whose restart in an
-update dies at its launch (that refusal, a failed Codex listing) is reported as restarted and still waited
-for; the summary should say it did not start, and why. Design note:
+list does not name refuses to start, saying which file and what to do. A window whose restart in an update
+dies at its launch (that refusal, a failed Codex listing, an agent that exits at once) is no longer waited for:
+the summary says it did not start, why, and what to do (2026-11-17). Plugins too (2026-11-17): every Claude
+Code window loaded all of my plugins, their hooks, skills and commands, so one whose hook asks for a skill before any
+reply could stop the orchestrator's unattended chores at a question. Now the orchestrator loads none of mine unless
+`BOSUN_ORCHESTRATOR_PLUGINS` names them (an older install keeps `all`), repo windows keep them (`BOSUN_PLUGINS`,
+`plugins:` per window), a plugin a window's connectors need stays on, and `bosun doctor` says what each loads. Run
+in the macOS VM with real Claude Code and a local plugin's hook. Design note:
 [docs/design/connectors.md](docs/design/connectors.md).
 
 **Done (2026-11-10): a hardening round.** Gaps an inventory of the adversarial cases turned up, each now
@@ -375,9 +382,9 @@ handled and tested:
 - after the clock went back, an update's prune could delete the backup it had just taken.
 
 Next: two install lines run at once (their clones race, with git's own error), a full disk end to end, the
-Mac sleeping in the middle of an update (its hold lifts after an hour), commands run with another user's
-HOME, and a window left at a permission prompt, which holds its update open and blocks the next one until
-answered.
+Mac sleeping in the middle of an update (its hold lifts after an hour), and commands run with another user's
+HOME. A window left at a permission prompt no longer holds its update open or blocks the next one: the update
+stops waiting once only such windows are left, and the next one takes them over (2026-11-17).
 
 ### Docs site
 

@@ -533,6 +533,7 @@ PROFILE = Profile(
     ),
     screen=Screen(codex_typed_text, codex_question, never_rejects),
     connectors="connectors_codex",
+    plugins="connectors_codex",
     turn_end=TurnEnd(turn_report, remember, legacy_event="codex-turn-end"),
 )
 

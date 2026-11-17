@@ -5,6 +5,7 @@ the new version), and the update's wait with its Ctrl-C (docs/design/update.md,
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import json
 import os
 import shutil
@@ -72,6 +73,15 @@ class CommandsTest(Folder):
             self.assertEqual(bosun.call_args.args[4], window)
             self.assertEqual(Path(bosun.call_args.args[3]).parent, self.state_dir / update_state.UPDATE_DIR)
 
+    def test_a_launch_that_failed_did_not_start_and_says_why(self) -> None:
+        """refresh exits 5 when the window's launch failed: final, its reason the last line on stderr."""
+        stderr = "2026-11-07 14:02:00 [refresh] api: did not start: x\n'api' does not start: no plugin\n"
+        with self.ran(5, stderr):
+            self.assertEqual(self.commands.restart("api", "bosun was updated"), Started.DID_NOT_START)
+        self.assertEqual(self.commands.why_not_started("api"), "'api' does not start: no plugin")
+        self.assertEqual(self.commands.why_not_started("web"), "")
+        self.assertEqual(self.said, [])  # the turn records it, and says that
+
     def test_a_failure_is_said_once(self) -> None:
         for _ in range(2):
             with self.ran(1, "refresh: the window is split into several panes\n"):
@@ -129,7 +139,7 @@ class TurnTest(Folder):
         ):
             waiting = update_windows.turn(self.state_dir, lambda line: None)
         self.assertEqual([call.args[4] for call in bosun.call_args_list], list(names))
-        self.assertEqual(waiting, list(names))  # restarted, each now to answer
+        self.assertEqual(waiting, dict.fromkeys(names, "idle"))  # restarted, each now to answer
         after = update_state.read(self.state_dir)
         assert after is not None
         self.assertEqual([after.windows[n][-1] for n in names], ["restarted"] * 3)
@@ -187,11 +197,12 @@ class BringAlongTest(Folder):
         )
 
     @contextlib.contextmanager
-    def turns(self, *waits: list[str]) -> Iterator[mock.MagicMock]:
-        """Each turn waits for the next of <waits>, dropping the others from the record."""
-        left = list(waits)
+    def turns(self, *waits: list[str] | dict[str, str]) -> Iterator[mock.MagicMock]:
+        """Each turn waits for the next of <waits> (busy, unless it names each one's status), dropping
+        the others from the record."""
+        left = [wait if isinstance(wait, dict) else dict.fromkeys(wait, "busy") for wait in waits]
 
-        def turn(state_dir: Path, say: Any) -> list[str]:
+        def turn(state_dir: Path, say: Any) -> dict[str, str]:
             state = update_state.read(state_dir)
             assert state is not None
             self.at_turns.append((state.step, state.pending))
@@ -254,6 +265,72 @@ class BringAlongTest(Folder):
             self.bring_along()
         self.assertIn("no check-in loop runs here: bosun update advance, run by hand", self.said[-1])
         self.assertNotIn("the check-in loop brings", self.said[-1])
+
+    def test_the_wait_ends_once_only_windows_waiting_for_you_are_left(self) -> None:
+        """Decision 1: a window at a permission prompt or a question never ends its wait by itself, so
+        once every window still waited for waits for me, the wait ends as Ctrl-C ends it, each named."""
+        with self.turns({"orchestrator": "waiting", "api": "busy"}, {"orchestrator": "waiting"}):
+            stopped = self.bring_along()
+        self.assertEqual(self.turned.call_count, 2)  # a busy one among them kept the wait
+        self.assertEqual((stopped.step, stopped.pending), ("agents", ("orchestrator",)))
+        self.assertTrue(stopped.handed_over)  # the status no longer calls it running
+        self.assertEqual(update_state.read(self.state_dir), stopped)
+        self.assertEqual(
+            self.said[-2:],
+            [
+                "Stopped waiting: every window still waited for waits for your answer.",
+                (
+                    "  orchestrator waits for your answer at its prompt; once you answer, the check-in loop "
+                    "asks it to re-read its prompts for the update"
+                ),
+            ],
+        )
+
+    def test_without_a_check_in_loop_a_window_waiting_for_you_names_bosun_update_advance(self) -> None:
+        self.loop.return_value = False
+        with self.turns({"api": "waiting"}):
+            self.bring_along()
+        self.assertEqual(
+            self.said[-1],
+            "  api waits for your answer at its prompt; once you answer, bosun update advance, run by hand, "
+            "restarts it for the update",
+        )
+
+    def test_a_ctrl_c_hands_the_windows_over_too(self) -> None:
+        with self.turns(["api"]) as slept:
+            slept.side_effect = lambda _: os.kill(os.getpid(), signal.SIGINT)
+            stopped = self.bring_along()
+        self.assertTrue(stopped.handed_over)
+
+    def test_the_windows_the_last_update_still_waits_for_are_taken_over(self) -> None:
+        """Decision 3: the last record (kept as `carried`) brings its windows along with this one's: one
+        the plan restarts keeps the list it saved for the last one; the orchestrator re-reads both
+        updates' files; their notes stay, the others' go."""
+        last = bringing(
+            {"api": ("repo", Treatment.TAKE_STOCK), "orchestrator": ("orchestrator", Treatment.REREAD)},
+            reread=("/Users/me/.local/share/bosun/orchestrator/tasks/review.md",),
+        )
+        last = update_state.advanced(
+            last, "agents", windows={**last.windows, "api": (*last.windows["api"], "asked to take stock")}
+        )
+        update_notes.note(self.state_dir, "api", "stock", "sleep 600: the wait for CI")
+        update_notes.note(self.state_dir, "web", "stock", "from the update before")
+        state = update_state.read(self.state_dir)
+        assert state is not None
+        update_state.write(self.state_dir, dataclasses.replace(state, carried=update_state.as_object(last)))
+        with self.turns([]):
+            done = self.bring_along()
+        self.assertEqual(done.windows["api"], ("repo", "wait until idle", "asked to take stock"))
+        install = install_paths.install_path(Path(done.to_root))
+        self.assertEqual(
+            done.reread,
+            (
+                str(install / "orchestrator" / "policy.md"),
+                "/Users/me/.local/share/bosun/orchestrator/tasks/review.md",
+            ),
+        )
+        self.assertEqual(update_notes.read_note(self.state_dir, "api", "stock"), "sleep 600: the wait for CI")
+        self.assertIsNone(update_notes.read_note(self.state_dir, "web", "stock"))
 
     def test_notes_an_earlier_update_left_are_not_this_ones(self) -> None:
         update_notes.note(self.state_dir, "api", "status", "from the update before")

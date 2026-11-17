@@ -39,7 +39,8 @@ How it works: [design note](design/update.md).
 | Nothing it was started with changed (most updates) | Leaves it alone: its next `bosun` command runs the new version |
 | Only the orchestrator's prompts changed (`policy.md`, the task files) | Asks the orchestrator to re-read them once it is idle |
 | Something it was started with changed (its settings, hooks, plugin) | Restarts it on the new version once it is idle, in the same conversation. If only background work runs there, it first asks the window to list that work, and passes the list back after the restart, as a restart ends it |
-| Busy, waiting for your answer, or someone typing in it | Waits, and never restarts one that waits for you |
+| Busy, or someone typing in it | Waits until it is done |
+| Waiting for your answer (a permission prompt or a question) | Never touches it until you answer. If only such windows are left, the update stops waiting and leaves them to the check-in loop (below) |
 | One bosun did not start (a shell or a Claude you opened in its tmux session, outside `sessions.yml`) | Leaves it as it is, and says so in the plan |
 
 Each window gets a prompt to check for anything it missed and carry on, and answers with its status. The update
@@ -47,6 +48,33 @@ waits for every answer and says which windows it is waiting for. Ctrl-C stops th
 brings the rest along once each is idle. A window opened while you answer, or during the update, is brought
 along too; one opened after it runs the new version from its next `bosun` command, and keeps what it was started
 with.
+
+A window waiting for your answer never ends that wait by itself, so once every window the update still waits for
+is one of those, the update stops waiting on its own and says so, for example:
+
+```text
+Stopped waiting: every window still waited for waits for your answer.
+  orchestrator waits for your answer at its prompt; once you answer, the check-in loop restarts it for the update
+```
+
+Answer it when you get to it: the check-in loop (or `bosun update advance`, if no loop runs) brings it along once
+its turn is over. Meanwhile no update is running: the menu bar app offers Check for Updates again and says what
+the window still gets ("orchestrator restarts for the update once you answer it"), and the next update is not
+held up by it. It takes such a window over (its plan lists it under "Still owed from the last update"; one whose
+launch the newest version no longer changes is listed as left alone instead), finishes
+the last update's summary, which says the window was carried into the next update, and its own summary says what
+came of it.
+
+A window whose restart did not start (its launch refused, or its agent exited at once) is not waited for: the
+summary says it did not start, why, and what to do (fix that, then `bosun refresh <window>`). A window whose
+launch the new version would refuse is not restarted at all, even one the last update still owed: it keeps
+running (one whose agent had exited stays as it is), and the plan and the summary say it would not start on the
+new version, why, and what to do.
+
+With a plugin list (the orchestrator has one by default: none of yours), your own Claude Code plugins count among
+what a window is started with: installing or enabling one (`claude plugin install`, `~/.claude/settings.json`)
+changes what its launch switches off, so the next update restarts the orchestrator, even an update that changes
+nothing else.
 
 Tasks already handed to a repo window keep the text they had. The summary lists them, so you can send a
 `bosun delegate --update` where a changed rule matters.
@@ -75,15 +103,22 @@ as `bosun.env.pre-update-<time>`, and the plan shows the change before you say y
   repo's own `.mcp.json` servers included: give one back with `BOSUN_CONNECTORS`, or `connectors:` in its
   `sessions.yml` entry. A checkout you update with `git pull` gets no such change: set the key yourself, or the
   orchestrator starts with none.
+- **`BOSUN_ORCHESTRATOR_PLUGINS="all"`:** an install from before
+  [plugin lists](configuration.md#plugins-which-of-yours-each-window-loads) keeps loading every Claude Code plugin of
+  yours in its orchestrator, as before. A plugin's hook or skill can stop its unattended runs at a question, so name
+  the ones it needs in `BOSUN_ORCHESTRATOR_PLUGINS`, or set it empty for none; `bosun doctor` says what it loads.
+  A checkout you update with `git pull` gets no such change: set the key yourself, or the orchestrator loads none
+  of your plugins. An install with no `bosun.env` to write it to gets none either, and the update's plan and
+  summary say so.
 - **`BOSUN_UPDATE_CHANNEL="main"`:** an install that was updating before releases existed goes on following the
   head of `main`, and the plan and summary say how to follow the releases instead.
 - **`BOSUN_MENU_APP`, `BOSUN_CONSOLE_ALWAYS` and `BOSUN_START_AT_LOGIN`, all `"0"`:** an install from before the
   menu bar app stays as it was: no app, no console job, no start at login.
 
 A Claude Code window that a settings file would give servers its list does not name
-([Connectors](configuration.md#connectors-what-each-window-may-reach)) does not start on the new version. The summary says it is
-still waited for, and its pane, the day's launch log and `bosun doctor` say why. Name those servers in its list,
-or remove them from that file.
+([Connectors](configuration.md#connectors-what-each-window-may-reach)) would not start on the new version, so the
+update leaves it running; the plan and the summary say why, as does `bosun doctor`. Name those servers in its
+list, or remove them from that file, then `bosun refresh <window>`.
 
 </details>
 

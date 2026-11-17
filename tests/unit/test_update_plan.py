@@ -111,6 +111,40 @@ class TestTreatment(unittest.TestCase):
         windows = [up.WindowFacts("mine", "repo", "exited", False, started_by_bosun=False)]
         self.assertIn("  mine: not started by bosun: left as it is\n", up.render_plan(plan(windows=windows)))
 
+    def test_a_window_whose_launch_on_the_new_version_is_refused_is_left_running_and_says_why(self) -> None:
+        """Item 8: its fingerprint refused (a plugins list over an installed_plugins.json that does not
+        parse) would count as changed, and its restart would stop a working agent it cannot start again."""
+        why = "plugins: /Users/me/.claude/plugins/installed_plugins.json does not parse"
+        for status in STATUSES:
+            for kind in ("orchestrator", "repo"):
+                window = up.WindowFacts("w", kind, status, True, refused=why)
+                self.assertEqual(up.treatment(window, True), T.LEAVE, (kind, status))
+        windows = [
+            up.WindowFacts("orchestrator", "orchestrator", "idle", True, refused=why),
+            up.WindowFacts("acme-api", "repo", "idle", True),
+        ]
+        made = plan(windows=windows)
+        self.assertEqual(made.windows, (("orchestrator", T.LEAVE), ("acme-api", T.RESTART)))
+        self.assertEqual(made.refused, (("orchestrator", why),))
+        self.assertIn(
+            f"  orchestrator: left running, as it would not start on the new version: {why}; "
+            "fix that, then bosun refresh orchestrator\n",
+            up.render_plan(made),
+        )
+        self.assertEqual(up.from_record(json.loads(json.dumps(up.as_record(made)))), made)
+
+    def test_one_whose_agent_is_not_running_is_said_not_restarted_rather_than_left_running(self) -> None:
+        """Round 2, item 3: nothing runs in it to be left running."""
+        why = "plugins: a.json does not parse"
+        made = plan(windows=[up.WindowFacts("acme-api", "repo", "exited", True, refused=why)])
+        self.assertEqual((made.windows, made.stopped), ((("acme-api", T.LEAVE),), ("acme-api",)))
+        self.assertIn(
+            f"  acme-api: not restarted, as it would not start on the new version: {why}; "
+            "fix that, then bosun refresh acme-api\n",
+            up.render_plan(made),
+        )
+        self.assertEqual(up.from_record(json.loads(json.dumps(up.as_record(made)))), made)
+
 
 class TestMakePlan(unittest.TestCase):
     def test_prompts_changed_are_named_and_counted(self) -> None:

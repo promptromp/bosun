@@ -43,6 +43,14 @@ set_connector_defaults() {
   BOSUN_CONNECTORS=""
   # The orchestrator's (and `bosun chores --dry-run`'s): the work ones it needs, such as Slack and a tracker.
   BOSUN_ORCHESTRATOR_CONNECTORS=""
+  # Which of my own Claude Code plugins (enabledPlugins in my settings and a repo's) each window loads: a
+  # comma-separated list of plugin ids (acme-helper@acme-market) or bare names (any marketplace). Empty: none;
+  # all: every one, as without bosun. A plugin whose server a window's connectors name stays on. bosun's own
+  # orchestrator plugin always loads. Every repo window's; a sessions.yml entry's `plugins` wins for its window.
+  BOSUN_PLUGINS="all"
+  # The orchestrator's (and `bosun chores --dry-run`'s): a plugin's hooks, skills and commands can stop an
+  # unattended run at a question, so none by default.
+  BOSUN_ORCHESTRATOR_PLUGINS=""
 }
 
 set_update_defaults() {
@@ -541,14 +549,39 @@ log_to_file() { # <file> <line>
 # alerts on it. refuse: what the person asked cannot be done as asked (a name that is not there, nothing to act
 # on, the wrong place to run it); the same line on stderr, never in the log file: no fault of bosun's to alert on.
 die() {
+  note_error "$*"
   log "ERROR: $*" >&2
   exit 1
 }
 refuse() {
   local LOG_TO_FILE=0 # log() reads it
+  note_error "$*"
   log "ERROR: $*" >&2
   exit 1
 }
+# A launch's last error, in its window's file (launch_error_file), which `refresh --update-restart` reads to say
+# why a window did not start: only where the command set LAUNCH_ERROR_FILE (bosun launch; never exported).
+note_error() { [ -z "${LAUNCH_ERROR_FILE:-}" ] || printf '%s\n' "$*" 2>/dev/null >"$LAUNCH_ERROR_FILE" || true; }
+# A resolver's own reason, the last line it said on stderr (<file>), as this launch's error (note_error), for the
+# launch_refused that follows to keep; nothing for a resolver that said nothing. A file, so it works in $(...).
+note_reason() { # <file>
+  local line
+  line="$(grep -v '^[[:space:]]*$' "$1" 2>/dev/null | tail -n 1)"
+  [ -z "$line" ] || note_error "$line"
+}
+# The launch of <window> stops: "'<window>' does not start: <why>" on stderr and in the log file, as die says it,
+# with "(<module>, above)" after it when a module's lines above say more, and exit LAUNCH_REFUSED. The launch's
+# error (note_error) keeps a reason this launch already noted (note_reason: what the module said), which says
+# more than <why>; else it is <why> (and "(<module>)"), without the window, which the update's summary names.
+LAUNCH_REFUSED=4
+launch_refused() { # <window> <why> [module]
+  local where="" said=""
+  [ -z "${3:-}" ] || where=" ($3, above)" said=" ($3)"
+  [ -n "${LAUNCH_ERROR_FILE:-}" ] && [ -s "$LAUNCH_ERROR_FILE" ] || note_error "$2$said"
+  log "ERROR: '$1' does not start: $2$where" >&2
+  exit "$LAUNCH_REFUSED"
+}
+launch_error_file() { echo "$BOSUN_STATE_DIR/launches/${BOSUN_SESSION_NAME//\//_}/${1//\//_}.error"; } # <window>
 
 # Print a script's leading comment block (its `# Usage:` header): what --help shows. Reads one file and
 # nothing else: `bin/bosun` answers `bosun <command> --help` with it before any command runs, so
@@ -578,6 +611,7 @@ url_without_credentials() { # <url>
 # bosun failing, and the watchdog alerts on every ERROR line there.
 die_usage() {
   local LOG_TO_FILE=0 # log() reads it
+  note_error "$*"
   log "ERROR: $* (see --help)" >&2
   exit 2
 }
@@ -1146,31 +1180,44 @@ window_autocompact() { # <name>
 }
 
 # Window <name>'s list of the MCP servers and connectors it may reach (docs/design/connectors.md): the
-# orchestrator's BOSUN_ORCHESTRATOR_CONNECTORS; else its sessions.yml `connectors` (a string as written, a
-# list joined with ", ", [] for none); else BOSUN_CONNECTORS. Fails when sessions.yml cannot be read, so a
-# window never gets the default its entry narrowed, and on a `connectors` that is neither a string nor a
-# list of strings (`connectors: no` is YAML's false) or a list entry that holds a comma, which the list's
-# reader would split into two names: it says which, on stderr.
+# orchestrator's BOSUN_ORCHESTRATOR_CONNECTORS; else its sessions.yml `connectors`; else BOSUN_CONNECTORS
+# (window_list).
 window_connectors() { # <name>
+  window_list "$1" connectors "$BOSUN_ORCHESTRATOR_CONNECTORS" BOSUN_CONNECTORS
+}
+
+# Window <name>'s list of the plugins of mine it loads (docs/design/connectors.md, "Plugins"): the
+# orchestrator's BOSUN_ORCHESTRATOR_PLUGINS; else its sessions.yml `plugins`; else BOSUN_PLUGINS (window_list).
+window_plugins() { # <name>
+  window_list "$1" plugins "$BOSUN_ORCHESTRATOR_PLUGINS" BOSUN_PLUGINS
+}
+
+# Window <name>'s list under sessions.yml key <key>: <orchestrator's> for the orchestrator; else its entry's
+# <key> (a string as written, a list joined with ", ", [] for none); else the value of the config key
+# <default key>. Fails when sessions.yml cannot be read, so a window never gets the default its entry
+# narrowed, and on a value that is neither a string nor a list of strings (`connectors: no` is YAML's false)
+# or a list entry that holds a comma, which the list's reader would split into two names: it says which, on
+# stderr.
+window_list() { # <name> <key> <orchestrator's> <default key>
   if is_orchestrator "$1"; then
-    printf '%s\n' "$BOSUN_ORCHESTRATOR_CONNECTORS"
+    printf '%s\n' "$3"
     return 0
   fi
   [ -f "$BOSUN_SESSIONS_FILE" ] || {
-    printf '%s\n' "$BOSUN_CONNECTORS"
+    printf '%s\n' "${!4}"
     return 0
   }
   ruby -ryaml -e '
     entry = (YAML.safe_load(File.read(ARGV[0])) || {}).fetch("sessions", []).find { |s| s["name"] == ARGV[1] } || {}
-    value = entry.fetch("connectors", ARGV[2])
+    value = entry.fetch(ARGV[2], ARGV[3])
     names = value.is_a?(Array) ? value : [value]
     unless names.all? { |name| name.is_a?(String) } && !(value.is_a?(Array) && names.any? { |name| name.include?(",") })
-      abort "#{ARGV[0]}: the connectors of #{ARGV[1]} must be a comma-separated string or a list of names, " \
+      abort "#{ARGV[0]}: the #{ARGV[2]} of #{ARGV[1]} must be a comma-separated string or a list of names, " \
         "none holding a comma (it is #{value.inspect}): [] for none, " \
-        "or leave the key out for BOSUN_CONNECTORS"
+        "or leave the key out for #{ARGV[4]}"
     end
     puts names.join(", ")' \
-    "$BOSUN_SESSIONS_FILE" "$1" "$BOSUN_CONNECTORS"
+    "$BOSUN_SESSIONS_FILE" "$1" "$2" "${!4}" "$4"
 }
 
 # Sets connector_settings_json to the Claude Code settings that limit window <name>, launched in this
@@ -1184,7 +1231,8 @@ set_connector_settings() { # <name>
   list="$(window_connectors "$1")" || die "could not read the connectors of '$1' in $BOSUN_SESSIONS_FILE"
   is_orchestrator "$1" && [ "${CONNECTOR_LOOKUP:-1}" != 0 ] && alert=1
   connector_settings_json="$(resolve_connectors "$1" "$list" "$PWD" "$alert")" ||
-    die "'$1' does not start: its connectors were refused or could not be resolved (lib/connectors_claude.py, above)"
+    launch_refused "$1" "its connectors were refused or could not be resolved" lib/connectors_claude.py
+  connector_settings_list="$list" # its list as read, for set_plugin_settings
   connector_settings_window="$1"
 }
 
@@ -1195,6 +1243,67 @@ connector_settings() { # <name>
   [ "${connector_settings_window-}" = "$1" ] ||
     die "the connectors of '$1' were not resolved before its settings were built (set_connector_settings)"
   printf '%s\n' "$connector_settings_json"
+}
+
+# Sets plugin_settings_json to the Claude Code settings that hold window <name>, launched in this folder, to
+# its plugin list (window_plugins), as resolve_plugins makes them: {"enabledPlugins": {...}}, or {} for
+# `all`. Its connectors list is the one set_connector_settings read, when it ran for this window. The
+# orchestrator's settings file (BOSUN_ORCHESTRATOR_SETTINGS, read from this version's folder as
+# build_model_effort_args reads it) keeps the plugins it enables on. Once per process, as
+# set_connector_settings, and in the shell itself, not in $(...), which would lose both the result and a die.
+# Reads files only, so a fingerprint (CONNECTOR_LOOKUP=0) runs it as a launch does.
+set_plugin_settings() { # <name>
+  [ "${plugin_settings_window-}" = "$1" ] && return 0
+  local list connectors="${connector_settings_list-}" site=""
+  list="$(window_plugins "$1")" || die "could not read the plugins of '$1' in $BOSUN_SESSIONS_FILE"
+  if [ "${connector_settings_window-}" != "$1" ]; then
+    connectors="$(window_connectors "$1")" || die "could not read the connectors of '$1' in $BOSUN_SESSIONS_FILE"
+  fi
+  is_orchestrator "$1" && site="${BOSUN_ORCHESTRATOR_SETTINGS/#"$BOSUN_INSTALL"\//$BOSUN_ROOT/}"
+  plugin_settings_json="$(resolve_plugins "$1" "$list" "$connectors" "$PWD" "$site")" ||
+    launch_refused "$1" "its plugins were refused or could not be resolved" lib/plugins_claude.py
+  plugin_settings_window="$1"
+}
+
+# Window <name>'s settings from set_plugin_settings, printed; refused, as connector_settings is, for a window
+# set_plugin_settings did not resolve in the shell itself.
+plugin_settings() { # <name>
+  [ "${plugin_settings_window-}" = "$1" ] ||
+    die "the plugins of '$1' were not resolved before its settings were built (set_plugin_settings)"
+  printf '%s\n' "$plugin_settings_json"
+}
+
+# The Claude Code settings that hold <window> to <plugin list>, given its <connector list> (a plugin they need
+# stays on) and, for the orchestrator, its <settings file> (a plugin it enables stays on), as
+# lib/plugins_claude.py makes them in <dir>; its lines (a name not found, a plugin managed settings force on, a
+# settings file that does not parse) are logged (log_connector_lines). Prints nothing and fails on a list it
+# cannot read, on an installed_plugins.json that does not parse, on a failure of its own, and on anything but
+# one JSON object: {} for `all` (lists_everything), else one with an enabledPlugins object, so a garbled
+# answer is never taken for no limit.
+resolve_plugins() { # <window> <plugin list> <connector list> <dir> [settings file]
+  local errors json code=0
+  local -a site=()
+  [ -z "${5:-}" ] || site=(--settings-file "$5")
+  errors="$(mktemp "${TMPDIR:-/tmp}/bosun-plugins.XXXXXX")" || return 1
+  # Each list is its own argument, so one that starts with "-" is no flag.
+  json="$(python3 "$BOSUN_ROOT/lib/plugins_claude.py" --plugins="$2" --connectors="$3" --cwd "$4" \
+    ${site[@]+"${site[@]}"} 2>"$errors")" || code=$?
+  log_connector_lines "$1" "$errors"
+  [ "$code" = 0 ] || note_reason "$errors"
+  rm -f "$errors"
+  [ "$code" = 0 ] && plugin_settings_valid "$2" "$json" || return 1
+  printf '%s\n' "$json"
+}
+
+# Whether <resolver output> is what lib/plugins_claude.py prints for <plugin list>: {} for `all`, else one JSON
+# object whose enabledPlugins is an object of `false`s.
+plugin_settings_valid() { # <plugin list> <resolver output>
+  jq -se 'length == 1 and (.[0] | type == "object")' <<<"$2" >/dev/null 2>&1 || return 1
+  if lists_everything "$1"; then
+    jq -e '. == {}' <<<"$2" >/dev/null 2>&1
+  else
+    jq -e '.enabledPlugins | type == "object" and all(.[]; . == false)' <<<"$2" >/dev/null 2>&1
+  fi
 }
 
 # The Claude Code settings that limit <window> to <list>, as lib/connectors_claude.py resolves them in <dir>: it
@@ -1219,6 +1328,7 @@ resolve_connectors() { # <window> <list> <dir> <alert: 0|1>
     printf '%s\n' "$json"
     return 0
   fi
+  [ "$code" -lt 2 ] || note_reason "$work/errors"
   rm -rf "$work"
   return 1
 }
@@ -1274,6 +1384,19 @@ require_connector_limit() { # <window> <connector JSON>
   done
   jq -e --argjson want "$2" '.allowedMcpServers == $want.allowedMcpServers' <<<"$settings" >/dev/null 2>&1 ||
     die "the launch settings of '$1' lost its connector limit; not starting it with every server"
+}
+
+# Dies unless the launch settings in model_effort_args hold every `false` of <plugin JSON>'s enabledPlugins
+# (set_plugin_settings): a merge that lost one must never start a window with a plugin its list leaves out.
+require_plugin_limit() { # <window> <plugin JSON>
+  local i settings='{}'
+  jq -e 'has("enabledPlugins")' <<<"$2" >/dev/null 2>&1 || return 0
+  for ((i = 0; i < ${#model_effort_args[@]}; i++)); do
+    [ "${model_effort_args[$i]}" != --settings ] || settings="${model_effort_args[$((i + 1))]}"
+  done
+  jq -e --argjson want "$2" '(.enabledPlugins // {}) as $have | $want.enabledPlugins | to_entries
+    | all(.[]; $have[.key] == false)' <<<"$settings" >/dev/null 2>&1 ||
+    die "the launch settings of '$1' lost its plugin limit; not starting it with every plugin"
 }
 
 # The bosun window this command runs in (from tmux's TMUX_PANE, when the pane belongs to the

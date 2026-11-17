@@ -74,12 +74,16 @@
         2
       ]
     ],
+    "owed": [],
+    "owed_left": [],
     "prompts": [
       "orchestrator/policy.md",
       "orchestrator/tasks/review.md"
     ],
+    "refused": [],
     "renames": [],
     "rules": [],
+    "stopped": [],
     "to_commit": "2222222222222222222222222222222222222222",
     "unwritten": [],
     "user_changes": [

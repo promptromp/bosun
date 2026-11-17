@@ -630,6 +630,17 @@ class TestConfigAdded(unittest.TestCase):
         self.assertIn("starts at login", entry.unset or "")
         self.assertEqual(migrations.kept_values(("BOSUN_START_AT_LOGIN",)), {"BOSUN_START_AT_LOGIN": "0"})
 
+    def test_an_older_install_s_orchestrator_keeps_its_plugins(self) -> None:
+        """A new install's orchestrator loads none of my plugins; an older one's kept every one."""
+        entry = next(e for e in migrations.CONFIG_ADDED if e.key == "BOSUN_ORCHESTRATOR_PLUGINS")
+        self.assertEqual(entry.kept, "all")
+        self.assertIn("BOSUN_ORCHESTRATOR_PLUGINS", entry.note)
+        self.assertIn("now it loads none", entry.unset or "")
+        self.assertEqual(
+            migrations.kept_values(("BOSUN_PLUGINS", "BOSUN_ORCHESTRATOR_PLUGINS")),
+            {"BOSUN_ORCHESTRATOR_PLUGINS": "all"},
+        )
+
     def test_an_older_install_s_orchestrator_keeps_its_connectors(self) -> None:
         self.assertEqual(
             migrations.kept_values(("BOSUN_CONNECTORS", "BOSUN_ORCHESTRATOR_CONNECTORS")),

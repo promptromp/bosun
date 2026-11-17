@@ -18,6 +18,9 @@ hands to repo windows, and how to steer it.
 - **Only the connectors you name** in `BOSUN_ORCHESTRATOR_CONNECTORS` (empty: none), such as `claude.ai Slack` and a
   tracker ([Connectors](configuration.md#connectors-what-each-window-may-reach)). A name it cannot find at launch is
   left out, and `bosun alert` tells you which.
+- **None of your Claude Code plugins** unless `BOSUN_ORCHESTRATOR_PLUGINS` names them
+  ([Plugins](configuration.md#plugins-which-of-yours-each-window-loads)): a plugin's hook or skill could stop its
+  unattended chores at a question. Its own plugin (`/bosun:chores`) always loads.
 - **A folder Claude Code already trusts** (`BOSUN_ORCHESTRATOR_DIR`, default your repos folder), since a trust prompt
   would stop an unattended start; `bosun doctor` checks it.
 
@@ -381,7 +384,7 @@ is left as it is, and the plan says so. Otherwise, decided from what the window 
 | Something it was launched with changed (its settings, hooks, launch command or plugin), and it is idle | A restart on the new version, resuming its conversation, with the update prompt |
 | ... and only background work runs in it (`shell`) | First the take-stock prompt: a restart ends that work, so it lists each part and what to do when it finishes (`bosun update note --stock`; "nothing running" when it has ended), and stops. Once the list is there, or nothing runs any more (idle), the restart, with the list in the update prompt (and what bosun saw still running) so it starts that work again |
 | ... and it is busy | Waited for, then restarted |
-| ... and it waits at a permission prompt or a question | Never touched until you answer it |
+| ... and it waits at a permission prompt or a question | Never touched until you answer it. Once only such windows are left, the update stops waiting and leaves them to the check-in loop |
 | Its agent exited | Started again: with the update prompt when its launch resumes its conversation; when it starts a new one (none under the name its next launch takes up), as a new conversation starts: the orchestrator with the morning chores, a repo window with a fresh conversation pending with that one's prompt, any other with none |
 
 The update prompt says which version it was updated from and to, and whether the window was restarted or kept
@@ -401,10 +404,12 @@ text on stdin.
   own prompt instead, and counts as answered.
 - **The wait.** `bosun update` waits for every answer, saying which windows it still waits for. Ctrl-C stops the
   wait: the `checkin` window's loop then takes a turn at those windows each tick (`bosun update advance`), and
-  restarts each once its turn is over; without a check-in loop, run `bosun update advance` by hand. A window that
-  never answers stays waited for. `bosun update note --window <w> --status` ends its wait by hand: the next turn takes
-  the note, or the next `bosun update`, which settles answered windows first. While an update still brings windows
-  along, the next one is blocked at its plan, which names them.
+  restarts each once its turn is over; without a check-in loop, run `bosun update advance` by hand. The update stops
+  waiting by itself the same way once every window it still waits for waits for your answer at a prompt, naming each.
+  A window that never answers stays waited for; one whose restart did not start (its launch refused, or its agent
+  exited at once) is not, and the summary says why. `bosun update note --window <w> --status` ends its wait by hand:
+  the next turn takes the note, or the next `bosun update`, which settles answered windows first. While an update
+  still brings windows along, the next one takes them over: its plan lists them as still owed from the last update.
 - **Tasks already handed over** keep their text. The plan and the summary name each one whose text changed: a task
   type it was handed, or the rules every task gets (`orchestrator/tasks/_common.md`), which every task handed out
   has. Send `bosun delegate --update` where a changed rule matters.

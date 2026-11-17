@@ -239,7 +239,8 @@ switched off: the listing runs without the window's flags, since some of them ar
 Codex only and would make the listing, and so every window, fail, and picking them apart would be parsing
 Codex's command line. Add servers in `config.toml`, not through flags. A listing that fails, or arguments not of the shape `[-c mcp_servers={...}]
 [--disable plugins] --disable apps` (or nothing, for `all`), keep the window from starting, and the launch
-says why: without it, bosun cannot tell which servers to switch off. The launch also passes `-c
+says why: without it, bosun cannot tell which servers to switch off. A window whose plugin list is not `all`
+gets `--disable plugins` too ([Plugins](#plugins)). The launch also passes `-c
 check_for_update_on_startup=false`. The VM checked the facts this rests on ([What the VM
 showed](#what-the-vm-showed)), and `lib/codex_state.py`'s note and `docs/design/harnesses.md` record them.
 
@@ -350,6 +351,97 @@ claude.ai names as meaning nothing there.
   help was a docstring) keep the full text in the header; their Python modules no longer carry a copy.
   `bosun ledger list --help` and the like are still argparse's.
 
+## Plugins
+
+Status: built 2026-11-17, and run in the VM the same day (`tests/sandbox.sh mac live claude`, 109 passed, 0
+failed): the probe plugin's hook ran in a repo window's start and in none of the orchestrator's sessions.
+
+**What a plugin brings.** A Claude Code window loads every plugin I enabled (`enabledPlugins` in my
+`~/.claude/settings.json`, and in the folder's `.claude/settings.json` and `.claude/settings.local.json`): its
+hooks, skills, slash commands, agents and MCP servers. The connectors' allow list limits only the servers. A
+personal plugin may have a SessionStart hook that tells Claude to use a skill before any reply, and a skill that
+asks questions before it acts: the orchestrator runs its chores unattended, and one question can leave it waiting
+all morning. No test saw it, since the VM and the real-Claude test world have no plugins.
+
+**Saying which.** A plugin list per window, the connectors' shape: `BOSUN_ORCHESTRATOR_PLUGINS` (default empty:
+none of mine), `BOSUN_PLUGINS` (repo windows, default `all`: they are my working setup), and `plugins:` in a
+`sessions.yml` entry over `BOSUN_PLUGINS`, read exactly as `connectors:` is (`window_list` in `lib/common.sh`:
+a string, a list, `[]` for none, the same refusals). A name is a plugin id as `enabledPlugins` writes it
+(`acme-helper@acme-market`) or a bare name (`acme-helper`), which matches that plugin from any marketplace. `all`
+stands alone and adds nothing at launch. bosun's own orchestrator plugin (`--plugin-dir`, an `@inline` id) is not
+one of mine and always loads.
+
+**How Claude Code is told.** For each plugin the window would load that its list leaves out, the launch adds
+`{"enabledPlugins": {"<id>": false}}` to the settings it merges (`set_plugin_settings`, beside
+`set_connector_settings`; `lib/plugins_claude.py` prints them, from the plan in `lib/plugins.py`). Claude Code's
+docs say why that wins: settings precedence is managed, then command line (`--settings`), then local, shared
+project and user ([settings](https://code.claude.com/docs/en/settings#settings-precedence)), and for plugins
+"these sources merge key by key. For each plugin id, the value that applies is the one from the highest-precedence
+source that mentions the id", with the `--settings` value (the `flag` source) above `local`, `project` and `user`,
+and managed settings' `true` force-enabling, "and no other source overrides them"
+([plugins, Find where a plugin is enabled](https://code.claude.com/docs/en/plugins/loading#find-where-a-plugin-is-enabled)).
+The plugins a window would load: those its scopes switch on, merged key by key as Claude Code does (so one my user
+settings enable and the repo's local settings switch off is not on), and each `installed_plugins.json` records that
+no scope mentions (its manifest's `defaultEnabled`, true unless its author says otherwise; a `false` for one that
+was off anyway changes nothing), and those the managed settings files force on; never one they block, never an
+`@inline` one. The scopes are read in `lib/claude_state.py` (`settings_scopes`, the same files as the allow lists'),
+and the result is checked in the shell: one JSON object, `{}` only for `all`, else an `enabledPlugins` of `false`s
+(`plugin_settings_valid`), and the merged launch settings still hold every one of them (`require_plugin_limit`),
+or the window does not start. `bosun chores --dry-run` gets the orchestrator's, as it gets its connectors.
+
+**A plugin the connectors need stays on.** A connectors list naming one of a plugin's servers
+(`plugin:<plugin>:<server>`, as `claude mcp list` names it) keeps that plugin on, whatever its plugin list says,
+and doctor says why ("keeps … for its server in connectors"); otherwise switching plugins off would quietly break
+a connector such as a Slack plugin's server. A server named by URL pattern does not keep its plugin: name the
+plugin.
+
+**A plugin the orchestrator's settings file enables stays on.** That file (`BOSUN_ORCHESTRATOR_SETTINGS`) is merged
+into the orchestrator's `--settings`, under the launch's own settings, so a `false` there would win over its
+`true`. The launch reads its `enabledPlugins` (`--settings-file` to `lib/plugins_claude.py`, as `chores --dry-run`
+and doctor do) and leaves each plugin it switches on alone: the site chose it, and doctor says so ("kept: the
+orchestrator's settings file enables …").
+
+**What cannot be switched off.** A plugin the managed settings force on (`managed-settings.json` and
+`managed-settings.d/*.json` in `/Library/Application Support/ClaudeCode` on macOS) loads anyway: the launch logs it
+and doctor warns. A name of the list that no scope enables, mentions or installs is left out, logged, and doctor
+says it is not found, never fatal, as for a connector.
+
+**Files that do not parse.** A settings scope that is there but does not parse is read as nothing, as Claude Code
+reads it: the launch logs it, doctor warns on the window's plugin line, and the installed plugins still get their
+`false`. An `installed_plugins.json` that is there but does not parse refuses a window with a list (not one with
+`all`): nothing could tell which plugins to switch off, so the launch says so and does not start, and doctor says
+it does not start, as for the connectors' refusals.
+
+**Other agents**, through the profile (`Profile.plugins` names the module with each agent's `plugins_doctor_line`),
+never an `if` on a name: Claude Code limits per plugin, as above. Codex can only switch every plugin off: a plugin
+list other than `all` adds `--disable plugins`, decided in `codex_plan` with the connectors' own reason for it, so
+`codex_connector_args_valid` checks the one shape (for the connectors `all`, `--disable plugins` alone). An `agy`
+window with a plugin list other than `all` is refused, saying why (`lib/connectors_agy.py`), as a connectors limit
+is. Repo windows default to `all`, so nothing changes on either by default; the orchestrator is always Claude Code.
+
+**Existing installs.** `BOSUN_ORCHESTRATOR_PLUGINS` is a kept key (`CONFIG_ADDED`): an update writes `all` to an
+older install's `bosun.env`, what its orchestrator did, with a note on how to narrow it; a new install gets the
+default, none. `bosun init` asks nothing about it, and a re-run keeps the line. The launch settings are part of
+the fingerprint (`launch --fingerprint` reads only files), so a change in a window's plugin list, or in which
+plugins my settings enable for a window with a list, restarts it at an update. A window launched before this
+change, with no plugin settings in its record: a repo window (`all`) and an older orchestrator (kept `all`) launch
+the same and are not restarted; an orchestrator whose list is none now gets an `enabledPlugins` it did not have,
+so an update restarts it, which is meant.
+
+**Seeing it.** `bosun doctor` prints a line per window beside its connectors line: `plugins: all of yours`, or
+`plugins: none of yours` / `plugins: keeps <ids>`, with how many it switches off, what it keeps for its connectors
+and for the orchestrator's settings file, each name not found, each plugin managed settings force on and each
+settings scope that does not parse. An orchestrator at `all` (an older install's, kept by the update) warns, as
+its connectors line does at `all`, saying how to narrow it (`plugins.everything_report`, whatever the agent). Its connectors line comes first, so a `plugins:` that cannot be read does not
+hide it. The entry point is `lib/plugins.py doctor`, which asks the module the window's profile names, as
+`lib/connectors.py doctor` does for connectors. A Codex window's says every plugin goes; an agy
+window's says it does not start.
+
+**Best effort.** Only the managed settings files are read, not an MDM profile or server-managed settings. A
+plugin synced from claude.ai (`@synced`) or kept in a skills folder (`@skills-dir`) is switched off only when a
+settings scope mentions it. A plugin enabled only in an `--add-dir` folder's settings is not looked for (bosun's
+windows get none).
+
 ## Antigravity: a refusal
 
 `agy` takes no MCP limit per launch, and switching servers off in its shared config would race between windows
@@ -363,9 +455,9 @@ servers that block a window. Details: [Antigravity](antigravity.md#part-2-agy-wi
 
 | Layer | What it shows |
 |---|---|
-| Unit | Each entry's resolution, `claude mcp list`'s text parsed (placeholder servers), an unresolved name left out, a failed lookup falling back to what was kept (and the alert when nothing was), the Codex arguments and a failed listing refusing the start, the kept config value written once and only when the update adds the key, the init recommendations, its re-run and `--unattended`, the gate's new verbs (and the noun-like words left out), camel case and a digit before a capital, Chrome actions, business days in a zone east and west of UTC; another scope's allow list refusing a launch (each scope, exact equality, a missing or unreadable file, `all` unchecked), doctor's "allowed by name" and "by pattern", a kept key's unset note in the plan, the summary and doctor's reader, init's `all` on a `bosun.env` from before the key |
-| Smoke | A launch's arguments for a window with none, a few, and `all` (the fake `claude` answers `mcp list`); `--fingerprint` running no lookup; the guard hook in the orchestrator's launch and in `chores --dry-run`; `--help` with no config; doctor's lines; a repo whose own settings allow more refusing its window's launch, until the list names it; a site settings file's allow list replaced, or kept with `all`; doctor's warning while `bosun.env` does not set the orchestrator's list; a YAML list entry holding a comma refused |
-| VM, `mac live` | Real Claude Code and Codex windows with local stdio test servers (one allowed, one not, one a project's; on Codex also one named with a dot and one of a local plugin): each window starts and shows only what it may reach, new and resumed; on Codex a list that does not name the plugin's server switches every plugin off, and one that names it keeps plugins on; the Codex facts above; on Claude Code, a repo whose `.claude/settings.json` allows a server the list does not name keeps the window from starting, and naming it starts it; whether `claude mcp list` writes `~/.claude.json`. An orchestrator that had everything keeps it after an update and doctor warns: `mac work` |
+| Unit | Each entry's resolution, `claude mcp list`'s text parsed (placeholder servers), an unresolved name left out, a failed lookup falling back to what was kept (and the alert when nothing was), the Codex arguments and a failed listing refusing the start, the kept config value written once and only when the update adds the key, the init recommendations, its re-run and `--unattended`, the gate's new verbs (and the noun-like words left out), camel case and a digit before a capital, Chrome actions, business days in a zone east and west of UTC; another scope's allow list refusing a launch (each scope, exact equality, a missing or unreadable file, `all` unchecked), doctor's "allowed by name" and "by pattern", a kept key's unset note in the plan, the summary and doctor's reader, init's `all` on a `bosun.env` from before the key; plugin lists (bare name and id, `all`, `[]`), the scopes merged key by key, the managed files, a plugin kept for its server, not found, Codex's `--disable plugins`, agy's refusal, the kept `BOSUN_ORCHESTRATOR_PLUGINS`, the plugin doctor lines |
+| Smoke | A launch's arguments for a window with none, a few, and `all` (the fake `claude` answers `mcp list`); `--fingerprint` running no lookup; the guard hook in the orchestrator's launch and in `chores --dry-run`; `--help` with no config; doctor's lines; a repo whose own settings allow more refusing its window's launch, until the list names it; a site settings file's allow list replaced, or kept with `all`; doctor's warning while `bosun.env` does not set the orchestrator's list; a YAML list entry holding a comma refused; a `false` per plugin a fixture `~/.claude/settings.json` enables in the orchestrator's launch and none in a repo window's (but with `plugins: []`), doctor's plugin lines, the fingerprint agreeing |
+| VM, `mac live` | Real Claude Code and Codex windows with local stdio test servers (one allowed, one not, one a project's; on Codex also one named with a dot and one of a local plugin): each window starts and shows only what it may reach, new and resumed; on Codex a list that does not name the plugin's server switches every plugin off, and one that names it keeps plugins on; the Codex facts above; on Claude Code, a repo whose `.claude/settings.json` allows a server the list does not name keeps the window from starting, and naming it starts it; whether `claude mcp list` writes `~/.claude.json`. An orchestrator that had everything keeps it after an update and doctor warns: `mac work`. A tiny local plugin whose SessionStart hook notes its folder: a repo window's start runs it, the orchestrator's does not, and doctor's lines say so |
 | This Mac | One interactive Claude Code window with an allow list naming one claude.ai connector, since only a real claude.ai login has them; it shows that one and none of the others |
 
 ## Later

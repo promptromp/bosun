@@ -14,6 +14,7 @@ less than its list, never more.
 
 Usage: connectors.py doctor --window <name> --kind <kind> --harness <agent> --list <value>
                             --cwd <dir> --state-dir <dir> --agent-bin <agent> [--settings-file <file>]
+                            --plugins <value>
            bosun doctor's line for a window: `ok` or `warn`, a tab, then what it reaches (names only;
            on Claude Code a plain name is only allowed by name and a URL pattern by pattern), each name
            not found, for the orchestrator with `all` to name its connectors, and on Claude Code another
@@ -21,8 +22,10 @@ Usage: connectors.py doctor --window <name> --kind <kind> --harness <agent> --li
            settings file (--settings-file) comes to. <agent> is any agent bosun knows (agent_state.AGENTS);
            its line is the `doctor_line` of the module its profile names (Profile.connectors).
            Claude Code's is from what earlier lookups kept (never `claude mcp list`, which connects to
-           every server); Codex's from `codex mcp list --json` in <dir>, which starts none. Always exit 0
-           with one line, but for a command line that cannot be read (2).
+           every server); Codex's from `codex mcp list --json` in <dir>, which starts none, and its plugin
+           list (--plugins, lib/plugins.py), with which every plugin's servers go. Always exit 0 with one
+           line, but for a command line that cannot be read (2). A window's plugins have a doctor line of
+           their own: lib/plugins.py.
 
 Exit codes of every module: 0 done, 2 a list or command line that cannot be read; the others are in the
 agent modules' usage.
@@ -72,14 +75,16 @@ class Resolution:
     missing: tuple[str, ...]
 
 
-def parse(value: str) -> Allowed:
+def parse(value: str, everything: str = "every server") -> Allowed:
+    """A comma-separated list (a window's connectors, or its plugins: lib/plugins.py), each name once;
+    `all`, which means <everything>, only alone."""
     names = tuple(dict.fromkeys(name.strip() for name in value.split(",") if name.strip()))
     if EVERYTHING not in names:
         return Allowed(names)
     if len(names) > 1:
         others = ", ".join(name for name in names if name != EVERYTHING)
         raise ConnectorsError(
-            f"`{EVERYTHING}` means every server, so it stands alone, but the list also names {others}"
+            f"`{EVERYTHING}` means {everything}, so it stands alone, but the list also names {others}"
         )
     return Allowed(everything=True)
 
@@ -138,29 +143,40 @@ def everything_report(window: str, kind: str, site: SiteAllowList | None = None)
 def cmd_doctor(args: argparse.Namespace) -> int:
     """One line, whatever goes wrong: a list that cannot be read is a window that does not start. The line
     is the window's agent's: the `doctor_line` of the module its profile names."""
-    try:
+
+    def line() -> tuple[str, str]:
         module = importlib.import_module(AGENTS[args.harness].PROFILE.connectors)
         doctor_line: Callable[[argparse.Namespace, Allowed], tuple[str, str]] = module.doctor_line
-        level, line = doctor_line(args, parse(args.list))
+        return doctor_line(args, parse(args.list))
+
+    return print_doctor_line(args.window, "connectors", line)
+
+
+def print_doctor_line(window: str, what: str, line: Callable[[], tuple[str, str]]) -> int:
+    """Print the doctor's line <line> makes for <window> (`ok` or `warn`, a tab, the line on one line),
+    whatever goes wrong: a list that cannot be read is a window that does not start, and anything else says
+    its <what> could not be checked. Exit 0."""
+    try:
+        level, said = line()
     except ConnectorsError as exc:
-        level, line = WARN, f"{args.window}: does not start: {exc}"
+        level, said = WARN, f"{window}: does not start: {exc}"
     except Exception as exc:  # noqa: BLE001 - doctor says it could not check, and goes on
-        level, line = WARN, f"{args.window}: could not check its connectors ({type(exc).__name__}: {exc})"
-    print(f"{level}\t{' '.join(line.split())}")
+        level, said = WARN, f"{window}: could not check its {what} ({type(exc).__name__}: {exc})"
+    print(f"{level}\t{' '.join(said.split())}")
     return 0
 
 
 # ---- the command line ------------------------------------------------------------------------------
 
 
-def run(command_line: argparse.ArgumentParser, argv: list[str]) -> int:
-    """Run <command_line>'s command on <argv>, whose list that cannot be read is said on stderr (exit 2).
-    Every module's `main` is this."""
+def run(command_line: argparse.ArgumentParser, argv: list[str], tell: Callable[[str], None] = say) -> int:
+    """Run <command_line>'s command on <argv>, whose list that cannot be read is said on stderr (exit 2), by
+    <tell>. Every module's `main` is this."""
     args = command_line.parse_args(argv)
     try:
         code: int = args.run(args)
     except ConnectorsError as exc:
-        say(str(exc))
+        tell(str(exc))
         return 2
     return code
 
@@ -177,6 +193,7 @@ def parser() -> argparse.ArgumentParser:
     doctor.add_argument("--state-dir", required=True, type=Path)
     doctor.add_argument("--agent-bin", required=True)
     doctor.add_argument("--settings-file", type=Path)  # the orchestrator's (BOSUN_ORCHESTRATOR_SETTINGS)
+    doctor.add_argument("--plugins", required=True)  # its plugin list: Codex drops every plugin's servers
     doctor.set_defaults(run=cmd_doctor)
     return top
 

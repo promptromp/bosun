@@ -135,14 +135,18 @@ def _new_keys(keys: Sequence[str]) -> tuple[str, ...]:
 
 def _agents(plan: Plan, said: Sequence[tuple[str, str]]) -> tuple[tuple[str, str], ...]:
     """What came of each window, in the plan's order: what the caller says of it, else, for one the
-    plan left alone, that it kept running, or was left as it is as bosun did not start it (LEFT). The
+    plan left alone, that it kept running, or was left as it is as bosun did not start it (LEFT), or
+    that it kept running as it would not start on the new version, why and what to do. The
     checkin window, whose loop the release restarted, is not listed; a window the caller names that
     the plan does not comes last."""
     lines = dict(said)
+    refused = update_plan.refused_lines(plan)
     found: list[tuple[str, str]] = []
     for name, how in plan.windows:
         if name in lines:
             found.append((name, lines.pop(name)))
+        elif name in refused:
+            found.append((name, refused[name]))
         elif how in LEFT:
             found.append((name, LEFT[how]))
     return (*found, *lines.items())

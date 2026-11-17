@@ -183,7 +183,10 @@ describes. Two modes are for `bosun update`, and neither takes another mode, `--
 - **`refresh --update-restart <prompt-file> <window>`** restarts one window now if its turn is over (idle, or `shell`:
   only background work runs) and nobody is typing there, resuming its conversation with the prompt in the file
   instead of the drain prompt. A busy or waiting window, or one whose input box holds unsent text, is left running
-  and refresh exits 3, so the caller can try again.
+  and refresh exits 3, so the caller can try again. Once it started a launch it waits for the agent (up to
+  `BOSUN_START_TIMEOUT`): a launch that ends without one, or whose agent exits at once, makes it exit 5, with the
+  launch's own error line last on stderr (`bosun launch` leaves its last error in `launches/<session>/<name>.error`
+  in the state folder, cleared as each launch starts).
 - **`refresh --checkin-loop`** restarts the check-in loop in the `checkin` window, which otherwise keeps the code it
   started with. It stops the loop at once, even in the middle of a tick, so call it while an update holds bosun's
   background work.
@@ -195,7 +198,8 @@ that agent instead of the configured one), and records what the agent was launch
 conversation's name and the orchestrator's policy text left out). A repo window's launch first makes the folder its
 worktrees go in, beside its repository (`<repository>.worktrees`;
 [Permissions](permissions.md#what-each-window-can-reach)). `--fingerprint` prints the fingerprint a launch would
-record now, and launches nothing.
+record now, and launches nothing; one the launch would refuse exits 4 with the reason last on stderr, which an update
+shows for a window it leaves running.
 
 <details class="note" markdown>
 <summary>How an update's restart picks the conversation and the agent</summary>
@@ -290,6 +294,12 @@ or an update holds it, and a watchdog job that never ran warns three intervals a
   each name not found. It warns while the orchestrator's list is `all` or `bosun.env` does not set it, and for a
   Claude Code window that another settings file would widen, which does not start. See
   [Connectors](configuration.md#connectors-what-each-window-may-reach).
+- **Which of your plugins each window loads**: all of yours, or none or the ones it keeps, how many it switches off,
+  what it keeps for its connectors. It warns while the orchestrator's list is `all` (a plugin's hook or skill can
+  stop its unattended runs at a question: name the ones it needs, or set it empty for none), for a name not found, a
+  plugin managed settings force on and a settings file that does not parse (what it says of plugins is not read),
+  and says a window with a list does not start while `installed_plugins.json` does not parse. See
+  [Plugins](configuration.md#plugins-which-of-yours-each-window-loads).
 - **What the last `bosun update` left to you**: what to change by hand in your own files (warns), and the config keys
   it added that `bosun.env` does not set, with the value each has now and what it means.
 
@@ -332,9 +342,11 @@ How to use it: [Updating](updating.md). What each part does:
 - **The windows' answers.** Each window gets a prompt to check for anything it missed and carry on, and answers with
   `bosun update note --window <w> --status` (the text on stdin; `--stock` is the list of background work before a
   restart). The update waits for every answer, saying which windows it waits for. Ctrl-C stops the wait and leaves
-  them to the check-in loop, whose `bosun update advance` takes a turn at them each tick (nothing while the update
-  itself still runs; without a check-in loop, run it by hand). The next update is blocked at its plan while they are
-  pending.
+  them to the check-in loop, whose `bosun update advance` takes a turn at them each tick (nothing while an update
+  runs; without a check-in loop, run it by hand); so does the update itself once only windows waiting for your
+  answer at a prompt are left, naming each. The next update takes over the windows still pending: its plan lists
+  them as still owed from the last update. A window whose restart did not start (its launch refused, or its agent
+  exited at once) is not waited for: the summary says why.
 - **The app and the console.** `bosun app update` goes by the app being in `~/Applications`, not by
   `BOSUN_MENU_APP`, which is only your wish: an app you added by hand is kept current, and with none it does nothing.
   A failure (a Team ID not filled in yet, no network) is a line in the summary and stops nothing. The console's job

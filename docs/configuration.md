@@ -16,7 +16,7 @@ Your configuration lives in `~/.config/bosun/` (`BOSUN_CONFIG_DIR` moves it):
 | File | What it holds |
 |---|---|
 | `bosun.env` | Settings: the schedule, the agents and their flags, models, connectors, and which parts of bosun are on. Every key and its default is in [`examples/generic/bosun.env`](../examples/generic/bosun.env) (on an install, `~/.local/share/bosun/examples/generic/bosun.env`). |
-| `sessions.yml` | One entry per repo window: `name` and `dir`, and optionally `harness` (`claude`, `codex` or `agy`), `model`, `effort` and `connectors` for that window, and on Claude Code `autocompact`. The orchestrator is set up in `bosun.env`, not here. |
+| `sessions.yml` | One entry per repo window: `name` and `dir`, and optionally `harness` (`claude`, `codex` or `agy`), `model`, `effort`, `connectors` and `plugins` for that window, and on Claude Code `autocompact`. The orchestrator is set up in `bosun.env`, not here. |
 | `setup.sh` | What the morning run does before the windows start: `setup_steps()`, calling `ensure_claude_login` ([Claude Code login](#claude-code-login)), `ensure_aws_sso <profile>` ([AWS SSO](#aws-sso)), or `run_step "<description>" <command>...` for anything else. |
 
 bosun reads `bosun.env` each time a command runs, so an edit applies at once, also inside running windows. A
@@ -125,6 +125,46 @@ pattern, a claude.ai connector). More: [design/connectors.md](design/connectors.
 An Antigravity window is refused instead of limited: see [below](#running-repo-sessions-on-antigravity-a-preview).
 
 </details>
+
+### Plugins: which of yours each window loads
+
+A Claude Code window loads the plugins you enabled (`enabledPlugins` in your `~/.claude/settings.json`, and in the
+window folder's `.claude/settings.json` and `.claude/settings.local.json`): their hooks, skills, commands and
+agents. A plugin's hook or skill that asks a question can stop an unattended window, so each window has a list of
+the plugins it keeps:
+
+| Key | Whose list | Default |
+|---|---|---|
+| `BOSUN_PLUGINS` | every repo window | `all`: every one, as without bosun |
+| `plugins:` in a `sessions.yml` entry | that window, instead of `BOSUN_PLUGINS` | (the key's) |
+| `BOSUN_ORCHESTRATOR_PLUGINS` | the orchestrator, and `bosun chores --dry-run` | empty: none of yours |
+
+A list is written as for connectors (comma-separated, or a YAML list, `[]` for none, `all` alone). Each entry is a
+plugin's id as `enabledPlugins` writes it (`acme-helper@acme-market`), or its bare name (`acme-helper`), which
+matches it from any marketplace:
+
+```sh
+BOSUN_ORCHESTRATOR_PLUGINS="acme-helper@acme-market"
+```
+
+```yaml
+sessions:
+  - name: api
+    dir: ~/Development/api
+    plugins: []
+```
+
+bosun's own orchestrator plugin always loads. A plugin one of whose servers the window's connectors name
+(`plugin:acme-slack:slack`) stays on, so a connector never breaks for it, and so does one your orchestrator
+settings file (`BOSUN_ORCHESTRATOR_SETTINGS`) enables. The launch switches the others off with a
+`false` for each in its `--settings`, which outranks your own, the project's and the local settings, but not managed
+settings: a plugin those force on loads anyway, and the launch logs it. A name no plugin has is left out and logged, as is a settings file that does not parse; an
+`installed_plugins.json` that does not parse keeps a window with a list from starting.
+On Codex a list other than `all` switches every plugin off (Codex cannot keep some and not others); an Antigravity
+window with one does not start. `bosun doctor` has a line for each window: all of yours, or none or the ones it
+keeps, how many it switches off, and what it keeps for its connectors. An install from before this setting keeps
+`all` for the orchestrator (`bosun update` writes it to `bosun.env`). More:
+[design/connectors.md](design/connectors.md#plugins).
 
 ## Running repo sessions on Codex
 

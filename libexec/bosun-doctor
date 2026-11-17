@@ -3,9 +3,9 @@
 #
 # Check everything the morning run depends on, without changing anything: tools (also as
 # launchd would see them), the Claude Code login, config, session names, what each window may reach
-# (its connectors, looking nothing up), schedule (with the watchdog and learning agents), power,
-# keychain, setup steps, and the knowledge base and the ledger, each against its journal. Exits
-# non-zero if any check fails.
+# (its connectors, looking nothing up) and which of your plugins it loads, schedule (with the watchdog
+# and learning agents), power, keychain, setup steps, and the knowledge base and the ledger, each
+# against its journal. Exits non-zero if any check fails.
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
 load_config
@@ -166,9 +166,11 @@ check_after_update() {
 # nothing up: `claude mcp list` connects to every server) and from `codex mcp list --json` for a Codex
 # one. A warning for the orchestrator with `all`, for a name not found, and for a Claude Code window that
 # another settings scope would widen, which does not start (the launch's own check); for the orchestrator,
-# what its settings file's allowedMcpServers comes to. A window list that cannot be read is check_config's.
+# what its settings file's allowedMcpServers comes to. Then a line for the plugins of mine it loads
+# (window_plugins, docs/design/connectors.md "Plugins"), from the files its launch reads: a warning for the
+# orchestrator with `all`, as for its connectors. A window list that cannot be read is check_config's.
 check_connectors() {
-  local specs name dir kind harness list said
+  local specs name dir kind harness list plugins plugins_read said
   local -a site
   [ -z "$BOSUN_ORCHESTRATOR" ] || check_orchestrator_connectors_set
   if specs="$(window_specs 2>/dev/null)"; then
@@ -180,16 +182,33 @@ check_connectors() {
       fi
       site=()
       [ "$kind" = orchestrator ] && site=(--settings-file "$BOSUN_ORCHESTRATOR_SETTINGS")
+      # A plugin list that cannot be read is failed after the connectors line, which reads a Codex window's
+      # connectors as with no plugin list then.
+      plugins_read=1
+      plugins="$(window_plugins "$name" 2>/dev/null)" || plugins_read=0
+      [ "$plugins_read" = 1 ] || plugins=all
       said="$(python3 "$BOSUN_ROOT/lib/connectors.py" doctor --window "$name" --kind "$kind" --harness "$harness" \
-        --list="$list" --cwd "$dir" --state-dir "$BOSUN_STATE_DIR" --agent-bin "$(harness_bin "$harness")" \
-        ${site[@]+"${site[@]}"} </dev/null 2>&1)"
-      case "$said" in
-        "ok"$'\t'*) ok "${said#*$'\t'}" ;;
-        "warn"$'\t'*) warn "${said#*$'\t'}" ;;
-        *) warn "$name: could not check its connectors: $said" ;;
-      esac
+        --list="$list" --plugins="$plugins" --cwd "$dir" --state-dir "$BOSUN_STATE_DIR" \
+        --agent-bin "$(harness_bin "$harness")" ${site[@]+"${site[@]}"} </dev/null 2>&1)"
+      say_window_line "$name" connectors "$said"
+      if [ "$plugins_read" = 1 ]; then
+        say_window_line "$name" plugins "$(python3 "$BOSUN_ROOT/lib/plugins.py" doctor --window "$name" --kind "$kind" \
+          --harness "$harness" --plugins="$plugins" --connectors="$list" --cwd "$dir" ${site[@]+"${site[@]}"} </dev/null 2>&1)"
+      else
+        fail "$name: could not read its plugins: $(window_plugins "$name" 2>&1 >/dev/null | tail -n 1)"
+      fi
     done <<<"$specs"
   fi
+}
+
+# One of lib/connectors.py's or lib/plugins.py's doctor lines (<said>: `ok` or `warn`, a tab, the line) as doctor's own; anything
+# else as a warning that <window>'s <what> could not be checked.
+say_window_line() { # <window> <what> <said>
+  case "$3" in
+    "ok"$'\t'*) ok "${3#*$'\t'}" ;;
+    "warn"$'\t'*) warn "${3#*$'\t'}" ;;
+    *) warn "$1: could not check its $2: $3" ;;
+  esac
 }
 
 # An orchestrator whose bosun.env does not set BOSUN_ORCHESTRATOR_CONNECTORS (absent, or no bosun.env, read

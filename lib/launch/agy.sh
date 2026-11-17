@@ -9,23 +9,25 @@ AGENT_BIN="$BOSUN_AGY_BIN"
 # Checks, once per process, that window <name>, launched in this folder, reaches no MCP server beyond its list
 # (window_connectors; docs/design/connectors.md). agy takes no limit per launch, and switching a server off in
 # its shared configuration would race between windows and change the person's Antigravity app, so the window
-# starts only if lib/connectors_agy.py finds each server it would start named in the list, or the list `all`. A
-# refusal, and a listing that fails, stop the launch; its lines (a server the list does not name, a name agy
+# starts only if lib/connectors_agy.py finds each server it would start named in the list, or the list `all`,
+# and its plugin list (window_plugins) is `all`, for the same reason. A refusal, and a listing that fails, stop the launch; its lines (a server the list does not name, a name agy
 # has no server by) are logged as a Claude Code window's are (log_connector_lines). Call it in the shell itself,
 # not in $(...), which would lose the die. A launch builds its arguments twice, and the second time reuses the
 # first lookup.
 check_agy_connectors() { # <name>
   [ "${agy_connector_window-}" = "$1" ] && return 0
-  local list errors code=0
+  local list plugins errors code=0
   list="$(window_connectors "$1")" || die "could not read the connectors of '$1' in $BOSUN_SESSIONS_FILE"
-  errors="$(mktemp "${TMPDIR:-/tmp}/bosun-connectors.XXXXXX")" || die "'$1' does not start: no temporary file"
-  # The list is its own argument, so one that starts with "-" is no flag.
-  python3 "$BOSUN_ROOT/lib/connectors_agy.py" --agent-bin "$BOSUN_AGY_BIN" --list="$list" --cwd "$PWD" \
-    2>"$errors" || code=$?
+  plugins="$(window_plugins "$1")" || die "could not read the plugins of '$1' in $BOSUN_SESSIONS_FILE"
+  errors="$(mktemp "${TMPDIR:-/tmp}/bosun-connectors.XXXXXX")" || launch_refused "$1" "no temporary file"
+  # Each list is its own argument, so one that starts with "-" is no flag.
+  python3 "$BOSUN_ROOT/lib/connectors_agy.py" --agent-bin "$BOSUN_AGY_BIN" --list="$list" --plugins="$plugins" \
+    --cwd "$PWD" 2>"$errors" || code=$?
   log_connector_lines "$1" "$errors"
+  [ "$code" = 0 ] || note_reason "$errors"
   rm -f "$errors"
   [ "$code" = 0 ] ||
-    die "'$1' does not start: it would reach servers beyond its connectors, or they could not be listed (lib/connectors_agy.py, above)"
+    launch_refused "$1" "it would reach servers beyond its connectors, they could not be listed, or it has a plugin list" lib/connectors_agy.py
   agy_connector_window="$1"
 }
 
@@ -40,11 +42,11 @@ check_agy_workspace() { # <name>
   [ "${agy_workspace_window-}" = "$1" ] && return 0
   local hooks
   hooks="$(python3 "$BOSUN_ROOT/lib/agy_workspace.py" hooks "$PWD")" ||
-    die "'$1' does not start: could not look for workspace hooks (lib/agy_workspace.py)"
+    launch_refused "$1" "could not look for workspace hooks (lib/agy_workspace.py)"
   [ -z "$hooks" ] ||
-    die "'$1' does not start: ${hooks%%$'\n'*} would run outside agy's sandbox when agy starts (bosun does not start agy windows with workspace hooks)"
+    launch_refused "$1" "${hooks%%$'\n'*} would run outside agy's sandbox when agy starts (bosun does not start agy windows with workspace hooks)"
   case "$BOSUN_LOG_DIR" in
-    *[[:space:]]*) die "'$1' does not start: bosun's log folder \"$BOSUN_LOG_DIR\" has a space in it, which agy windows cannot use yet" ;;
+    *[[:space:]]*) launch_refused "$1" "bosun's log folder \"$BOSUN_LOG_DIR\" has a space in it, which agy windows cannot use yet" ;;
   esac
   agy_workspace_window="$1"
 }
@@ -130,7 +132,7 @@ build_agent_args() { # <window> <session name> <model> <effort>
   local settings effort="$4"
   set_agy_environment "$1" "$2"
   settings="$(jq -cn --arg dir "$PWD" '{agentMode: "auto", trustedWorkspaces: [$dir]}')" ||
-    die "'$1' does not start: could not make agy's settings"
+    launch_refused "$1" "could not make agy's settings"
   # shellcheck disable=SC2206  # the flags are words, on purpose
   agent_args=($BOSUN_AGY_FLAGS
     --settings "$settings"
@@ -185,7 +187,7 @@ note_agy_launch() { # [<conversation id it resumes>]
   tmux_socket="${tmux_socket%%,*}"
   env BOSUN_STATE_DIR="$BOSUN_STATE_DIR" python3 "$BOSUN_ROOT/lib/agy_state.py" launched "$agy_conversation" "$version" \
     "${TMUX_PANE:-}" "$tmux_socket" "$PWD" "${1:-}" ||
-    die "'$agy_window' does not start: could not record its launch (lib/agy_state.py launched)"
+    launch_refused "$agy_window" "could not record its launch (lib/agy_state.py launched)"
 }
 
 # The prompt is the last word, and `--prompt-interactive=<prompt>` is one argument, so a prompt that starts

@@ -10,6 +10,8 @@
 # a file and deletes it (`bosun send --new|--start` hands prompts over this way).
 # --no-prompt resumes without the drain prompt, leaving the session idle (`bosun refresh`
 # uses it for a window with nothing in flight: every prompt re-reads the whole conversation).
+# A launch that fails leaves its last error line in launches/<session>/<window>.error in the state
+# folder (cleared as each launch starts), which `bosun refresh --update-restart` reads to say why.
 # Model and effort: --model / --effort, else the window's sessions.yml entry, else
 # BOSUN_MODEL / BOSUN_EFFORT (orchestrator: BOSUN_ORCHESTRATOR_MODEL / _EFFORT; Codex: BOSUN_CODEX_MODEL).
 # The agent: --harness, else the configured one; an update restarts a window on the agent it was
@@ -39,7 +41,9 @@
 # window list, opened by `send --new`, with its recorded directory and --model / --effort), in the
 # window's directory from the window list otherwise; it refuses a window with neither. Where the two
 # differ, an update changed something the session was started with, and only a restart gives it the
-# new one.
+# new one. A fingerprint the launch would refuse (its connectors or plugins refused: launch_refused in
+# lib/common.sh) exits 4, its last line on stderr the reason a launch would record (note_error), for an update
+# to say why; any other failure (a window it cannot find, a crash) exits otherwise.
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
 load_config
@@ -92,6 +96,7 @@ require_agent_bin() { # <window>
   command -v "$AGENT_BIN" >/dev/null 2>&1 && return 0
   local log_file
   log_file="$(launch_log)"
+  note_error "its agent, $AGENT_BIN, is not installed for this window's shell (not on its PATH)"
   log "$1: its agent, $AGENT_BIN, is not installed for this window's shell (not on its PATH); the window stays a plain shell" >&2
   ("$BOSUN" alert "$1: its agent, $AGENT_BIN, is not installed for the window's shell; install it, or name it in bosun.env" </dev/null >>"$log_file" 2>&1 &)
   exit 1
@@ -136,8 +141,8 @@ set_agent_args() { # <name>
 # lookups kept. A Codex window's arguments come from `codex mcp list --json` (lib/launch/codex.sh), so its
 # fingerprint runs it, and an agy window's connector check runs `agy plugin list --json` (lib/connectors_agy.py)
 # on each fingerprint in the same way. When that fails, or another settings scope would widen a Claude Code
-# window's list (refuse_widening, lib/connectors_claude.py), no fingerprint is printed (exit 1), an update
-# reads the window as changed, and its restart then refuses to start it.
+# window's list (refuse_widening, lib/connectors_claude.py), no fingerprint is printed (exit 4, the launch's
+# reason last on stderr), and an update leaves the window running and says why.
 print_fingerprint() { # <name>
   local dir listed=1
   CONNECTOR_LOOKUP=0
@@ -170,9 +175,20 @@ record_launch() {
     log "warning: could not record what '$name' is launched with (lib/launch_record.py)"
 }
 
+# --fingerprint <name>: print_fingerprint, in a subshell whose refusal (launch_refused, exit LAUNCH_REFUSED)
+# notes its reason in a file of its own (note_error), said last on stderr.
+fingerprint_or_why() { # <name>
+  local code=0
+  LAUNCH_ERROR_FILE="$(mktemp "${TMPDIR:-/tmp}/bosun-fingerprint.XXXXXX")" || exit 1
+  (print_fingerprint "$1") || code=$?
+  [ "$code" != "$LAUNCH_REFUSED" ] || [ ! -s "$LAUNCH_ERROR_FILE" ] || tail -n 1 "$LAUNCH_ERROR_FILE" >&2
+  rm -f "$LAUNCH_ERROR_FILE"
+  return "$code"
+}
+
 if [ "$fingerprint" = "1" ]; then
   [ $# -eq 1 ] || die_usage "--fingerprint takes the window and nothing else"
-  print_fingerprint "$1"
+  fingerprint_or_why "$1"
   exit $?
 fi
 
@@ -181,6 +197,9 @@ fi
 reap_shell_helpers "$PPID" --wrapper-only >/dev/null
 
 name="$1"
+# What this launch fails with goes to its window's file (note_error in lib/common.sh), cleared as it starts.
+LAUNCH_ERROR_FILE="$(launch_error_file "$name")"
+mkdir -p "$(dirname "$LAUNCH_ERROR_FILE")" && rm -f "$LAUNCH_ERROR_FILE"
 initial_prompt="${2:-}"
 if [ "$initial_prompt" = "--prompt-file" ]; then
   prompt_file="${3:?prompt file}"
@@ -196,7 +215,7 @@ set_agent_args "$name"
 set_up_agent() {
   local why
   [ "$BOSUN_LAUNCH_DRY_RUN" = "1" ] && return 0
-  why="$(agent_setup "$harness" 2>&1)" || die "'$name' does not start: $why"
+  why="$(agent_setup "$harness" 2>&1)" || launch_refused "$name" "$why"
 }
 set_up_agent
 
@@ -248,6 +267,7 @@ esac
 holder="$(agent_state live "$session_id")"
 case $? in
   0)
+    note_error "a copy of its conversation '$session_name' is already running as pid $holder; not starting a second one"
     log "'$session_name' ($session_id) is already running as pid $holder; not starting a second copy."
     log "close that one, then rerun: bosun launch '$name'"
     exit 1

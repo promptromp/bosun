@@ -1297,6 +1297,7 @@ PROFILE = Profile(
     ),
     screen=SCREEN,
     connectors="connectors_agy",
+    plugins="connectors_agy",
     hooks=HOOKS,
     setup=SETUP,
     update_args=("update",),

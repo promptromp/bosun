@@ -7,8 +7,11 @@ the windows answer with are lib/update_notes.py's files.
   restart that stopped an agent and never started it again), and the facts a turn asks for, from one
   listing of the session's windows (`bosun sessions --json`) and the Stop hook's signals.
 - turn() is one turn under update.lock; bring_along() is the update's own wait, a turn every
-  POLL_SECONDS, after which Ctrl-C (noted, never raised mid-restart) leaves the windows still waited
-  for to the check-in loop (`bosun update advance`, each tick).
+  POLL_SECONDS. It ends once every window still waited for waits for me (a permission prompt, a
+  question), or at Ctrl-C (noted, never raised mid-restart), and leaves those windows to the check-in
+  loop (`bosun update advance`, each tick), recording that it handed them over (`handed_over`).
+- The windows the last update still waited for when this one started (its record, kept in `carried`)
+  are taken over (update_agents.take_over): brought along with this update's own.
 """
 
 from __future__ import annotations
@@ -38,6 +41,14 @@ POLL_SECONDS = 5
 CTRL_C_POLL_SECONDS = 0.2
 LEFT_RUNNING_STATUS = 3  # bosun refresh --update-restart's status when it left the agent running
 NEXT_CONVERSATION_STATUS = 4  # ... and when it started the window's next conversation
+LAUNCH_FAILED_STATUS = 5  # ... and when the window's launch failed (its reason the last line on stderr)
+# What the check-in loop, or `bosun update advance` by hand, does once I answer a window waiting for me.
+ONCE_ANSWERED = {
+    update_agents.Owed.RESTART: "{who} restarts it for the update",
+    update_agents.Owed.REREAD: "{who} asks it to re-read its prompts for the update",
+    update_agents.Owed.ANSWER: "it carries on with the update ({who} takes its answer)",
+}
+WAITS_FOR_YOU = "{window} waits for your answer at its prompt; once you answer, {then}"
 
 
 # ---- the turn's actions ------------------------------------------------------------------------
@@ -54,6 +65,7 @@ class Commands:
         self.notes = update_notes.Files(state_dir)
         self.said: dict[str, str] = {}
         self.listed: list[dict[str, Any]] | None = None
+        self.not_started: dict[str, str] = {}
 
     def _windows(self) -> list[dict[str, Any]]:
         if self.listed is None:
@@ -99,11 +111,21 @@ class Commands:
             return Started.LEFT_RUNNING
         if done.returncode == NEXT_CONVERSATION_STATUS:
             return Started.NEXT_CONVERSATION
+        if done.returncode == LAUNCH_FAILED_STATUS:
+            self.not_started[window] = _last_line(done.stderr)
+            return Started.DID_NOT_START
         self._failed(window, "not restarted yet", done.stderr)
         return Started.FAILED
 
     def relaunch(self, window: str, prompt: str) -> Started:
         return self.restart(window, prompt)  # refresh --update-restart starts an agent that exited
+
+    def why_not_started(self, window: str) -> str:
+        return self.not_started.get(window, "")
+
+
+def _last_line(text: str) -> str:
+    return (text.strip().splitlines() or [""])[-1].strip()
 
 
 def _news(before: UpdateState, after: UpdateState, state_dir: Path) -> list[str]:
@@ -118,18 +140,23 @@ def _news(before: UpdateState, after: UpdateState, state_dir: Path) -> list[str]
     return lines
 
 
-def turn(state_dir: Path, say: Callable[[str], None]) -> list[str]:
+def turn(
+    state_dir: Path, say: Callable[[str], None], give_way: Callable[[], bool] = lambda: False
+) -> dict[str, str]:
     """One turn at the windows the update in <state_dir> still waits for, by bosun's own commands (the
-    caller holds update.lock), each thing done said; the windows still waited for."""
+    caller holds update.lock), each thing done said, giving way between windows when <give_way> says
+    so (update_agents.advance); the windows still waited for, each with its status as the turn listed
+    it ("" when the listing did not name it)."""
     before = update_state.read(state_dir)
     if before is None:
-        return []
+        return {}
     commands = Commands(Path(before.to_root), state_dir, say)
-    waiting = update_agents.advance(state_dir, commands.statuses, commands)
+    waiting = update_agents.advance(state_dir, commands.statuses, commands, give_way)
     after = update_state.read(state_dir)
     for line in _news(before, after, state_dir) if after else []:
         say(line)
-    return waiting
+    listed = commands.statuses() if waiting else {}
+    return {window: listed.get(window, "") for window in waiting}
 
 
 # ---- the update's wait -------------------------------------------------------------------------
@@ -185,39 +212,102 @@ def who_finishes(root: Path, windows: Sequence[str]) -> str:
     return f"no check-in loop runs here: bosun update advance, run by hand, takes a turn at {named}"
 
 
-def _waited(state_dir: Path, waiting: list[str], say: Callable[[str], None]) -> list[str]:
-    """Turns every POLL_SECONDS until no window is waited for or Ctrl-C comes, saying which windows it
-    waits for whenever that changes; the windows still waited for."""
+def waits_for_you(root: Path, state: UpdateState, windows: Sequence[str]) -> list[str]:
+    """A line for each of <windows>, which wait for me at a prompt: what happens once I answer, and who
+    does it (the check-in loop, or `bosun update advance` by hand: who_finishes)."""
+    who = "the check-in loop" if update_facts.loop_runs(root) else "bosun update advance, run by hand,"
+    return [
+        WAITS_FOR_YOU.format(
+            window=window, then=ONCE_ANSWERED[update_agents.owed(state, window)].format(who=who)
+        )
+        for window in windows
+    ]
+
+
+def _waited(state_dir: Path, waiting: list[str], say: Callable[[str], None]) -> tuple[list[str], bool]:
+    """Turns every POLL_SECONDS until no window is waited for, every one still waited for waits for me
+    (update_agents.only_waiting_for_me), or Ctrl-C comes, saying which windows it waits for whenever
+    that changes; the windows still waited for, and whether only those waiting for me are left."""
     ctrl_c, said = _CtrlC(), list[str]()
     with ctrl_c.noted():
         while waiting and not ctrl_c.asked:
-            waiting = turn(state_dir, say)
+            statuses = turn(state_dir, say)
+            waiting = list(statuses)
+            if update_agents.only_waiting_for_me(statuses):
+                return waiting, True
             if waiting and waiting != said:
                 say(f"Waiting for {', '.join(waiting)} (Ctrl-C stops waiting)...")
                 said = waiting
             if waiting:
                 ctrl_c.wait(POLL_SECONDS)
-    return waiting
+    return waiting, False
 
 
-def bring_along(state: UpdateState, plan: Plan, say: Callable[[str], None] = print) -> UpdateState:
+def _handed_over(
+    state_dir: Path, root: Path, waiting: list[str], for_you: bool, say: Callable[[str], None]
+) -> UpdateState | None:
+    """The wait ended with <waiting> still waited for: handed over to the check-in loop (recorded, so the
+    status no longer calls the update running), and said: each window waiting for me, or who finishes
+    them after a Ctrl-C."""
+    state = update_state.read(state_dir)
+    if state is None:
+        return None
+    state = update_state.handed(state)
+    update_state.write(state_dir, state)
+    if for_you:
+        say("Stopped waiting: every window still waited for waits for your answer.")
+        for line in waits_for_you(root, state, waiting):
+            say(f"  {line}")
+    else:
+        say(f"Stopped waiting: {who_finishes(root, waiting)}.")
+    return state
+
+
+def carried_record(state_dir: Path, state: UpdateState) -> UpdateState | None:
+    """The last update's record <state>'s update took over (`carried`), its windows that answered since
+    (a status note) settled; None without one."""
+    last = update_state.from_object(state.carried) if state.carried else None
+    return update_agents.settled(last, update_notes.Files(state_dir)) if last is not None else None
+
+
+def bring_along(
+    state: UpdateState,
+    plan: Plan,
+    say: Callable[[str], None] = print,
+    then: Callable[[UpdateState, UpdateState], None] | None = None,
+) -> UpdateState:
     """After the release: `agents` recorded with each window the plan gives something to do pending
-    (with the kind the plan lists for it; notes an earlier update left cleared first), then a turn
-    every POLL_SECONDS until each answered (`done`). Ctrl-C stops the wait and leaves the windows still
-    waited for, at `agents`, to the check-in loop or `bosun update advance` (who_finishes)."""
+    (with the kind the plan lists for it), and those the last update still waited for taken over
+    (update_agents.take_over, from <state>'s `carried`; notes an earlier update left cleared first, but
+    what those windows gave it), then a turn every POLL_SECONDS until each answered (`done`). Once only
+    windows waiting for me are left, or at Ctrl-C, the wait ends and leaves the windows still waited
+    for, at `agents`, to the check-in loop or `bosun update advance` (_handed_over). <then>, given the
+    record about to be written at `agents` and the last update's (settled), runs first, when there is a
+    last one, while the notes its windows answered with are still there (lib/update.py finishes it there;
+    cut short, the record still at `released`, it runs again)."""
     state_dir = update_facts.folders().state_dir
     root = Path(state.to_root)
-    windows = update_agents.to_bring_along(plan.windows, dict(plan.kinds))
-    update_notes.clear_notes(state_dir)
-    state = update_state.advanced(
-        state, "agents", pending=tuple(windows), windows=windows, reread=_reread_files(plan, root)
+    last = carried_record(state_dir, state)
+    windows, reread, kept = update_agents.take_over(
+        update_agents.to_bring_along(plan.windows, dict(plan.kinds)),
+        dict(plan.windows),
+        _reread_files(plan, root),
+        last,
+        dict(plan.refused),
     )
+    # taken over: each of the last one's windows this update brings along, the ones it restarts afresh too
+    taken = tuple(window for window in (last.pending if last else ()) if window in windows)
+    state = update_state.advanced(
+        state, "agents", pending=tuple(windows), windows=windows, reread=reread, taken_over=taken
+    )
+    if then is not None and last is not None:
+        then(state, last)  # before the notes go: the last update's answers are in them
+    update_notes.clear_notes(state_dir, keep=kept)
     update_state.write(state_dir, state)
-    waiting = _waited(state_dir, list(state.pending), say)
-    state = update_state.read(state_dir) or state
+    waiting, for_you = _waited(state_dir, list(state.pending), say)
     if waiting:
-        say(f"Stopped waiting: {who_finishes(root, waiting)}.")
-        return state
+        return _handed_over(state_dir, root, waiting, for_you, say) or state
+    state = update_state.read(state_dir) or state
     if state.step != "done":
         state = update_state.advanced(state, "done", pending=())
         update_state.write(state_dir, state)

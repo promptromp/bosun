@@ -7,17 +7,19 @@ between windows and change the person's Antigravity app. So before a launch this
 would start in the window's folder, and the window starts only if its list names each one (or is `all`).
 Nothing is written, and no server's command, arguments, environment or URL is ever read out, only its name.
 
-Usage: connectors_agy.py --list <value> --agent-bin <agy> [--cwd <dir>]
+Usage: connectors_agy.py --list <value> --plugins <value> --agent-bin <agy> [--cwd <dir>]
            Nothing, exit 0, when the list is `all` or names every server agy would start in <dir> (default:
            the current folder); otherwise exit 1 with a line on stderr per server the list does not name,
            and where it comes from. A line on stderr per name of the list agy has no server by, which does
            not refuse. The servers are those of the global file (~/.gemini/config/mcp_config.json), of each
            `.agents/mcp_config.json` from <dir> up to its repo's root (the folder holding `.git`; none: <dir>
            alone), and of the enabled plugins (`agy plugin list --json`, named `<plugin>_<server>`); a server
-           marked `"disabled": true` is not started.
+           marked `"disabled": true` is not started. A plugin list (--plugins, lib/plugins.py) other
+           than `all` refuses the window (exit 1) before anything is listed: agy cannot switch
+           plugins off per window either.
 
-Exit codes: 0 done, 1 a server beyond the list or the servers could not be listed, 2 a list or command line
-that cannot be read.
+Exit codes: 0 done, 1 a server beyond the list, the servers could not be listed, or a plugin list but `all`; 2
+a list or command line that cannot be read.
 """
 
 from __future__ import annotations
@@ -33,6 +35,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import claude_state
 import connectors
+import plugins
 from agy_workspace import workspace_folders
 from connectors import Allowed, ConnectorsError, is_url, parse, say
 
@@ -43,8 +46,12 @@ MEANS_NOTHING = (
     "means nothing to agy (a URL pattern or a claude.ai connector), so this window starts without it"
 )
 BLOCKED = "agy would also start {}, which its list does not name"
-NOT_NAMED = "is not in this window's list and agy cannot switch it off, so the window does not start"
+NOT_NAMED = "is not in this window's list and agy cannot switch it off"
 WOULD_START = "agy starts nothing else here"
+NO_PLUGIN_LIMIT = (
+    "agy cannot switch plugins off per window, so its plugin list must be all (BOSUN_PLUGINS, or plugins: "
+    "in sessions.yml)"
+)
 
 
 def read_servers(path: Path) -> list[str]:
@@ -194,17 +201,29 @@ def doctor_line(args: argparse.Namespace, allowed: Allowed) -> tuple[str, str]:
     return connectors.report(args.window, reach, problems)
 
 
+def plugins_doctor_line(
+    args: argparse.Namespace, plugin_list: Allowed, _connector_list: Allowed
+) -> tuple[str, str]:
+    """The doctor's line for an agy window's plugins: all of mine, or a window that does not start."""
+    if plugin_list.everything:
+        return plugins.everything_report(args.window, args.kind)
+    return connectors.WARN, f"{args.window}: does not start: {NO_PLUGIN_LIMIT}"
+
+
 # ---- the command line ------------------------------------------------------------------------------
 
 
 def cmd_agy(args: argparse.Namespace) -> int:
     allowed = parse(args.list)
+    if not plugins.parse(args.plugins).everything:
+        plugins.say(NO_PLUGIN_LIMIT)
+        return 1
     if allowed.everything:
         return 0
     try:
         found = sources(args.cwd, args.agent_bin)
     except ConnectorsError as exc:
-        say(f"{exc}, so this window does not start")
+        say(str(exc))
         return 1
     not_found, meaningless = unknown_names(allowed, found)
     for name in not_found:
@@ -222,6 +241,7 @@ def parser() -> argparse.ArgumentParser:
     top.add_argument("--list", required=True)
     top.add_argument("--agent-bin", required=True)
     top.add_argument("--cwd", default=".")
+    top.add_argument("--plugins", required=True)
     top.set_defaults(run=cmd_agy)
     return top
 

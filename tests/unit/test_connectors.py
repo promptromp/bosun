@@ -51,6 +51,7 @@ class DoctorTest(connector_fakes.ScratchCase):
             connectors.main,
             *("doctor", "--window", "alpha", "--kind", "session", "--harness", harness, "--list", "x"),
             *("--cwd", str(self.root), "--state-dir", str(self.state), "--agent-bin", "no-agent"),
+            "--plugins=all",
         )
 
     def claude_names(

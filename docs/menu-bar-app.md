@@ -52,7 +52,9 @@ What's Wrong... (yellow and red only), Open Console, Check for Updates..., Setti
   you answer it. Closing that Terminal window leaves the window running.
 - **Check for Updates...** runs `bosun update --check`. When there is an update, the icon gets a badge and the
   item opens what is new, with Update Now, Remind Me Later and Skip This Version. Update Now shows what
-  [`bosun update`](updating.md) would do, then runs it.
+  [`bosun update`](updating.md) would do, then runs it. If the update leaves a window waiting at a prompt for
+  your answer, it ends without waiting for it: the menu says what the window still gets once you answer it
+  ("orchestrator restarts for the update once you answer it"), and Check for Updates... is there again.
 - **Open Console** opens the [console](console.md), signed in, in your browser. It is greyed while the console
   is not running.
 - **Help** has the bosun guide, Run bosun doctor, Show Logs, and Uninstall bosun..., which opens Terminal running

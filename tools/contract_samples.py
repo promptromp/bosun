@@ -159,6 +159,13 @@ def status_samples() -> dict[str, Sample]:
         "status-starting-outside-hours": snapshot(
             NOW.replace(hour=21), windows=GONE, gate=SessionGate(menu_status.STARTING), keep_awake_until=None
         ),
+        **update_status_samples(),
+    }
+
+
+def update_status_samples() -> dict[str, Sample]:
+    """The status while an update runs, after one ended, and after one handed its windows over."""
+    return {
         "status-update-running": snapshot(
             update_running=True,
             update_waiting_for=("acme-exporter", "acme-web"),
@@ -167,6 +174,13 @@ def status_samples() -> dict[str, Sample]:
         # an update that ended before any look saw it running: only its record tells it
         "status-update-done": snapshot(update_last=last_update("done")),
         "status-update-failed": snapshot(update_last=last_update("restored")),
+        # an update whose own run ended, leaving acme-web, which waits at a prompt, to the check-in loop:
+        # no update running (so Check for Updates is not greyed), and a line that says what comes of it
+        "status-update-handed-over": snapshot(
+            windows=[window("acme-orchestrator"), window("acme-web", "waiting")],
+            update_owed=(("acme-web", "restart"),),
+            update_last=last_update("agents"),
+        ),
     }
 
 

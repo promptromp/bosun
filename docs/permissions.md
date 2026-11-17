@@ -33,6 +33,9 @@ A name bosun cannot find is left out, so a window starts with less than its list
 orchestrator's launch alerts you. `all` lifts the limit for that list. Within the connectors the orchestrator may
 reach, the rules above still decide what it may do with them. How to write a list, and what Claude Code's and
 Codex's own settings do to it: [Connectors](configuration.md#connectors-what-each-window-may-reach).
+The orchestrator also loads none of your Claude Code plugins (their hooks, skills and commands) unless
+`BOSUN_ORCHESTRATOR_PLUGINS` names them; repo windows keep them all unless `BOSUN_PLUGINS` or `plugins:` says
+otherwise: [Plugins](configuration.md#plugins-which-of-yours-each-window-loads).
 
 **Files.** A repo window works in its repository, and may also read and write one folder beside it, the one its
 worktrees go in: `<repository>.worktrees` (`~/Development/exporter.worktrees` for a window in

@@ -23,6 +23,7 @@ OWN_MODULES = {
     "agent_state.py",
     *(f"{cast(ModuleType, agent).__name__}.py" for agent in AGENTS.values()),
     *(f"{agent.PROFILE.connectors}.py" for agent in AGENTS.values()),
+    *(f"{agent.PROFILE.plugins}.py" for agent in AGENTS.values()),
 }
 
 # Files that hold something only Claude Code has: how many places, and what they are. A new place in

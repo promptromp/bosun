@@ -48,8 +48,13 @@
 #                    a missing one created: with the update's prompt when its launch resumes a
 #                    conversation, else as a new conversation starts (the orchestrator's morning
 #                    chores, a fresh conversation's prompt, or none). A window started into its next
-#                    conversation never sees the update's prompt, so refresh then exits 4. Each starts
-#                    on the agent its last launch
+#                    conversation never sees the update's prompt, so refresh then exits 4. Once it
+#                    started a launch, it waits (up to BOSUN_START_TIMEOUT) for its agent: a launch that
+#                    ends without one (refused, the window left a plain shell) or whose agent exits at
+#                    once is a window that did not start, and refresh exits 5, the launch's own last
+#                    error line the last line on stderr (from the file launch leaves it in, else the
+#                    window's screen; one still starting by then counts as started).
+#                    Each starts on the agent its last launch
 #                    ran (if sessions.yml or BOSUN_HARNESS now names another, that one takes over at
 #                    the next restart not for an update), with the model and effort it ran with when
 #                    that is no longer the configured agent. A window outside the window list (opened
@@ -80,6 +85,9 @@ EXIT_WAIT_SECONDS=20
 EXIT_POLL_SECONDS=0.5
 LEFT_RUNNING=3      # --update-restart's status when it left the window running (busy, or waiting for you)
 NEXT_CONVERSATION=4 # ... when it restarted the window into its next conversation, not with the update's prompt
+LAUNCH_FAILED=5     # ... when the window's launch failed: refused, or its agent exited at once
+LAUNCH_POLL_SECONDS=0.5
+AGENT_SETTLE_SECONDS="${BOSUN_AGENT_SETTLE_SECONDS:-2}" # how long a started agent must last; the variable is for tests
 
 DRY_RUN=0
 DRAIN_ONLY=0
@@ -410,14 +418,66 @@ refresh_window() { # <name> <dir> <kind> <model> <effort>
   fi
 }
 
+# Why window <name>'s launch failed: the error line the launch left in its file (launch_error_file, cleared
+# as each launch starts; removed once read), else what its pane shows (the screen alone: the respawn cleared
+# it, so nothing of an earlier launch): the launch's last error line without its time and tag; else <fallback>.
+launch_error() { # <name> <window_id> <fallback>
+  local said file
+  file="$(launch_error_file "$1")"
+  if [ -s "$file" ]; then
+    tail -n 1 "$file"
+    rm -f "$file"
+    return 0
+  fi
+  shift
+  said="$(tmux_cmd capture-pane -p -J -t "$1" 2>/dev/null | grep -F '[launch] ERROR: ' | tail -n 1)"
+  if [ -n "$said" ]; then printf '%s\n' "${said#*"[launch] ERROR: "}"; else printf '%s\n' "$2"; fi
+}
+
+# Whether the pane whose process is <pane_pid> still runs its launch command (build_launch_command's
+# `<shell> -lic '... launch <window> ; exec <shell> -l'`), rather than the plain shell it execs after it.
+launch_running() { # <pane_pid>
+  case "$(ps -o command= -p "$1" 2>/dev/null)" in
+    *" launch "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# After an update's start of window <name>: waits until its agent runs and lasts AGENT_SETTLE_SECONDS,
+# or the launch has ended without one (it refused, or the agent exited at once), up to
+# BOSUN_START_TIMEOUT. Fails, printing why, in the second case; a launch still going by then counts as
+# started (an agent at a screen before its session). A dry run, or a dry-run launch, starts no agent.
+await_launch() { # <name>
+  local deadline=$((SECONDS + BOSUN_START_TIMEOUT)) pane_pid window_id agent seen=0
+  [ "$DRY_RUN" = "0" ] && [ "$BOSUN_LAUNCH_DRY_RUN" != "1" ] || return 0
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    read -r pane_pid window_id <<<"$(find_window "$1")"
+    [ -n "${window_id:-}" ] || {
+      echo "its window closed"
+      return 1
+    }
+    if agent="$(agent_pid_under "$pane_pid")"; then
+      seen=1
+      sleep "$AGENT_SETTLE_SECONDS"
+      kill -0 "$agent" 2>/dev/null && return 0
+    elif ! launch_running "$pane_pid"; then
+      if [ "$seen" = "1" ]; then launch_error "$1" "$window_id" "its agent exited at once"; else launch_error "$1" "$window_id" "its launch ended without starting its agent"; fi
+      return 1
+    else
+      sleep "$LAUNCH_POLL_SECONDS"
+    fi
+  done
+  log "$1: its launch did not start its agent within ${BOSUN_START_TIMEOUT}s; counting it as started"
+}
+
 # --update-restart <prompt-file> <name>: window <name> as refresh_window brings it along, with the
 # update's prompt, started again as its last launch recorded (recorded_restart): on the same agent, and
 # a window outside the window list, which must be open and have a launch recorded (else bosun did not
 # start it), in its directory with its --model / --effort. Returns LEFT_RUNNING when it left the
 # agent running, NEXT_CONVERSATION when it started the window's next conversation (whose own prompt it
-# got, not the update's).
+# got, not the update's), LAUNCH_FAILED when its launch failed (await_launch), saying why on stderr.
 update_restart() { # <name>
-  local name dir kind window_id listed=1
+  local name dir kind window_id why listed=1
   IFS=$'\t' read -r name dir kind _ <<<"$(window_specs | awk -F'\t' -v name="$1" '$1 == name')"
   if [ -z "$name" ]; then
     read -r _ window_id <<<"$(find_window "$1")"
@@ -430,8 +490,15 @@ update_restart() { # <name>
   elif [ "$listed" = "0" ]; then
     die "'$1' is not in the window list and has no launch recorded: bosun did not start it, so an update leaves it as it is"
   fi
+  # An earlier launch's error is not this one's: gone before the pane respawns (launch clears it too).
+  [ "$DRY_RUN" = "1" ] || rm -f "$(launch_error_file "$name")"
   refresh_window "$name" "$dir" "$kind" "" "" || return 1
   [ "$left_running" = "0" ] || return "$LEFT_RUNNING"
+  if ! why="$(await_launch "$name")"; then
+    log "$name: did not start: $why"
+    printf '%s\n' "$why" >&2
+    return "$LAUNCH_FAILED"
+  fi
   [ "$next_conversation" = "0" ] || return "$NEXT_CONVERSATION"
 }
 

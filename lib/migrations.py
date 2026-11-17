@@ -185,6 +185,15 @@ CONFIG_ADDED: tuple[AddedKey, ...] = (
         "BOSUN_START_AT_LOGIN=0 keeps the old way (the morning time, or Start)",
     ),
     AddedKey(
+        "BOSUN_ORCHESTRATOR_PLUGINS",
+        "all",
+        "the orchestrator keeps loading every Claude Code plugin of yours, as before; a plugin's hook or "
+        "skill can stop its unattended runs at a question, so name the ones it needs in "
+        "BOSUN_ORCHESTRATOR_PLUGINS, or set it empty for none (bosun doctor says what it loads)",
+        "before this version the orchestrator loaded every Claude Code plugin of yours, and now it loads "
+        "none: set BOSUN_ORCHESTRATOR_PLUGINS in bosun.env to the ones it needs, or to all",
+    ),
+    AddedKey(
         "BOSUN_CONNECTORS",
         None,
         "repo windows now start without connectors, a repo's own .mcp.json servers included; give one "
