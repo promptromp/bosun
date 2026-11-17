@@ -306,6 +306,25 @@ class TextTest(unittest.TestCase):
             "\nAgents\n  orchestrator  asked to re-read\n  web           kept running", rendered(summary)
         )
 
+    def test_a_window_left_running_as_it_would_not_start_says_why_and_what_to_do(self) -> None:
+        plan = dataclasses.replace(
+            a_plan(windows=(("orchestrator", Treatment.LEAVE), ("web", Treatment.LEAVE))),
+            refused=(("orchestrator", "plugins: a.json does not parse"),),
+        )
+        self.assertEqual(
+            built(plan=plan).agents,
+            (
+                (
+                    "orchestrator",
+                    (
+                        "left running, as it would not start on the new version: plugins: a.json does not "
+                        "parse; fix that, then bosun refresh orchestrator"
+                    ),
+                ),
+                ("web", "kept running (nothing it was started with changed)"),
+            ),
+        )
+
     def test_one_commit_and_one_key_are_said_so(self) -> None:
         text = rendered(built(plan=a_plan(commits=("aaaaaaa acme: one",), keys_added=("BOSUN_X",))))
         self.assertTrue(text.startswith("bosun updated: 95545b0 -> c41b186 (1 commit) in 2m 41s\n"), text)

@@ -41,7 +41,8 @@
 # window list, opened by `send --new`, with its recorded directory and --model / --effort), in the
 # window's directory from the window list otherwise; it refuses a window with neither. Where the two
 # differ, an update changed something the session was started with, and only a restart gives it the
-# new one.
+# new one. A fingerprint the launch would refuse (its connectors or plugins refused) exits 1, its last
+# line on stderr the reason a launch would record (note_error in lib/common.sh), for an update to say why.
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
 load_config
@@ -173,9 +174,20 @@ record_launch() {
     log "warning: could not record what '$name' is launched with (lib/launch_record.py)"
 }
 
+# --fingerprint <name>: print_fingerprint, in a subshell whose refusal notes its reason in a file of its own
+# (note_error), said last on stderr.
+fingerprint_or_why() { # <name>
+  local code=0
+  LAUNCH_ERROR_FILE="$(mktemp "${TMPDIR:-/tmp}/bosun-fingerprint.XXXXXX")" || exit 1
+  (print_fingerprint "$1") || code=$?
+  [ "$code" = 0 ] || [ ! -s "$LAUNCH_ERROR_FILE" ] || tail -n 1 "$LAUNCH_ERROR_FILE" >&2
+  rm -f "$LAUNCH_ERROR_FILE"
+  return "$code"
+}
+
 if [ "$fingerprint" = "1" ]; then
   [ $# -eq 1 ] || die_usage "--fingerprint takes the window and nothing else"
-  print_fingerprint "$1"
+  fingerprint_or_why "$1"
   exit $?
 fi
 

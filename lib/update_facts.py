@@ -201,24 +201,32 @@ def new_facts(root: Path) -> VersionFacts:
     )
 
 
-def launch_changed(
+REFUSED = "its launch on the new version is refused"  # a refused fingerprint that said nothing
+
+
+def launch_compared(
     root: Path, name: str, state_dir: Path, session: str, kept: Mapping[str, str] | None = None
-) -> bool:
+) -> tuple[bool, str]:
     """Whether window <name> would be launched now, by the version in <root>, with anything other
-    than what its last launch recorded. `launch --fingerprint` of that version reads the files under
-    the install from <root> itself, so this holds before the switch too, and gets the config values
-    the update will write to bosun.env (<kept>, migrations.keys_to_keep) as it will have them. One of
-    bosun's windows with no record, or one the fingerprint refuses, counts as changed: what it runs
-    with is unknown (a window bosun did not start never gets here: _window)."""
+    than what its last launch recorded; and why that launch would not start, when the fingerprint is
+    refused (its last stderr line: the reason the launch would record), else "". `launch --fingerprint`
+    of that version reads the files under the install from <root> itself, so this holds before the
+    switch too, and gets the config values the update will write to bosun.env (<kept>,
+    migrations.keys_to_keep) as it will have them. One of bosun's windows with no record, or one the
+    fingerprint refuses, counts as changed: what it runs with is unknown (a window bosun did not start
+    never gets here: _window)."""
     recorded = launch_record.recorded(state_dir, session, name)
     done = bosun(root, "launch", "--fingerprint", name, env=kept)
-    if recorded is None or done.returncode != 0:
-        return True
+    if done.returncode != 0:
+        said = [line.strip() for line in done.stderr.splitlines() if line.strip()]
+        return True, said[-1] if said else REFUSED
+    if recorded is None:
+        return True, ""
     try:
         now = json.loads(done.stdout)
     except ValueError:
-        return True
-    return bool(recorded.get("fingerprint") != now)
+        return True, ""
+    return bool(recorded.get("fingerprint") != now), ""
 
 
 def _kind(window: dict[str, Any]) -> str:
@@ -251,8 +259,10 @@ def _window(
     status = status_of(window)
     if window.get("kind") == EXTRA and launch_record.recorded(state_dir, session, name) is None:
         return WindowFacts(name, kind, status, launch_changed=False, started_by_bosun=False)
-    changed = kind != "checkin" and launch_changed(root, name, state_dir, session, kept)
-    return WindowFacts(name, kind, status, changed)
+    if kind == "checkin":
+        return WindowFacts(name, kind, status, launch_changed=False)
+    changed, refused = launch_compared(root, name, state_dir, session, kept)
+    return WindowFacts(name, kind, status, changed, refused=refused)
 
 
 def open_windows(root: Path) -> list[dict[str, Any]]:
@@ -269,22 +279,32 @@ def loop_runs(root: Path) -> bool:
     return any(_kind(w) == "checkin" for w in open_windows(root))
 
 
-def owed_windows(state_dir: Path) -> tuple[tuple[str, str], ...]:
-    """The windows the last update still waits for, which the next one takes over, each with what it is
-    owed (update_agents.owed): from the record at `agents` (an answered window, by its own status note
-    or one written by hand, settled first: `bosun update` settles it before it plans), or the one an
-    update that ended with bosun as it was carried (update_state.owing); or, while an update runs, the
-    one it carried (its plan made again after the switch, at a step before `agents`; never one past
-    them, which took them over already)."""
+def owed_last(state_dir: Path) -> update_state.UpdateState | None:
+    """The last update whose windows the next one takes over (settled): the record at `agents` (an
+    answered window, by its own status note or one written by hand, settled first: `bosun update` settles
+    it before it plans), or the one an update that ended with bosun as it was carried
+    (update_state.owing); or, while an update runs, the one it carried (its plan made again after the
+    switch, at a step before `agents`; never one past them, which took them over already). None when no
+    window is owed."""
     state = update_state.read(state_dir)
     before_agents = update_state.STEPS[: update_state.STEPS.index("agents")]
     if state is not None and state.step in before_agents and state.carried:
         state = update_state.from_object(state.carried)
     last = update_state.owing(state)
+    return update_agents.settled(last, update_notes.Files(state_dir)) if last is not None else None
+
+
+def owed_windows(state_dir: Path, plan: Plan) -> tuple[tuple[tuple[str, str], ...], tuple[str, ...]]:
+    """The windows the last update still waits for (owed_last) that an update with <plan> takes over, each
+    with what it is owed (update_agents.owed), by the decision bring_along makes over the plan's
+    treatments (update_agents.taken_or_left); and those it leaves alone (open, given nothing by either)."""
+    last = owed_last(state_dir)
     if last is None:
-        return ()
-    last = update_agents.settled(last, update_notes.Files(state_dir))
-    return tuple((window, update_agents.owed(last, window).value) for window in last.pending)
+        return (), ()
+    taken, left = update_agents.taken_or_left(plan.windows, dict(plan.kinds), last)
+    refused = dict(plan.refused)  # left running for a reason of its own, which its plan line says
+    owed = tuple((window, update_agents.owed(last, window).value) for window in taken)
+    return owed, tuple(window for window in left if window not in refused)
 
 
 def left_running(state_dir: Path, window: str) -> str:
@@ -299,7 +319,7 @@ def left_running(state_dir: Path, window: str) -> str:
 def window_facts(root: Path, kept: Mapping[str, str] | None = None) -> list[WindowFacts]:
     """Each window open in the session: its kind, its agent's status, and whether what the version in
     <root> would launch it with, once the update wrote <kept> to bosun.env, differs from what it was
-    launched with (launch_changed)."""
+    launched with, or its launch there would be refused (launch_compared)."""
     where = folders()
     return [_window(root, w, where.state_dir, where.session, kept or {}) for w in open_windows(root)]
 
@@ -517,10 +537,12 @@ def plan_for(old_root: Path, new_root: Path, state_dir: Path, config_dir: Path) 
         *install_problem(old_root, new_root),
     ]
     unwritten = migrations.keys_unwritten(config_dir, new.keys - old.keys)
+    owed, owed_left = owed_windows(state_dir, plan)
     return dataclasses.replace(
         plan,
         blockers=(*plan.blockers, *extra),
         kept=tuple(kept.items()),
         unwritten=unwritten,
-        owed=owed_windows(state_dir),
+        owed=owed,
+        owed_left=owed_left,
     )

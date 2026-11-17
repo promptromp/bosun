@@ -112,7 +112,7 @@ SEEN_LINE = (
     "doing: {running}.\n"
 )
 SEEN_RUNNING = "(What bosun saw still running then: {running}.)"
-NOT_STARTED_HINT = "fix that, then bosun refresh {window}"
+NOT_STARTED_HINT = update_plan.NOT_STARTED_HINT
 OWED_TOO = "(owed by the last update too)"
 
 
@@ -443,6 +443,21 @@ def take_over(
         if entry[1] == Treatment.REREAD.value and ASKED_REREAD not in entry[2:]:
             files += last.reread
     return taken, tuple(dict.fromkeys(files)), tuple(kept)
+
+
+def taken_or_left(
+    windows: Sequence[tuple[str, Treatment]], kinds: Mapping[str, str], last: UpdateState | None
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Of the windows the <last> update still waits for, those an update whose plan gives each open window
+    its treatment (<windows>, with their <kinds>) takes over (take_over's own decision, as bring_along
+    names them), and those it leaves alone: still open, but given nothing by either update."""
+    if last is None:
+        return (), ()
+    brought, _files, _kept = take_over(to_bring_along(windows, kinds), dict(windows), (), last)
+    still_open = {name for name, _how in windows}
+    taken = tuple(window for window in last.pending if window in brought)
+    left = tuple(window for window in last.pending if window not in brought and window in still_open)
+    return taken, left
 
 
 def _taken_entry(

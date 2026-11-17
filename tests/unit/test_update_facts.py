@@ -23,13 +23,27 @@ import versions
 from test_update import FROM, TO, World
 
 
+def opened(*names: str, unchanged: tuple[str, ...] = ()) -> list[update_plan.WindowFacts]:
+    """Windows open and idle, each launched with what the newest version changes but <unchanged>."""
+    return [
+        update_plan.WindowFacts(
+            name, "orchestrator" if name == "orchestrator" else "repo", "idle", name not in unchanged
+        )
+        for name in names
+    ]
+
+
 class PlanForTest(World):
+    def setUp(self) -> None:
+        super().setUp()
+        self.windows: list[update_plan.WindowFacts] = []  # the windows open, as each test sets them
+
     def plan(self) -> update_plan.Plan:
         with (
             mock.patch.object(
                 versions, "commit_of", side_effect=lambda root: FROM if root == self.old else TO
             ),
-            mock.patch.object(update_facts, "window_facts", return_value=[]),
+            mock.patch.object(update_facts, "window_facts", return_value=self.windows),
             mock.patch.object(update_facts, "jobs", return_value=([], [])),
             mock.patch.object(update_facts, "missing", return_value=[]),
             mock.patch.object(update_facts, "commits", return_value=["bbbbbbb the next version"]),
@@ -59,6 +73,7 @@ class PlanForTest(World):
 
     def test_windows_an_update_still_brings_along_never_block_the_next_one(self) -> None:
         """Decision 3: the next update takes them over; its plan lists each with what it is owed."""
+        self.windows = opened("api", "orchestrator", "web")
         self.record(
             "agents",
             pending=("api", "orchestrator", "web"),
@@ -77,8 +92,36 @@ class PlanForTest(World):
         self.record("agents")
         self.assertEqual(self.plan().owed, ())
 
+    def test_the_plan_lists_only_the_windows_it_takes_over_and_those_it_leaves_alone(self) -> None:
+        """Item 4: by take_over's own decision over the new plan's treatments, so "still owed" never
+        promises a restart the update will not make; a closed window is neither."""
+        self.windows = opened("api", "orchestrator", "web", unchanged=("api", "orchestrator", "web"))
+        self.record(
+            "agents",
+            pending=("api", "orchestrator", "web", "gone"),
+            windows={
+                "api": ("repo", "wait until idle"),  # owed a restart the newest version no longer needs
+                "orchestrator": ("orchestrator", "re-read"),  # its re-read is still owed
+                "web": ("repo", "restart", "restarted"),  # began: its answer is still owed
+                "gone": ("repo", "restart"),
+            },
+        )
+        plan = self.plan()
+        self.assertEqual(plan.owed, (("orchestrator", "re-read"), ("web", "answer")))
+        self.assertEqual(plan.owed_left, ("api",))
+        text = update_plan.render_plan(plan)
+        self.assertIn(
+            "Also owed by the last update, and left alone: nothing they were launched with differs from the "
+            "newest version: api\n",
+            text,
+        )
+        self.assertNotIn("api: a restart", text)
+        self.windows = opened("api", "orchestrator", "web")
+        self.assertEqual(self.plan().owed_left, ())
+
     def test_a_window_answered_by_hand_is_owed_nothing(self) -> None:
         """No check-in loop took its answer yet: the plan counts it as answered, as bosun update does."""
+        self.windows = opened("api", "web app")
         self.record("agents", pending=("api", "web app"), windows={"api": ("repo", "wait until idle")})
         update_notes.note(self.state, "web app", "status", "carried on by hand")
         self.assertEqual(self.plan().owed, (("api", "restart"),))
@@ -86,6 +129,7 @@ class PlanForTest(World):
     def test_an_update_that_failed_before_taking_them_over_still_owes_them(self) -> None:
         """Its record carries the last one, whose windows the next update takes over in its place; and
         the plan an update makes again after its switch reads them from the record it carried."""
+        self.windows = opened("api")
         last = self.record("agents", pending=("api",), windows={"api": ("repo", "restart")})
         for step in ("failed", "released"):
             self.record(step, carried=update_state.as_object(last))
@@ -307,22 +351,32 @@ class FactsTest(World):
 
     def test_a_window_launched_otherwise_than_the_new_version_would_is_changed(self) -> None:
         """The new version's `launch --fingerprint` against the window's record; no record, or a
-        fingerprint refused, counts as changed."""
+        fingerprint refused, counts as changed, and a refused one says why (its last stderr line)."""
         root = self.new
         (root / "bin").mkdir()
         stub = root / "bin" / "bosun"
         stub.write_text(
-            '#!/bin/sh\n[ "$3" = known ] && echo \'{"args": "a", "files": "f"}\' && exit 0\nexit 1\n'
+            '#!/bin/sh\n[ "$3" = known ] && echo \'{"args": "a", "files": "f"}\' && exit 0\n'
+            '[ "$3" = silent ] && exit 1\n'
+            "echo \"ERROR: 'refused' does not start: its plugins were refused\" >&2\n"
+            'echo "plugins: a.json does not parse" >&2\necho >&2\nexit 1\n'
         )
         stub.chmod(0o755)
         record = {"fingerprint": {"args": "a", "files": "f"}}
         with mock.patch("launch_record.recorded", return_value=record):
-            self.assertFalse(update_facts.launch_changed(root, "known", self.state, "s"))
-            self.assertTrue(update_facts.launch_changed(root, "refused", self.state, "s"))
+            self.assertEqual(update_facts.launch_compared(root, "known", self.state, "s"), (False, ""))
+            self.assertEqual(
+                update_facts.launch_compared(root, "refused", self.state, "s"),
+                (True, "plugins: a.json does not parse"),
+            )
+            self.assertEqual(
+                update_facts.launch_compared(root, "silent", self.state, "s"), (True, update_facts.REFUSED)
+            )
         with mock.patch("launch_record.recorded", return_value={"fingerprint": {"args": "a", "files": "g"}}):
-            self.assertTrue(update_facts.launch_changed(root, "known", self.state, "s"))
+            self.assertEqual(update_facts.launch_compared(root, "known", self.state, "s"), (True, ""))
         with mock.patch("launch_record.recorded", return_value=None):
-            self.assertTrue(update_facts.launch_changed(root, "known", self.state, "s"))
+            self.assertEqual(update_facts.launch_compared(root, "known", self.state, "s"), (True, ""))
+            self.assertEqual(update_facts.launch_compared(root, "refused", self.state, "s")[0], True)
 
     def test_a_launch_is_compared_with_the_values_the_update_writes(self) -> None:
         """An older install's orchestrator, launched with every connector: the update writes
@@ -333,9 +387,9 @@ class FactsTest(World):
         stub.write_text('#!/bin/sh\necho "{\\"args\\": \\"${BOSUN_ORCHESTRATOR_CONNECTORS:-none}\\"}"\n')
         stub.chmod(0o755)
         with mock.patch("launch_record.recorded", return_value={"fingerprint": {"args": "all"}}):
-            self.assertTrue(update_facts.launch_changed(root, "orch", self.state, "s"))
+            self.assertEqual(update_facts.launch_compared(root, "orch", self.state, "s"), (True, ""))
             kept = {"BOSUN_ORCHESTRATOR_CONNECTORS": "all"}
-            self.assertFalse(update_facts.launch_changed(root, "orch", self.state, "s", kept))
+            self.assertEqual(update_facts.launch_compared(root, "orch", self.state, "s", kept), (False, ""))
 
 
 class WindowFactsTest(World):
@@ -372,7 +426,7 @@ class WindowFactsTest(World):
         with (
             mock.patch.object(update_facts, "open_windows", return_value=listed),
             mock.patch("launch_record.recorded", side_effect=lambda state, session, name: records.get(name)),
-            mock.patch.object(update_facts, "launch_changed", return_value=True) as changed,
+            mock.patch.object(update_facts, "launch_compared", return_value=(True, "")) as changed,
         ):
             facts = update_facts.window_facts(self.new)
         self.assertEqual(
@@ -380,10 +434,16 @@ class WindowFactsTest(World):
             [("orch", True, True), ("api", True, True), ("plain", False, False), ("by-hand", False, False),
              ("sent", True, True)],
         )  # fmt: skip
+        with (
+            mock.patch.object(update_facts, "open_windows", return_value=listed[:1]),
+            mock.patch.object(update_facts, "launch_compared", return_value=(True, "plugins: refused")),
+        ):
+            [orch] = update_facts.window_facts(self.new)
+        self.assertEqual(orch.refused, "plugins: refused")
         self.assertEqual([call.args[1] for call in changed.call_args_list], ["orch", "api", "sent"])
         with (
             mock.patch.object(update_facts, "open_windows", return_value=listed[:1]),
-            mock.patch.object(update_facts, "launch_changed", return_value=False) as changed,
+            mock.patch.object(update_facts, "launch_compared", return_value=(False, "")) as changed,
         ):
             update_facts.window_facts(self.new, {"BOSUN_ORCHESTRATOR_CONNECTORS": "all"})
         self.assertEqual(changed.call_args.args[4], {"BOSUN_ORCHESTRATOR_CONNECTORS": "all"})

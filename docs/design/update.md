@@ -842,6 +842,12 @@ Decided while building it:
   waiting on the update's hold, as it does for the morning job; that run is not carried on, and Start again starts it.
 - **The plan before the switch** asks the new version: its `launch --fingerprint` reads the files
   under the install from its own folder. One of bosun's windows with no launch record counts as changed.
+- **A window whose launch the new version would refuse**: its fingerprint fails (a plugin list over an
+  `installed_plugins.json` that does not parse, a settings scope that would widen its connectors, an agy
+  window given a plugin list), and its last stderr line is the reason that launch would record. A restart
+  would stop a working agent and leave it unable to start, so the window is left running (`leave`, with the
+  reason in the plan's `refused`), and the plan and the summary say "left running, as it would not start on
+  the new version: <why>; fix that, then bosun refresh <window>". The app reads it as `leave`.
 - **A window bosun did not start**: one `bosun sessions` lists outside the window list (`extra`)
   with no launch recorded, as a shell or a Claude opened by hand in bosun's tmux session, is left as it
   is, whatever it does, and the plan says so ("not started by bosun: left as it is", the summary "left
@@ -943,8 +949,11 @@ Decided while building it:
   advance` by hand, when no loop runs).
 - **The next update takes over the windows the last one still waits for,** rather than being blocked by
   them (one left at a permission prompt would otherwise hold every later update until answered). Windows
-  answered by a note are settled first, as before. Its plan lists the rest ("Still owed from the last
-  update, which this one takes over"), and its record keeps the last one's (`carried`). Once it switched,
+  answered by a note are settled first, as before. Its plan lists those it will take over ("Still owed
+  from the last update, which this one takes over"), by the same decision the takeover makes over the
+  plan's treatments (`update_agents.taken_or_left`), and in one line those it will leave alone ("Also owed
+  by the last update, and left alone: ..."), so it never promises a restart it will not make; its record
+  keeps the last one's (`carried`). Once it switched,
   each of them joins its own bringing-along, decided from its status and the new plan, which compares what
   it was launched with (its launch record, still from before the last update) with the newest version: a
   window owed a restart restarts when that differs (unless the newest version reverted it: then leaving it

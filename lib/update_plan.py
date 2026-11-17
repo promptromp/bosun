@@ -36,11 +36,17 @@ TASK = "orchestrator/tasks/{}.md"  # a task type's built-in text
 COMMON = TASK.format("_common")
 
 OWED = "Still owed from the last update, which this one takes over:"
+OWED_LEFT = (
+    "Also owed by the last update, and left alone: nothing they were launched with differs from the newest "
+    "version: {}"
+)
 OWED_WHAT = {
     "restart": "a restart",
     "re-read": "a re-read of its prompts",
     "answer": "its answer to the update",
 }
+NOT_STARTED_HINT = "fix that, then bosun refresh {window}"  # after why a window does not start
+WOULD_NOT_START = "left running, as it would not start on the new version"
 CUT_SHORT = "a kg forget was cut short: the next kg write finishes it, then run bosun update again"
 GOING_BACK = "going back is not supported: the {store} store is at format {found}, newer than {target}"
 
@@ -63,6 +69,10 @@ class WindowFacts:
     # False for a window outside the window list with no launch recorded (a shell, a Claude started by
     # hand): bosun never started it, so an update leaves it as it is.
     started_by_bosun: bool = True
+    # Why its launch on the new version would not start (its fingerprint refused: a plugins or connectors
+    # refusal), else "": the update leaves it running (LEAVE) rather than stop a working agent it cannot
+    # start again.
+    refused: str = ""
 
 
 class Treatment(StrEnum):
@@ -91,6 +101,8 @@ def treatment(window: WindowFacts, reread: bool) -> Treatment:
         return Treatment.RESTART_LOOP
     if not window.started_by_bosun:
         return Treatment.NOT_STARTED_BY_BOSUN
+    if window.refused:
+        return Treatment.LEAVE  # it would not start again: a working agent is never stopped for that
     if not window.launch_changed:
         return Treatment.REREAD if reread and window.kind == "orchestrator" else Treatment.LEAVE
     return _BY_STATUS.get(window.status, Treatment.ASK_FIRST)
@@ -129,6 +141,12 @@ class Plan:
     # The windows the last update still waits for, which this one takes over, each with what it is owed
     # (update_agents.Owed: restart, re-read, answer); an older record has none.
     owed: tuple[tuple[str, str], ...] = ()
+    # The windows the last update still waits for that this one leaves alone (open, given nothing by either
+    # update: the newest version reverted what it owed them); an older record has none.
+    owed_left: tuple[str, ...] = ()
+    # Each window the update leaves running (Treatment.LEAVE) as its launch on the new version would not
+    # start, and why (WindowFacts.refused); an older record has none.
+    refused: tuple[tuple[str, str], ...] = ()
 
 
 def _matches(path: str, patterns: Sequence[str]) -> bool:
@@ -223,6 +241,9 @@ def make_plan(  # noqa: PLR0913 - the facts the caller gathers, all keyword-only
         user_changes=tuple(f"{file}: {change}" for file, change in user_changes),
         blockers=tuple(blockers),
         kinds=tuple((w.name, w.kind) for w in windows),
+        refused=tuple(
+            (w.name, w.refused) for w in windows if w.refused and treatment(w, reread) == Treatment.LEAVE
+        ),
         formats=tuple((store, old.formats.get(store, target)) for store, target in new.formats.items()),
     )
 
@@ -276,6 +297,8 @@ _READ: dict[str, tuple[Callable[[Any], Any], Any]] = {
     "unwritten": (_strings, ()),
     "console_job": (lambda value: value is True, False),
     "owed": (_pairs, ()),
+    "owed_left": (_strings, ()),
+    "refused": (_pairs, ()),
 }
 
 
@@ -307,8 +330,14 @@ def _key_lines(plan: Plan) -> list[str]:
     return [f"{key}: {notes[key]}" if key in notes else key for key in plan.keys_added]
 
 
-def _window_line(name: str, how: Treatment) -> str:
-    return f"{name}: {how.value}"
+def refused_line(name: str, why: str) -> str:
+    """What is said of a window the update leaves running as its launch on the new version would not
+    start: that, why, and what to do."""
+    return f"{WOULD_NOT_START}: {why or 'its launch is refused'}; {NOT_STARTED_HINT.format(window=name)}"
+
+
+def _window_line(name: str, how: Treatment, refused: Mapping[str, str]) -> str:
+    return f"{name}: {refused_line(name, refused[name])}" if name in refused else f"{name}: {how.value}"
 
 
 def _console_lines(plan: Plan) -> list[str]:
@@ -328,8 +357,9 @@ def render_plan(plan: Plan) -> str:
     out += _section("Written to bosun.env, to keep what this install did:", kept)
     out += _section("Config keys renamed or removed:", [_rename_line(a, b) for a, b in plan.renames])
     out += _section(f"Prompts changed ({len(plan.prompts)}):", plan.prompts)
-    out += _section("Windows:", [_window_line(n, t) for n, t in plan.windows])
+    out += _section("Windows:", [_window_line(n, t, dict(plan.refused)) for n, t in plan.windows])
     out += _section(OWED, [f"{name}: {OWED_WHAT.get(what, what)}" for name, what in plan.owed])
+    out += [OWED_LEFT.format(", ".join(plan.owed_left)), ""] if plan.owed_left else []
     out += _section("Jobs to reload:", plan.jobs)
     out += _section("Console:", _console_lines(plan))
     out += _section("Handed tasks keep their old text (bosun delegate --update):", plan.handed)

@@ -60,12 +60,20 @@ Stopped waiting: every window still waited for waits for your answer.
 Answer it when you get to it: the check-in loop (or `bosun update advance`, if no loop runs) brings it along once
 its turn is over. Meanwhile no update is running: the menu bar app offers Check for Updates again and says what
 the window still gets ("orchestrator restarts for the update once you answer it"), and the next update is not
-held up by it. It takes such a window over (its plan lists it under "Still owed from the last update"), finishes
+held up by it. It takes such a window over (its plan lists it under "Still owed from the last update"; one whose
+launch the newest version no longer changes is listed as left alone instead), finishes
 the last update's summary, which says the window was carried into the next update, and its own summary says what
 came of it.
 
 A window whose restart did not start (its launch refused, or its agent exited at once) is not waited for: the
-summary says it did not start, why, and what to do (fix that, then `bosun refresh <window>`).
+summary says it did not start, why, and what to do (fix that, then `bosun refresh <window>`). A window whose
+launch the new version would refuse is not restarted at all: it keeps running, and the plan and the summary say
+it would not start on the new version, why, and what to do.
+
+With a plugin list (the orchestrator has one by default: none of yours), your own Claude Code plugins count among
+what a window is started with: installing or enabling one (`claude plugin install`, `~/.claude/settings.json`)
+changes what its launch switches off, so the next update restarts the orchestrator, even one that changes nothing
+else.
 
 Tasks already handed to a repo window keep the text they had. The summary lists them, so you can send a
 `bosun delegate --update` where a changed rule matters.
@@ -106,9 +114,9 @@ as `bosun.env.pre-update-<time>`, and the plan shows the change before you say y
   menu bar app stays as it was: no app, no console job, no start at login.
 
 A Claude Code window that a settings file would give servers its list does not name
-([Connectors](configuration.md#connectors-what-each-window-may-reach)) does not start on the new version. The summary says it did
-not start and why, as do its pane, the day's launch log and `bosun doctor`. Name those servers in its list, or
-remove them from that file, then `bosun refresh <window>`.
+([Connectors](configuration.md#connectors-what-each-window-may-reach)) would not start on the new version, so the
+update leaves it running; the plan and the summary say why, as does `bosun doctor`. Name those servers in its
+list, or remove them from that file, then `bosun refresh <window>`.
 
 </details>
 

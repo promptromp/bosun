@@ -1791,6 +1791,10 @@ echo '[not an object]' >"$HOME/.claude/plugins/installed_plugins.json"
 check "an installed_plugins.json that does not parse keeps a window with a list from starting" fails_with \
   "plugins: $HOME/.claude/plugins/installed_plugins.json does not parse, so bosun cannot tell which plugins to switch off" \
   bash -c 'cd "$1" && "${@:2}" launch alpha' _ "$REPO_A" "${PS[@]}" "$BOSUN"
+check "... and its fingerprint is refused, the reason last on stderr (what an update says of it)" bash -c '
+  out="$("${@:2}" launch --fingerprint alpha 2>&1 >/dev/null)"
+  [ $? = 1 ] && [ "$(tail -n 1 <<<"$out")" = "plugins: $1 does not parse, so bosun cannot tell which plugins to switch off" ]' \
+  _ "$HOME/.claude/plugins/installed_plugins.json" "${PS[@]}" "$BOSUN"
 check "... and doctor says it does not start" contains "$("${PS[@]}" "$BOSUN" doctor 2>&1)" \
   "warn  alpha: does not start: $HOME/.claude/plugins/installed_plugins.json does not parse"
 check "... but a window with all starts" switches "$(cd "$REPO_A" && "$BOSUN" launch alpha 2>&1)" '$p == "no key"'
@@ -6136,12 +6140,26 @@ HAND
   U_V3_COMMIT="$(ug rev-parse HEAD)"
   u_last_backup="$(jq -r .backup "$U_STATE/update.json")"
   u_last_id="$(jq -r .id "$U_STATE/update.json")"
+  # And the orchestrator's plugins (its default list: none of mine) cannot be resolved on v3: an
+  # installed_plugins.json that does not parse. Its launch there would refuse, so the update leaves it running.
+  mkdir -p "$HOME/.claude/plugins"
+  u_installed="$HOME/.claude/plugins/installed_plugins.json"
+  [ ! -e "$u_installed" ] || mv "$u_installed" "$U/installed_plugins.kept"
+  echo '[not an object]' >"$u_installed"
+  u_refused="plugins: $u_installed does not parse, so bosun cannot tell which plugins to switch off; fix that, then bosun refresh orch"
   out="$(ul update --dry-run 2>&1)"
   check "a next update while a window is still owed: the plan is not blocked, and lists it as owed from the last update" bash -c '
     ! grep -q "The update is blocked" <<<"$1" && grep -q "^Still owed from the last update, which this one takes over:" <<<"$1" &&
       grep -qx "  u-waiting: a restart" <<<"$1" && grep -qx "  u-waiting: ask first" <<<"$1" && grep -qx "  u-busy: leave" <<<"$1"' _ "$out"
+  check "... and the orchestrator, whose launch on v3 would refuse, is left running: the plan says why and what to do" \
+    grep -qxF "  orch: left running, as it would not start on the new version: $u_refused" <<<"$out"
   ul update --yes >"$U/takeover.out" 2>&1
   rc=$?
+  rm -f "$u_installed"
+  [ ! -e "$U/installed_plugins.kept" ] || mv "$U/installed_plugins.kept" "$u_installed"
+  check "... and so does the summary, the orchestrator still running" bash -c '
+    kill -0 "$1" && grep -qE "^  orch +left running, as it would not start on the new version: " "$2" &&
+      grep -qF "left running, as it would not start on the new version: $3" "$2"' _ "$orch_pid" "$U/takeover.out" "$u_refused"
   check "... it takes the window over, and its wait ends at once, as the window waits for your answer (exit 0)" bash -c '
     [ "$1" = 0 ] && grep -qx "Stopped waiting: every window still waited for waits for your answer." "$2" &&
       grep -qx "  u-waiting waits for your answer at its prompt; once you answer, bosun update advance, run by hand, restarts it for the update" "$2"' _ "$rc" "$U/takeover.out"
