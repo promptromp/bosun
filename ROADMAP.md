@@ -375,9 +375,9 @@ handled and tested:
 - after the clock went back, an update's prune could delete the backup it had just taken.
 
 Next: two install lines run at once (their clones race, with git's own error), a full disk end to end, the
-Mac sleeping in the middle of an update (its hold lifts after an hour), commands run with another user's
-HOME, and a window left at a permission prompt, which holds its update open and blocks the next one until
-answered.
+Mac sleeping in the middle of an update (its hold lifts after an hour), and commands run with another user's
+HOME. A window left at a permission prompt no longer holds its update open or blocks the next one: the update
+stops waiting once only such windows are left, and the next one takes them over (2026-11-17).
 
 ### Docs site
 

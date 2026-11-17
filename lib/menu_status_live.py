@@ -42,6 +42,7 @@ import console_token
 import keep_awake
 import menu_status
 import quit_state
+import update_agents
 import update_state
 import watchdog
 from console_live import LiveError, Run
@@ -149,12 +150,24 @@ def watchdog_view(
 
 
 def update_facts(state_dir: Path) -> tuple[bool, tuple[str, ...]]:
-    """Whether an update runs now, and the windows it waits for (it names none unless it is running)."""
-    if not update_state.running(state_dir):
+    """Whether an update's own run runs now (not the check-in loop's turn at the windows one handed
+    over: update_state.update_runs), and the windows it waits for (it names none unless it is running)."""
+    if not update_state.update_runs(state_dir):
         return False, ()
     record = update_state.read(state_dir)
     waiting = record.pending if record is not None and record.step == "agents" else ()
     return True, tuple(waiting)
+
+
+def update_owed(state_dir: Path) -> tuple[tuple[str, str], ...]:
+    """The windows the last update still waits for while no update runs (handed to the check-in loop),
+    each with what it is owed (update_agents.Owed's value); none while an update runs."""
+    if update_state.update_runs(state_dir):
+        return ()
+    last = update_state.owing(update_state.read(state_dir))
+    if last is None:
+        return ()
+    return tuple((window, update_agents.owed(last, window).value) for window in last.pending)
 
 
 def last_update(state_dir: Path) -> menu_status.LastUpdate | None:
@@ -269,7 +282,7 @@ def doctor_watchdog(
     ran = last_ran(state.last_run, launched_at(log_dir))
     loaded = watchdog.job_loaded_at(state_dir, WATCHDOG_ROLE)
     job = WatchdogJob(True, True, ran, kernel_time(WAKETIME), kernel_time(BOOTTIME), loaded)
-    updating = update_state.running(state_dir)
+    updating = update_state.update_runs(state_dir)
     facts = StatusFacts(
         None, None, None, None, update_running=updating, log_dir=str(log_dir), watchdog_job=job
     )
@@ -334,6 +347,7 @@ def gather(
         gate=gate,
         update_running=updating,
         update_waiting_for=waiting_for,
+        update_owed=update_owed(state_dir),
         update_last=last_update(state_dir),
         console_running=console_token.running(state_dir),
         keep_awake_until=keep_awake.keep_awake_until(state_dir, settings.session),

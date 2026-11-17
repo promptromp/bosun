@@ -532,6 +532,57 @@ every_version_clean() { # each version folder in bosun-versions, the old one too
     reads_clean "${folder%/}" || return 1
   done
 }
+waits_for_me() {
+  [ "$(window orchestrator status)" = waiting ]
+}
+waits_for_me_soon() { # <seconds>; if not by then, what the orchestrator shows
+  wait_for "$1" waits_for_me && return 0
+  screen_of orchestrator
+  return 1
+}
+update_done() {
+  [ "$(jq -r .step "$STATE/update.json" 2>/dev/null)" = "done" ]
+}
+update_done_soon() { # <seconds>; if not by then, where the update is and what the loop said
+  wait_for "$1" update_done && return 0
+  jq -c '{step, pending, windows}' "$STATE/update.json"
+  tail -20 "$STATE/logs/checkin-$(date +%F).log" 2>/dev/null
+  screen_of orchestrator
+  return 1
+}
+answered_question() { # Enter on its question (the first answer), again while it still waits, a few times at most
+  local _
+  for _ in 1 2 3; do
+    tmux -L bosun send-keys -t "=bosun:=orchestrator" Enter
+    wait_for 60 bash -c '[ "$(bosun sessions --json | jq -r ".[] | select(.name == \"orchestrator\") | .agent.status")" != waiting ]' && return 0
+  done
+  screen_of orchestrator
+  return 1
+}
+# Claude Code only (Codex has no question tool): the orchestrator puts a question to me just before the
+# update, so it waits for my answer, which never ends by itself.
+question_before_update() {
+  local ask="Before anything else: use your AskUserQuestion tool to ask me whether tonight's invoice export should be CSV or JSON, then wait for my answer. Do nothing else, and once I answered reply with just the answer."
+  [ "$AGENT" = "claude" ] || return 0
+  check "the orchestrator puts a question to me with its question tool" bosun send --no-item orchestrator "$ask"
+  check "... and waits for my answer (within 180 s)" waits_for_me_soon 180
+}
+# The update ended without waiting for the orchestrator at its question, said so, and the status calls no
+# update running; once I answer, the check-in loop brings it along and the update's record reaches done.
+handed_over_while_it_waits() {
+  local loop_seconds=900 # the check-in loop takes a turn every 5 minutes; the orchestrator then re-reads and answers
+  [ "$AGENT" = "claude" ] || return 0
+  check "the update stopped waiting by itself, as only the orchestrator, at its question, was left" \
+    says "Stopped waiting: every window still waited for waits for your answer." "$OUT/update.txt"
+  check "... naming it, and who brings it along once I answer" \
+    says "orchestrator waits for your answer at its prompt; once you answer, the check-in loop asks it to re-read its prompts for the update" "$OUT/update.txt"
+  check "... the record at agents, the orchestrator still waited for, handed over" \
+    jq -e '.step == "agents" and .pending == ["orchestrator"] and (.handed_over | length > 0)' "$STATE/update.json"
+  check "... and the status calls no update running, and says what the orchestrator still gets" bash -c '
+    bosun status --json | jq -e ".update.state == \"none\" and (.detail | index(\"orchestrator re-reads its prompts for the update once you answer it\"))"'
+  check "I answer its question" answered_question
+  check "... and within $loop_seconds s the check-in loop brings it along: the update is done" update_done_soon "$loop_seconds"
+}
 the_orchestrator_reread() { # <its agent before>: kept running, asked to re-read, and it answered
   [ "$(windows_entry orchestrator)" = '["orchestrator","re-read","asked to re-read","answered"]' ] &&
     [ "$(pid_of orchestrator)" = "$1" ]
@@ -545,8 +596,10 @@ update_with_agents_at_work() {
   exporter="$(pid_of exporter)"
   orchestrator="$(pid_of orchestrator)"
   check "the version folder reads clean while Claude runs with --plugin-dir into it" reads_clean "$(version_folder)"
+  question_before_update
   the_update
   check "the update ends well, with its summary" bash -c '[ "$1" = 0 ] && grep -q "^bosun updated: " "$2"' _ "$UPDATE_RC" "$OUT/update.txt"
+  handed_over_while_it_waits
   check "the orchestrator, kept running, re-read policy.md and answered" the_orchestrator_reread "$orchestrator"
   echo "  note  the orchestrator's status: $(note_of orchestrator status | head -3 | tr '\n' ' ')"
   if [ "$AGENT" = "claude" ]; then

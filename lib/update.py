@@ -23,9 +23,12 @@ update.json (lib/update_state.py) before it starts it:
   still on, then the hold lifted; what went wrong after the switch and what bosun doctor finds
   are kept as findings (reported, never rolled back); old backups and version folders pruned.
 - agents: each window the plan gives something to do is brought along (lib/update_agents.py decides,
-  lib/update_windows.py carries it out) until it answers with `bosun update note`; Ctrl-C leaves those
-  still waited for to the check-in loop, whose `bosun update advance` carries on. done once none is
-  left.
+  lib/update_windows.py carries it out) until it answers with `bosun update note`; once only windows
+  waiting for me at a prompt are left, or at Ctrl-C, the wait ends and leaves those still waited for to
+  the check-in loop, whose `bosun update advance` carries on. done once none is left. The next update
+  takes over the windows the last one still waits for: its record keeps that record (`carried`) and
+  brings them along with its own once it switched, finishing the last one's summary then; one that
+  ends with bosun as it was before that gives them back (_give_back).
 - the summary (lib/update_summary.py): what the update did, built from its record, where each step
   kept what it learnt (the plan when it starts, the migrations' lines and bosun.env's change at the
   switch, the jobs reloaded in the release), so an update carried on says the same. It is said when
@@ -414,12 +417,30 @@ def _windows_brought_along(state: UpdateState) -> UpdateState:
     """A released update's windows brought along by a plan made again from its two versions: the link
     already leads to the new one, which the plan compares each window's launch with, as before the
     switch, and a window opened since the plan the go-ahead was given on (the orchestrator delegating
-    during the prompt or the hold) is in it."""
+    during the prompt or the hold) is in it. The last update's windows it took over come along too,
+    once that update's summary is finished (_last_finished)."""
     where = folders()
     plan = update_facts.plan_for(
         Path(state.from_root), Path(state.to_root), where.state_dir, where.config_dir
     )
+    _last_finished(where.state_dir, state)
     return update_windows.bring_along(state, plan, say=Output.say)
+
+
+def _last_finished(state_dir: Path, state: UpdateState) -> None:
+    """The last update, whose windows still waited for <state>'s took over (its `carried` record),
+    finished: its summary saved next to its backup, each of those windows carried into this update."""
+    last = update_windows.carried_record(state_dir, state)
+    if last is None or not last.pending:
+        return
+    taken = ", ".join(last.pending)
+    last = update_agents.carried_into(last)
+    saved = _saved(last, _text(last, summary_of(state_dir, last)), Output.say)
+    versions_ = f"{_short(last.from_commit)} -> {_short(last.to_commit)}"
+    Output.say(
+        f"  took over {taken} from the last update ({versions_})"
+        + (f"; its summary: {saved}" if saved else "")
+    )
 
 
 def _brought_along(state: UpdateState) -> UpdateState:
@@ -440,7 +461,10 @@ def _carry_on(state_dir: Path) -> UpdateState | None:
     if state is None or state.step in FINISHED:
         return state
     if state.step in BEFORE_FREEZE:
-        return _step(state_dir, state, "failed", error=f"cut short at step {state.step}; nothing had changed")
+        failed = _step(
+            state_dir, state, "failed", error=f"cut short at step {state.step}; nothing had changed"
+        )
+        return _give_back(state_dir) or failed
     if state.step == "checked":
         state = release(state)
     if state.step == "released":
@@ -455,6 +479,8 @@ def _settled(state_dir: Path, state: UpdateState) -> UpdateState:
     or one written by hand) no longer waited for, and `done` once none is; the rest are the check-in
     loop's, never acted on here."""
     after = update_agents.settled(state, update_notes.Files(state_dir))
+    if after.step == "agents":  # its own run is over: whoever holds the lock now is the loop's turn
+        after = update_state.handed(after)
     return _record(state_dir, after) if after != state else after
 
 
@@ -477,15 +503,32 @@ def resume(state_dir: Path) -> UpdateState | None:
         )
     if state.step in FINISHED:  # a write put a conversion's freeze back first
         _own_work_left(state_dir)
-        return None
+        return _given_back(state_dir) if state.carried else None
     if update_state.in_freeze(state):
         update_gate.recover(state_dir, folders().config_dir)
         _own_work_left(state_dir)
-        return update_state.read(state_dir)
-    with update_state.one_update(state_dir):
+        return _given_back(state_dir) or update_state.read(state_dir)
+    with update_state.one_update(state_dir, update_state.lock_wait(state_dir)):
         carried = _carry_on(state_dir)
         _own_work_back(state_dir)
         return carried
+
+
+def _give_back(state_dir: Path) -> UpdateState | None:
+    """For a caller that holds update.lock: an update that ended with bosun as it was, before it took
+    over the windows the last one still waited for, gives them back to it (update_state.carried_back),
+    settled; that record, or None when there was nothing to give back."""
+    state = update_state.read(state_dir)
+    if state is None or state.step not in update_state.PUT_BACK or not state.carried:
+        return None
+    back = update_state.carried_back(state_dir)
+    return _settled(state_dir, back) if back is not None else None
+
+
+def _given_back(state_dir: Path) -> UpdateState | None:
+    """_give_back, under update.lock."""
+    with update_state.one_update(state_dir):
+        return _give_back(state_dir)
 
 
 # ---- the command --------------------------------------------------------------------------------
@@ -519,9 +562,11 @@ def _go_ahead(yes: bool, ahead: str = AHEAD) -> bool:
     return False
 
 
-def _started(plan: Plan, old_root: Path, new_root: Path, doctor_before: Sequence[str]) -> UpdateState:
+def _started(
+    plan: Plan, old_root: Path, new_root: Path, doctor_before: Sequence[str], carried: UpdateState | None
+) -> UpdateState:
     """The record of an update starting to carry out <plan>, with what bosun doctor failed at while
-    planning."""
+    planning, and the last update's record whose windows still waited for it takes over (<carried>)."""
     now = datetime.now(UTC)
     return UpdateState(
         id=f"{now:%Y%m%d-%H%M%S}-{_short(plan.from_commit)}-{_short(plan.to_commit)}",
@@ -535,6 +580,7 @@ def _started(plan: Plan, old_root: Path, new_root: Path, doctor_before: Sequence
         user_changes=plan.user_changes,
         plan=update_plan.as_record(plan),
         doctor_before=tuple(doctor_before),
+        carried=update_state.as_object(dataclasses.replace(carried, carried={})) if carried else {},
     )
 
 
@@ -576,10 +622,14 @@ def _rehearsed(state: UpdateState, plan: Plan, where: Folders) -> UpdateState:
 
 def _prepared(plan: Plan, old_root: Path, new_root: Path, where: Folders) -> UpdateState:
     """Recorded from `planned` on: what bosun doctor fails at before anything changes (outside the
-    hold and the freeze), then the rehearsal; `rehearsed`, or `failed` with what it found."""
+    hold and the freeze), then the rehearsal; `rehearsed`, or `failed` with what it found. The windows
+    the last update still waits for are taken over from its record (update_state.owing), which the new
+    one keeps."""
     Output.say("Asking bosun doctor what fails before the update...")
     before = _doctor_fails(new_root)
-    return _rehearsed(_record(where.state_dir, _started(plan, old_root, new_root, before)), plan, where)
+    last = update_state.owing(update_state.read(where.state_dir))
+    started = _started(plan, old_root, new_root, before, last)
+    return _rehearsed(_record(where.state_dir, started), plan, where)
 
 
 def _carried_out(plan: Plan, old_root: Path, new_root: Path, where: Folders) -> UpdateState:
@@ -990,7 +1040,7 @@ def _resumed_line(state: UpdateState) -> str:
     versions_ = f"An update from {_short(state.from_commit)} to {_short(state.to_commit)}"
     if state.step == "agents":
         finishes = update_windows.who_finishes(Path(state.to_root), state.pending)
-        return f"{versions_} still brings windows along: {finishes}."
+        return f"{versions_} still brings windows along: {finishes}; a newer update takes them over."
     what = {"restored": "put back", "failed": "ended (it was cut short before anything changed)"}
     return f"{versions_} that was cut short: {what.get(state.step, 'carried on to the end')}."
 
@@ -1053,7 +1103,7 @@ def _for_real(where: Folders, args: argparse.Namespace, said: Said) -> int:
     here, whatever its step, before anything is called up to date), up to date or the update."""
     if not _carried_on(where.state_dir, said):
         return 0
-    with update_state.one_update(where.state_dir):
+    with update_state.one_update(where.state_dir, update_state.lock_wait(where.state_dir)):
         old_root = installed(Path(args.from_root))
         if versions.before_versions(old_root):
             return convert(old_root, ROOT, args, said)
@@ -1141,7 +1191,9 @@ def _advance(state_dir: Path) -> int:
     turn that takes the last answer ends the update: its summary is saved next to the backup."""
     try:
         with update_state.one_update(state_dir):
+            _give_back(state_dir)  # an update that ended with bosun as it was, before it took them over
             if update_state.windows_pending(state_dir):
+                update_state.hand_over(state_dir)  # an older or crashed update's record says none
                 update_windows.turn(state_dir, _say_advance)
                 _finished_by_the_loop(state_dir)
     except update_state.UpdateRunning:

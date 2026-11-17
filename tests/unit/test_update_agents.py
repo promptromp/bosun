@@ -7,6 +7,7 @@ Fictional windows."""
 
 from __future__ import annotations
 
+import dataclasses
 import shutil
 import sys
 import tempfile
@@ -408,6 +409,121 @@ class SettledTest(Agents):
     def test_a_record_with_nothing_pending_is_done(self) -> None:
         self.assertEqual(update_agents.settled(bringing({}), self.act.notes).step, "done")
         self.assertEqual(update_agents.settled(bringing({}), self.act.notes).pending, ())
+
+
+class WaitingForMeTest(unittest.TestCase):
+    def test_the_wait_ends_only_when_every_window_left_waits_for_me(self) -> None:
+        waiting_for_me = update_agents.only_waiting_for_me
+        self.assertTrue(waiting_for_me({"orchestrator": "waiting", "api": "waiting"}))
+        self.assertFalse(waiting_for_me({"orchestrator": "waiting", "api": "busy"}))  # ends by itself
+        self.assertFalse(waiting_for_me({"api": "idle"}))
+        self.assertFalse(waiting_for_me({"api": ""}))  # not listed: unknown
+        self.assertFalse(waiting_for_me({}))
+
+    def test_what_a_window_is_owed(self) -> None:
+        state = bringing(
+            {
+                "orchestrator": ("orchestrator", Treatment.REREAD),
+                "api": ("repo", Treatment.TAKE_STOCK),
+                "web": ("repo", Treatment.RESTART),
+            }
+        )
+        state = update_state.advanced(
+            state,
+            "agents",
+            windows={
+                **state.windows,
+                "api": (*state.windows["api"], "asked to take stock"),
+                "web": (*state.windows["web"], "restarted"),
+            },
+        )
+        owed = {window: update_agents.owed(state, window) for window in state.pending}
+        self.assertEqual(owed, {"orchestrator": "re-read", "api": "restart", "web": "answer"})
+
+
+class TakeOverTest(unittest.TestCase):
+    """Decision 3: the next update takes over the windows the last one still waits for."""
+
+    POLICY_NEXT = "/Users/me/.local/share/bosun/orchestrator/tasks/review.md"
+
+    def last(self, windows: dict[str, tuple[str, ...]]) -> UpdateState:
+        state = bringing({}, reread=(POLICY,))
+        return update_state.advanced(state, "agents", pending=tuple(windows), windows=windows)
+
+    def test_a_window_the_new_plan_restarts_keeps_what_it_gave_the_last_one(self) -> None:
+        last = self.last({"api": ("repo", "take stock, then restart", "asked to take stock")})
+        windows, reread, kept = update_agents.take_over(
+            {"api": ("repo", "restart")}, {"api": Treatment.RESTART}, (), last
+        )
+        self.assertEqual(windows, {"api": ("repo", "restart", "asked to take stock")})
+        self.assertEqual((reread, kept), ((), ("api",)))
+
+    def test_one_the_last_update_had_restarted_gets_the_new_restart_afresh(self) -> None:
+        last = self.last({"api": ("repo", "restart", "restarted")})
+        windows, _, kept = update_agents.take_over(
+            {"api": ("repo", "restart")}, {"api": Treatment.RESTART}, (), last
+        )
+        self.assertEqual((windows, kept), ({"api": ("repo", "restart")}, ()))
+
+    def test_one_the_new_plan_leaves_alone_still_answers_or_gets_what_was_begun(self) -> None:
+        last = self.last(
+            {
+                "api": ("repo", "restart", "restarted"),  # it only has to answer
+                "web": ("repo", "take stock, then restart", "asked to take stock"),  # it stopped and waits
+                "docs": ("repo", "restart"),  # the newest version reverted what changed: left alone
+            }
+        )
+        plan = {"api": Treatment.LEAVE, "web": Treatment.LEAVE, "docs": Treatment.LEAVE}
+        windows, _, kept = update_agents.take_over({}, plan, (), last)
+        self.assertEqual(
+            windows,
+            {
+                "api": ("repo", "restart", "restarted"),
+                "web": ("repo", "take stock, then restart", "asked to take stock"),
+            },
+        )
+        self.assertEqual(kept, ("api", "web"))
+
+    def test_an_orchestrator_owed_a_re_read_re_reads_both_updates_files(self) -> None:
+        last = self.last({"orchestrator": ("orchestrator", "re-read")})
+        windows, reread, _ = update_agents.take_over(
+            {"orchestrator": ("orchestrator", "re-read")},
+            {"orchestrator": Treatment.REREAD},
+            (self.POLICY_NEXT,),
+            last,
+        )
+        self.assertEqual(windows, {"orchestrator": ("orchestrator", "re-read")})
+        self.assertEqual(reread, (self.POLICY_NEXT, POLICY))
+        _, reread, _ = update_agents.take_over({}, {"orchestrator": Treatment.LEAVE}, (), last)
+        self.assertEqual(reread, (POLICY,))  # still owed, though the new update changed no prompt
+        asked = self.last({"orchestrator": ("orchestrator", "re-read", "asked to re-read")})
+        _, reread, _ = update_agents.take_over({}, {"orchestrator": Treatment.LEAVE}, (), asked)
+        self.assertEqual(reread, ())  # it was asked already, and only has to answer
+
+    def test_a_window_no_longer_open_is_not_taken_over(self) -> None:
+        last = self.last({"api": ("repo", "wait until idle")})
+        self.assertEqual(update_agents.take_over({}, {}, (), last), ({}, (), ()))
+        self.assertEqual(update_agents.take_over({}, {}, (), None), ({}, (), ()))
+
+    def test_the_last_update_is_finished_naming_each_window_carried_into_the_next(self) -> None:
+        last = self.last({"api": ("repo", "wait until idle")})
+        last = update_state.advanced(
+            last, "agents", windows={**last.windows, "web": ("repo", "restart", "restarted", "answered")}
+        )
+        finished = update_agents.carried_into(last)
+        self.assertEqual((finished.step, finished.pending), ("done", ()))
+        outcome = dict(update_agents.outcomes(finished, MemoryNotes()))
+        self.assertEqual(outcome["api"], "carried into the next update")
+
+    def test_the_new_summary_says_which_windows_the_last_update_owed_too(self) -> None:
+        last = self.last({"api": ("repo", "wait until idle")})
+        state = dataclasses.replace(
+            bringing({"api": ("repo", Treatment.RESTART)}), carried=update_state.as_object(last)
+        )
+        self.assertEqual(
+            update_agents.outcomes(state, MemoryNotes()),
+            [("api", "nothing yet; still waited for (owed by the last update too)")],
+        )
 
 
 class PlanWindowsTest(unittest.TestCase):

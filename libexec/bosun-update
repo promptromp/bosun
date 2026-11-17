@@ -28,7 +28,10 @@
 #      touched, and one bosun did not start (outside the window list, no launch recorded: a shell or a
 #      Claude you opened there) is left as it is. Each gets a prompt to check for anything it missed and
 #      carry on, and answers with its status; the update waits for every answer, saying which windows
-#      it waits for. Ctrl-C leaves them to the check-in loop, which restarts each once its turn is over;
+#      it waits for. Ctrl-C leaves them to the check-in loop, which restarts each once its turn is over,
+#      and so does the update itself once every window it still waits for waits for your answer at a
+#      prompt, naming each. A window whose restart did not start (its launch refused, its agent exited
+#      at once) is not waited for. The next update takes over the windows the last one still waits for;
 #   7. ends with a summary of what it did: the migrations and version bumps, the config it changed and
 #      its new keys, what to change by hand in your own files, the prompts that changed, the jobs
 #      reloaded, what came of each window, what fails after the switch that did not before, and where
@@ -75,7 +78,7 @@
 #                           before its restart (--stock), or its one-line status once it carried on
 #                           after the update's prompt (--status)
 #   bosun update advance    the check-in loop's turn at the windows still to bring along (nothing
-#                           while the update itself still runs)
+#                           while an update runs)
 # Exit status: 0 updated, up to date, or only planned; 1 it stopped (blocked, refused, or failed and
 # put back), saying why; 2 bad usage.
 set -uo pipefail

@@ -856,6 +856,35 @@ class ResumeTest(World):
         self.assertEqual((done.step, done.pending, done.windows["web app"][-1]), ("done", (), "answered"))
         self.assertEqual(update_state.read(self.state), done)
 
+    def test_a_released_update_finishes_the_last_one_whose_windows_it_took_over(self) -> None:
+        """Decision 3: the last update's summary is saved next to its backup once the new one switched,
+        each window it still waited for named as carried into the next; the new one brings them along."""
+        backup = self.backup()
+        last = self.record(
+            "agents", backup=str(backup), pending=("api",), windows={"api": ("repo", "wait until idle")}
+        )
+        self.record("released", carried=update_state.as_object(last))
+        out = io.StringIO()
+        with self.brought_along() as bring, contextlib.redirect_stdout(out):
+            update.resume(self.state)
+        bring.assert_called_once()
+        summary = (backup / "summary.md").read_text()
+        self.assertRegex(summary, r"\n  api +carried into the next update\n")
+        took = f"took over api from the last update ({FROM[:7]} -> {TO[:7]})"
+        self.assertIn(f"{took}; its summary: {backup / 'summary.md'}", out.getvalue())
+
+    def test_an_update_that_failed_before_taking_them_over_gives_them_back(self) -> None:
+        """Cut short before its freeze, or put back: the last update's windows are the check-in loop's
+        again, its record written back as it was."""
+        last = self.record("agents", pending=("api",), windows={"api": ("repo", "wait until idle")})
+        for step in ("holding", "failed", "restored"):
+            self.record(step, carried=update_state.as_object(last))
+            back = update.resume(self.state)
+            assert back is not None
+            self.assertEqual(dataclasses.replace(back, handed_over=""), last, step)
+            self.assertTrue(back.handed_over)  # no update's own run holds them: the loop's turns do
+            self.assertEqual(update_state.read(self.state), back, step)
+
     def test_a_newer_bosuns_step_is_refused(self) -> None:
         state = self.record("checked")
         data = {**json.loads((self.state / update_state.STATE_FILE).read_text()), "step": "re-checked"}
@@ -1002,11 +1031,25 @@ class StartTest(World):
             a_plan(), keys_added=("BOSUN_EXPORT_RETRIES",), prompts=("orchestrator/policy.md",)
         )
         before = ("FAIL: gh is not logged in: run 'gh auth login'",)
-        update_state.write(self.state, update._started(plan, self.old, self.new, before))
+        update_state.write(self.state, update._started(plan, self.old, self.new, before, None))
         recorded = update_state.read(self.state)
         assert recorded is not None
         self.assertEqual(update_plan.from_record(recorded.plan), plan)
-        self.assertEqual((recorded.step, recorded.doctor_before), ("planned", before))
+        self.assertEqual((recorded.step, recorded.doctor_before, recorded.carried), ("planned", before, {}))
+
+    def test_the_start_keeps_the_last_record_whose_windows_it_takes_over(self) -> None:
+        """Decision 3: its windows still waited for, and what was done to each, are this update's to
+        bring along; the record it carried never carries one in turn."""
+        older = self.record("done")
+        last = self.record(
+            "agents",
+            pending=("api",),
+            windows={"api": ("repo", "take stock, then restart", "asked to take stock")},
+            carried=update_state.as_object(older),
+        )
+        started = update._started(a_plan(), self.old, self.new, (), last)
+        carried = update_state.from_object(started.carried)
+        self.assertEqual(carried, dataclasses.replace(last, carried={}))
 
     def test_doctor_runs_while_planning_before_anything_is_held_and_its_fails_are_kept(self) -> None:
         """Outside the hold and the freeze, and recorded, so an update carried on compares the same."""
@@ -1269,6 +1312,26 @@ class AgentsCommandTest(World):
             self.main(*argv),
             (0, f"key\tBOSUN_CONNECTORS\t{note}\nkey\tBOSUN_ORCHESTRATOR_CONNECTORS\t{unset}\n", ""),
         )
+
+    def test_advance_gives_back_the_windows_an_update_that_failed_took_over(self) -> None:
+        last = self.record("agents", pending=("api",), windows={"api": ("repo", "restart")})
+        self.record("failed", carried=update_state.as_object(last))
+        with mock.patch.object(update_windows, "turn", return_value={"api": "busy"}) as turn:
+            self.assertEqual(self.main("advance")[0], 0)
+        turn.assert_called_once()
+        back = update_state.read(self.state)
+        assert back is not None
+        self.assertEqual(dataclasses.replace(back, handed_over=""), last)
+
+    def test_advance_says_an_older_record_s_windows_were_handed_over(self) -> None:
+        """An older bosun's record, or one whose update died while it waited, says nothing of a hand-over:
+        the loop's turn, holding the lock, records it, so the status no longer calls its turns an update."""
+        self.record("agents", pending=("api",), windows={"api": ("repo", "restart")})
+        with mock.patch.object(update_windows, "turn", return_value={"api": "busy"}):
+            self.main("advance")
+        after = update_state.read(self.state)
+        assert after is not None
+        self.assertTrue(after.handed_over)
 
     def test_advance_with_nothing_pending_does_nothing(self) -> None:
         for step in ("done", "released"):

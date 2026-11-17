@@ -334,9 +334,11 @@ How to use it: [Updating](updating.md). What each part does:
 - **The windows' answers.** Each window gets a prompt to check for anything it missed and carry on, and answers with
   `bosun update note --window <w> --status` (the text on stdin; `--stock` is the list of background work before a
   restart). The update waits for every answer, saying which windows it waits for. Ctrl-C stops the wait and leaves
-  them to the check-in loop, whose `bosun update advance` takes a turn at them each tick (nothing while the update
-  itself still runs; without a check-in loop, run it by hand). The next update is blocked at its plan while they are
-  pending.
+  them to the check-in loop, whose `bosun update advance` takes a turn at them each tick (nothing while an update
+  runs; without a check-in loop, run it by hand); so does the update itself once only windows waiting for your
+  answer at a prompt are left, naming each. The next update takes over the windows still pending: its plan lists
+  them as still owed from the last update. A window whose restart did not start (its launch refused, or its agent
+  exited at once) is not waited for: the summary says why.
 - **The app and the console.** `bosun app update` goes by the app being in `~/Applications`, not by
   `BOSUN_MENU_APP`, which is only your wish: an app you added by hand is kept current, and with none it does nothing.
   A failure (a Team ID not filled in yet, no network) is a line in the summary and stops nothing. The console's job

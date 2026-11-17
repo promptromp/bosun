@@ -30,6 +30,7 @@ import sys
 import time
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -64,6 +65,11 @@ STEPS = (
 FREEZE_STEPS = ("marked", "backed-up", "migrated", "switched")
 # Bosun's own background work is held from `holding` up to `released`; never before it.
 HOLD_STEPS = STEPS[STEPS.index("holding") : STEPS.index("released")]
+# An update that ended with bosun as it was: cut short before anything changed, or put back.
+PUT_BACK = ("failed", "restored")
+# The most an update waits for update.lock while the check-in loop takes its turn at the windows: a turn
+# restarts a window or two (each a stop, a launch and its start) and lets go.
+TURN_SECONDS = 180.0
 
 
 class RecordUnreadable(Exception):
@@ -117,6 +123,15 @@ class UpdateState:
     # What bosun doctor failed at in a run while planning, before the hold: the summary lists only the
     # FAIL lines after the switch that this does not hold.
     doctor_before: tuple[str, ...] = ()
+    # When the update's own run stopped waiting for the windows it brings along (ISO 8601, UTC; "" while
+    # it waits, or never did): from then on whoever holds update.lock at `agents` is the check-in loop's
+    # turn (`bosun update advance`), not the update, which the status then never calls running.
+    handed_over: str = ""
+    # The last update's record (as `write` writes one), whose windows still waited for this update took
+    # over when it started (lib/update_agents.py, take_over): brought along with its own once it
+    # switched, and its summary finished then. Put back as the record if this one fails or is put back
+    # before that (carried_back), so they stay the check-in loop's.
+    carried: Mapping[str, Any] = dataclasses.field(default_factory=dict)
 
 
 _TUPLES = (
@@ -131,7 +146,7 @@ _TUPLES = (
     "doctor_before",
 )
 _MAPPINGS = ("windows",)  # of window names to lists of strings
-_OBJECTS = ("plan",)  # JSON objects, read as they are (their reader checks their parts)
+_OBJECTS = ("plan", "carried")  # JSON objects, read as they are (their reader checks their parts)
 
 
 _INTS = ("hold_until", "freeze_ms")
@@ -190,14 +205,28 @@ def load(state_dir: Path) -> UpdateState | None:
         raise RecordUnreadable(path, f"cannot be read ({exc.strerror or exc})") from exc
     except ValueError as exc:
         raise RecordUnreadable(path, "is not JSON") from exc
+    state = from_object(data)
+    if state is None:
+        raise RecordUnreadable(path, "is not an update record bosun can read")
+    return state
+
+
+def from_object(data: Any) -> UpdateState | None:
+    """The record <data> holds (a JSON object, as `write` writes one, or the `carried` field), or None
+    when it is no record this code can read (_known_fields)."""
     known = _known_fields(data)
     if known is None:
-        raise RecordUnreadable(path, "is not an update record bosun can read")
+        return None
     for name in _TUPLES:
         known[name] = tuple(known.get(name, ()))
     for name in _MAPPINGS:
         known[name] = {key: tuple(values) for key, values in known.get(name, {}).items()}
     return UpdateState(**known)
+
+
+def as_object(state: UpdateState) -> dict[str, Any]:
+    """<state> as `write` writes it, JSON's types only: what from_object reads back."""
+    return dict(json.loads(json.dumps(dataclasses.asdict(state))))
 
 
 def read(state_dir: Path) -> UpdateState | None:
@@ -218,7 +247,7 @@ def write(state_dir: Path, state: UpdateState) -> None:
     state_dir.mkdir(parents=True, exist_ok=True)
     path = state_dir / STATE_FILE
     tmp = path.with_name(path.name + ".tmp")
-    data = json.dumps(dataclasses.asdict(state), indent=2).encode()
+    data = json.dumps(as_object(state), indent=2).encode()
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
     try:
         journal.write_all(fd, data)
@@ -318,11 +347,71 @@ def stuck(state_dir: Path, now: float) -> str:
     return ""
 
 
-def windows_pending(state_dir: Path) -> bool:
-    """Whether an update is bringing windows along and some are still waited for: the check-in
-    loop then takes a turn at them (`bosun update advance`)."""
+def owing(state: UpdateState | None) -> UpdateState | None:
+    """The record of the update that still waits for windows, as <state> tells it: <state> itself at
+    `agents` with windows pending; the record it carried (carried) when <state> failed or was put back
+    before it took them over; else None."""
+    if state is None:
+        return None
+    if state.step == "agents":
+        return state if state.pending else None
+    if state.step in PUT_BACK and state.carried:
+        return owing(from_object(state.carried))
+    return None
+
+
+def carried_back(state_dir: Path) -> UpdateState | None:
+    """For a caller that holds update.lock: an update that failed or was put back before it took over
+    the windows the last one still waited for (its `carried` record) gives them back, the last
+    record written again as it was, so the check-in loop carries on with them; the record as it is
+    then (None where there is none)."""
     state = read(state_dir)
-    return state is not None and state.step == "agents" and bool(state.pending)
+    if state is None or state.step not in PUT_BACK or not state.carried:
+        return state
+    last = from_object(state.carried)
+    if last is None:
+        return state
+    write(state_dir, last)
+    return last
+
+
+def windows_pending(state_dir: Path) -> bool:
+    """Whether an update is bringing windows along and some are still waited for (owing): the
+    check-in loop then takes a turn at them (`bosun update advance`)."""
+    return owing(read(state_dir)) is not None
+
+
+def loop_turn(state: UpdateState | None) -> bool:
+    """Whether update.lock, held while <state> is the record, is held by the check-in loop's turn at the
+    windows (or a run settling them): the update's own run stopped waiting and handed them over."""
+    return state is not None and state.step == "agents" and bool(state.handed_over)
+
+
+def handed(state: UpdateState) -> UpdateState:
+    """<state> with its windows handed over to the check-in loop now (`handed_over`), unless they were."""
+    if state.handed_over:
+        return state
+    return dataclasses.replace(state, handed_over=datetime.now(UTC).isoformat(timespec="seconds"))
+
+
+def hand_over(state_dir: Path) -> None:
+    """For a caller that holds update.lock, so no update's own run does: a record at `agents` that does not
+    say its windows were handed over (an older bosun's, or one whose update died while it waited) says so."""
+    state = read(state_dir)
+    if state is not None and state.step == "agents" and not state.handed_over:
+        write(state_dir, handed(state))
+
+
+def update_runs(state_dir: Path) -> bool:
+    """Whether an update's own run holds update.lock now: the lock held (running), and not by the
+    check-in loop's turn at the windows an update handed over (loop_turn)."""
+    return running(state_dir) and not loop_turn(read(state_dir))
+
+
+def lock_wait(state_dir: Path) -> float:
+    """How long an update waits for update.lock: TURN_SECONDS while the check-in loop may be taking
+    its turn at the windows (loop_turn), which ends by itself; else no longer than one_update's least."""
+    return TURN_SECONDS if loop_turn(read(state_dir)) else 0.0
 
 
 def main(argv: list[str]) -> int:

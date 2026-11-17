@@ -197,12 +197,67 @@ class RecordTest(unittest.TestCase):
             update_state.write(self.dir, update_state.advanced(state(), step, pending=pending))
             self.assertEqual(update_state.windows_pending(self.dir), expected, (step, pending))
 
+    def test_an_update_that_failed_before_taking_the_windows_over_still_owes_them(self) -> None:
+        """Its record carries the last one's: the windows stay the check-in loop's, which gives them back
+        (carried_back) and takes its turn at them."""
+        last = update_state.advanced(
+            state(), "agents", pending=("api",), windows={"api": ("repo", "restart")}
+        )
+        for step, expected in (("failed", True), ("restored", True), ("rehearsed", False), ("done", False)):
+            record = dataclasses.replace(state(step), carried=update_state.as_object(last))
+            update_state.write(self.dir, record)
+            self.assertEqual(update_state.windows_pending(self.dir), expected, step)
+            self.assertEqual(update_state.owing(record), last if expected else None, step)
+        update_state.write(
+            self.dir, dataclasses.replace(state("failed"), carried=update_state.as_object(last))
+        )
+        self.assertEqual(update_state.carried_back(self.dir), last)
+        self.assertEqual(update_state.read(self.dir), last)
+        self.assertEqual(update_state.carried_back(self.dir), last)  # nothing more to give back
+
+    def test_a_record_carried_reads_back_whole_and_an_older_one_without_the_new_fields(self) -> None:
+        last = update_state.advanced(
+            state(), "agents", pending=("api",), windows={"api": ("repo", "restart")}
+        )
+        record = dataclasses.replace(state("planned"), carried=update_state.as_object(last), handed_over="")
+        update_state.write(self.dir, record)
+        self.assertEqual(update_state.read(self.dir), record)
+        self.assertEqual(update_state.from_object(record.carried), last)
+        older = {
+            k: v
+            for k, v in update_state.as_object(state("agents")).items()
+            if k not in ("carried", "handed_over")
+        }
+        (self.dir / update_state.STATE_FILE).write_text(json.dumps(older))
+        self.assertEqual(update_state.read(self.dir), state("agents"))
+        self.assertIsNone(update_state.from_object({"id": "u1"}))
+
 
 class LockTest(unittest.TestCase):
     def setUp(self) -> None:
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.dir = Path(tmp.name)
+
+    def test_the_check_in_loop_s_turn_is_no_update_running(self) -> None:
+        """Once the update's own run handed its windows over, whoever holds the lock at agents is the
+        check-in loop's turn: the status does not call that an update running, and the next update
+        waits for the turn to end rather than being refused."""
+        agents = update_state.advanced(state(), "agents", pending=("api",))
+        for record, own_run, wait in (
+            (agents, True, 0.0),
+            (
+                dataclasses.replace(agents, handed_over="2026-11-07T14:10:00+00:00"),
+                False,
+                update_state.TURN_SECONDS,
+            ),
+            (state("released"), True, 0.0),
+        ):
+            update_state.write(self.dir, record)
+            self.assertEqual(update_state.lock_wait(self.dir), wait)
+            self.assertFalse(update_state.update_runs(self.dir))  # nothing holds the lock
+            with update_state.one_update(self.dir):
+                self.assertEqual(update_state.update_runs(self.dir), own_run, record.step)
 
     def test_one_update_at_a_time(self) -> None:
         update_state.write(self.dir, state())

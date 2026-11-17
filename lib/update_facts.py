@@ -269,24 +269,20 @@ def loop_runs(root: Path) -> bool:
     return any(_kind(w) == "checkin" for w in open_windows(root))
 
 
-def pending_windows_blocker(state_dir: Path) -> list[str]:
-    """A blocker while the last update still brings windows along: a new update would bring along its
-    own, and the windows still waited for would lose what was done to them, and their notes. A window
-    with a status note (its own, or one written by hand) is answered: `bosun update` settles it first."""
+def owed_windows(state_dir: Path) -> tuple[tuple[str, str], ...]:
+    """The windows the last update still waits for, which the next one takes over, each with what it is
+    owed (update_agents.owed): from the record at `agents` (an answered window, by its own status note
+    or one written by hand, settled first: `bosun update` settles it before it plans), or the one an
+    update that ended with bosun as it was carried (update_state.owing); or, while an update runs, the
+    one it carried (its plan made again after the switch)."""
     state = update_state.read(state_dir)
-    if state is None or state.step != "agents":
-        return []
-    state = update_agents.settled(state, update_notes.Files(state_dir))
-    if not state.pending:
-        return []
-    short = update_gate.SHORT
-    blocker = (
-        f"the last update ({state.from_commit[:short]} -> {state.to_commit[:short]}) still brings along "
-        f"{', '.join(state.pending)}: let each answer its update prompt, end a wait by hand with bosun "
-        "update note --window <w> --status, or take a turn at them with bosun update advance; then run "
-        "bosun update again"
-    )
-    return [blocker]
+    if state is not None and state.step not in ("agents", *update_state.PUT_BACK) and state.carried:
+        state = update_state.from_object(state.carried)
+    last = update_state.owing(state)
+    if last is None:
+        return ()
+    last = update_agents.settled(last, update_notes.Files(state_dir))
+    return tuple((window, update_agents.owed(last, window).value) for window in last.pending)
 
 
 def left_running(state_dir: Path, window: str) -> str:
@@ -517,9 +513,12 @@ def plan_for(old_root: Path, new_root: Path, state_dir: Path, config_dir: Path) 
         *unrenderable,
         *dangling_links(state_dir, config_dir),
         *install_problem(old_root, new_root),
-        *pending_windows_blocker(state_dir),
     ]
     unwritten = migrations.keys_unwritten(config_dir, new.keys - old.keys)
     return dataclasses.replace(
-        plan, blockers=(*plan.blockers, *extra), kept=tuple(kept.items()), unwritten=unwritten
+        plan,
+        blockers=(*plan.blockers, *extra),
+        kept=tuple(kept.items()),
+        unwritten=unwritten,
+        owed=owed_windows(state_dir),
     )

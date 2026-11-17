@@ -15,6 +15,7 @@ import hashlib
 import os
 import shutil
 import tempfile
+from collections.abc import Collection
 from pathlib import Path
 from urllib.parse import quote
 
@@ -69,9 +70,16 @@ def read_note(state_dir: Path, window: str, kind: str) -> str | None:
         return None
 
 
-def clear_notes(state_dir: Path) -> None:
-    """The notes an earlier update left: none of them answers this one."""
-    shutil.rmtree(state_dir / NOTES, ignore_errors=True)
+def clear_notes(state_dir: Path, keep: Collection[str] = ()) -> None:
+    """The notes an earlier update left: none of them answers this one, but those of the windows in
+    <keep>, which this update took over from it with what they gave it (update_agents.take_over)."""
+    if not keep:
+        shutil.rmtree(state_dir / NOTES, ignore_errors=True)
+        return
+    kept = {f"{_file_name(window)}.{kind}" for window in keep for kind in update_agents.KINDS}
+    for path in (state_dir / NOTES).glob("*") if (state_dir / NOTES).is_dir() else ():
+        if path.name not in kept:
+            path.unlink(missing_ok=True)
 
 
 class Files:

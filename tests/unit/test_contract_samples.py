@@ -92,6 +92,7 @@ class WhatTheAppReadsTest(unittest.TestCase):
                 "status-stopped": "stopped",
                 "status-update-done": "ok",
                 "status-update-failed": "ok",
+                "status-update-handed-over": "ok",
                 "status-update-running": "ok",
                 "status-warning": "warning",
                 "status-windows-unreadable": "error",
@@ -112,6 +113,11 @@ class WhatTheAppReadsTest(unittest.TestCase):
                 self.assertEqual((update["state"], update["last"]["step"]), ("none", step))
                 self.assertEqual(update["last"]["started_at"], "2026-11-11T09:59:30+00:00")
 
+    def test_an_update_that_handed_its_windows_over_is_not_running_and_says_what_comes_of_them(self) -> None:
+        sample = SAMPLES["status-update-handed-over"]
+        self.assertEqual((sample["update"]["state"], sample["update"]["last"]["step"]), ("none", "agents"))
+        self.assertIn("acme-web restarts for the update once you answer it", sample["detail"])
+
     def test_running_tells_a_bosun_to_start_from_one_that_runs_with_an_error(self) -> None:
         running = {name: SAMPLES[name]["running"] for name in names("status-")}
         self.assertEqual(
@@ -128,6 +134,7 @@ class WhatTheAppReadsTest(unittest.TestCase):
                 "status-stopped": False,
                 "status-update-done": True,
                 "status-update-failed": True,
+                "status-update-handed-over": True,
                 "status-update-running": True,
                 "status-warning": True,
                 "status-windows-unreadable": None,

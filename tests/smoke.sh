@@ -5463,7 +5463,7 @@ FAKE
   check "... and a versions folder that is someone else's" fails_with "$G_VERSIONS is there, without bosun.git" get_dry
   check "everything in it is in functions, so a download cut short does nothing" bash -c '[ "$(tail -1 "$1/get.sh")" = "main \"\$@\"" ]' _ "$ROOT"
 
-  section update "bosun update (two local commits, fake launchctl)" covers 'install.sh,templates/launchd.plist,docs/updating.md,tests/sandbox/update_patch.sh,tests/sandbox/acme_year.py,lib/update*.py,lib/versions.py,lib/migrations.py,lib/launch_record.py,libexec/bosun-update,libexec/bosun-checkin,libexec/bosun-doctor,libexec/bosun-guard,libexec/bosun-hook,libexec/bosun-kg,libexec/bosun-launch,libexec/bosun-ledger,libexec/bosun-start'
+  section update "bosun update (two local commits, fake launchctl)" covers 'install.sh,templates/launchd.plist,docs/updating.md,tests/sandbox/update_patch.sh,tests/sandbox/acme_year.py,lib/update*.py,lib/versions.py,lib/migrations.py,lib/launch_record.py,libexec/bosun-update,libexec/bosun-checkin,libexec/bosun-doctor,libexec/bosun-guard,libexec/bosun-hook,libexec/bosun-kg,libexec/bosun-launch,libexec/bosun-ledger,libexec/bosun-refresh,libexec/bosun-start,libexec/bosun-status,lib/menu_status*.py'
   # An install of its own, with its own state and config. Upstream holds v1 (this working tree) and
   # v2 (tests/sandbox/update_patch.sh: the ledger's format 2, with a migration that sleeps
   # UPDATE_PATCH_SLEEP seconds while writes are paused, and a changed line of policy.md); the
@@ -5824,8 +5824,9 @@ migrations.run(migrations.Context(pathlib.Path(sys.argv[2]), pathlib.Path(sys.ar
   check "... each through the install link, never v1's own folder" bash -c '[ -n "$1" ] && ! grep -q "bosun-versions/" <<<"$1"' _ "$u_hooks"
 
   # Bringing the agents along. In a tmux server of their own, on v1: the orchestrator, which only
-  # re-reads (v2 changes its policy, nothing it was launched with), and three repo windows whose hook
-  # settings v2 changes: an idle one, one where only background work runs (shell) and a busy one. No
+  # re-reads (v2 changes its policy, nothing it was launched with), and four repo windows whose hook
+  # settings v2 changes: an idle one, one where only background work runs (shell), a busy one, and one
+  # waiting for your answer at a permission prompt (which the update never touches until answered). No
   # checkin window (check-ins off), so only the ticks below take the loop's turn. Each fake Claude
   # registers with the status in $U/status.<window>, keeps the prompt it was started with in
   # $U/prompt.<window>.<pid> and what is pasted into it in $U/pasted.<window>, and answers bosun's update
@@ -5836,7 +5837,7 @@ migrations.run(migrations.Context(pathlib.Path(sys.argv[2]), pathlib.Path(sys.ar
   U_REPO="$U/repos/exporter"
   mkdir -p "$U_REPO/.git"
   printf 'sessions:\n' >"$U_CONFIG/sessions.yml"
-  for status in idle shell busy; do
+  for status in idle shell busy waiting; do
     printf '  - name: u-%s\n    dir: %s\n' "$status" "$U_REPO" >>"$U_CONFIG/sessions.yml"
     echo "$status" >"$U/status.u-$status"
   done
@@ -5875,14 +5876,15 @@ FAKE
     pane_pid="$(tmux -L "$U_TMUX" list-windows -t "=update-test" -F '#{window_name} #{pane_pid}' 2>/dev/null | awk -v w="$1" '$1 == w { print $2 }')"
     [ -n "$pane_pid" ] && bash -c 'source "$1/lib/common.sh"; agent_pid_under "$2"' _ "$ROOT" "$pane_pid"
   }
-  u_claudes() { for w in orch u-idle u-shell u-busy; do u_claude "$w" >/dev/null || return 1; done; }
+  u_claudes() { for w in orch u-idle u-shell u-busy u-waiting; do u_claude "$w" >/dev/null || return 1; done; }
   u_windows() { jq -c --arg w "$1" '.windows[$w]' "$U_STATE/update.json"; }
   ul start >/dev/null 2>&1
-  check "bringing the agents along: four fake Claude windows run on v1" wait_for 20 u_claudes
+  check "bringing the agents along: five fake Claude windows run on v1" wait_for 20 u_claudes
   orch_pid="$(u_claude orch)"
   idle_pid="$(u_claude u-idle)"
   shell_pid="$(u_claude u-shell)"
   busy_pid="$(u_claude u-busy)"
+  waiting_pid="$(u_claude u-waiting)"
   # Two windows bosun did not start, outside the window list with no launch recorded: a plain shell
   # opened in its session (prefix-c), and a Claude started there by hand (no --name), idle.
   cat >"$U/hand-claude" <<HAND
@@ -5899,9 +5901,9 @@ HAND
   hand_pane="$(u_pane u-hand)"
   hand_pid="$(u_claude u-hand)"
   out="$(ul update --dry-run 2>&1)"
-  check "... the plan: the orchestrator re-reads; v2 changed what the repo windows were launched with, so the idle one restarts, the shell one takes stock first, the busy one is waited for" bash -c '
+  check "... the plan: the orchestrator re-reads; v2 changed what the repo windows were launched with, so the idle one restarts, the shell one takes stock first, the busy one is waited for, and the one at a prompt waits for you" bash -c '
     grep -q "orch: re-read" <<<"$1" && grep -q "u-idle: restart$" <<<"$1" && grep -q "u-shell: take stock, then restart" <<<"$1" &&
-      grep -q "u-busy: wait until idle" <<<"$1"' _ "$out"
+      grep -q "u-busy: wait until idle" <<<"$1" && grep -q "u-waiting: ask first" <<<"$1"' _ "$out"
   check "... and the two windows bosun did not start are left as they are" bash -c '
     grep -q "u-mine: not started by bosun: left as it is$" <<<"$1" && grep -q "u-hand: not started by bosun: left as it is$" <<<"$1"' _ "$out"
   # Run so that Ctrl-C reaches it (a job a script starts in the background ignores SIGINT).
@@ -5909,14 +5911,14 @@ HAND
     "${U_ENV[@]}" "${U_LIVE[@]}" "$U_LINK/bin/bosun" update --yes >"$U/agents.out" 2>&1 &
   updating=$!
   u_pending_is() { [ "$(jq -c .pending "$U_STATE/update.json" 2>/dev/null)" = "$1" ]; }
-  u_waits_for_busy() { # the update brought every window along but the busy one; if not, where it is
-    wait_for 180 u_pending_is '["u-busy"]' || {
+  u_waits_for_busy() { # the update brought every window along but the busy one and the one at a prompt; if not, where it is
+    wait_for 180 u_pending_is '["u-busy","u-waiting"]' || {
       jq -c '{step, pending, windows}' "$U_STATE/update.json"
       tail -5 "$U/agents.out"
       return 1
     }
   }
-  check "... the update brings the orchestrator, the idle and the shell window along, and waits for the busy one" u_waits_for_busy
+  check "... the update brings the orchestrator, the idle and the shell window along, and waits for the busy one (and the one at a prompt)" u_waits_for_busy
   check "... the orchestrator kept running, got the update prompt pasted in, naming policy.md, and its answer ended its wait" bash -c '
     jq -e ".windows.orch == [\"orchestrator\", \"re-read\", \"asked to re-read\", \"answered\"]" "$1/update.json" >/dev/null && kill -0 "$2" &&
       grep -q "this session was kept running. Re-read .*/orchestrator/policy.md" "$3/pasted.orch"' _ "$U_STATE" "$orch_pid" "$U"
@@ -5928,15 +5930,18 @@ HAND
     jq -e ".windows[\"u-shell\"] == [\"repo\", \"take stock, then restart\", \"asked to take stock\", \"restarted\", \"answered\"]" "$1/update.json" >/dev/null &&
       ! kill -0 "$2" 2>/dev/null && grep -l "this session was restarted" "$3"/prompt.u-shell.* | xargs grep -q "sleep 600: the wait for CI"' _ "$U_STATE" "$shell_pid" "$U"
   check "... the busy one is left running, never restarted" bash -c 'kill -0 "$1" && [ "$(jq -c ".windows[\"u-busy\"]" "$2/update.json")" = "[\"repo\",\"wait until idle\"]" ]' _ "$busy_pid" "$U_STATE"
-  check "... and the update says it waits for it" wait_for 120 grep -q "Waiting for u-busy" "$U/agents.out"
+  check "... and so is the one at a prompt, nothing pasted into it" bash -c '
+    kill -0 "$1" && [ "$(jq -c ".windows[\"u-waiting\"]" "$2/update.json")" = "[\"repo\",\"ask first\"]" ] && [ ! -e "$3/pasted.u-waiting" ]' _ "$waiting_pid" "$U_STATE" "$U"
+  check "... and the update says it waits for them: a busy window keeps the wait going" wait_for 120 grep -q "Waiting for u-busy, u-waiting" "$U/agents.out"
   kill -INT "$updating"
   wait "$updating"
   rc=$?
-  check "Ctrl-C stops the wait (exit 0), the record at agents; with no check-in loop running, it says bosun update advance finishes the busy window" bash -c '
-    [ "$1" = 0 ] && grep -q "Stopped waiting: no check-in loop runs here: bosun update advance, run by hand, takes a turn at u-busy" "$2" &&
-      jq -e ".step == \"agents\" and .pending == [\"u-busy\"]" "$3/update.json" >/dev/null' _ "$rc" "$U/agents.out" "$U_STATE"
-  check "... then the summary, the busy window still waited for, the shell one's restart after taking stock" bash -c '
-    grep -qE "^  u-busy +nothing yet; still waited for$" "$1" && grep -qE "^  u-shell +asked to take stock, restarted; resumed after the update$" "$1" &&
+  check "Ctrl-C stops the wait (exit 0), the record at agents; with no check-in loop running, it says bosun update advance finishes the windows" bash -c '
+    [ "$1" = 0 ] && grep -q "Stopped waiting: no check-in loop runs here: bosun update advance, run by hand, takes a turn at u-busy, u-waiting" "$2" &&
+      jq -e ".step == \"agents\" and .pending == [\"u-busy\", \"u-waiting\"] and (.handed_over | length > 0)" "$3/update.json" >/dev/null' _ "$rc" "$U/agents.out" "$U_STATE"
+  check "... then the summary, the busy window and the one at a prompt still waited for, the shell one's restart after taking stock" bash -c '
+    grep -qE "^  u-busy +nothing yet; still waited for$" "$1" && grep -qE "^  u-waiting +nothing yet; still waited for$" "$1" &&
+      grep -qE "^  u-shell +asked to take stock, restarted; resumed after the update$" "$1" &&
       [ "$(tail -1 "$1")" = "Going back: docs/updating.md#going-back" ] && [ ! -e "$(jq -r .backup "$2/update.json")/summary.md" ]' _ "$U/agents.out" "$U_STATE"
   check "... with the link at v2" u_at "$U_V2"
   check "the windows bosun did not start were left as they are: their panes, the Claude in one, nothing pasted, no bosun launch" bash -c '
@@ -5954,12 +5959,53 @@ HAND
   out="$(uc)"
   check "... and restarts it once it is idle" contains "$out" "bosun update: u-busy: restarted"
   check "... with the update prompt, which it answers" wait_for 15 test -s "$U_STATE/update/notes/u-busy.status"
+  out="$out$(uc)" # the restart's tick may take the answer itself: refresh waits for the agent to start
+  check "... and a tick takes its answer; the one at a prompt is still waited for" bash -c '
+    grep -q "u-busy: answered: resumed after the update" <<<"$1" && jq -e ".step == \"agents\" and .pending == [\"u-waiting\"]" "$2/update.json" >/dev/null' _ "$out" "$U_STATE"
+  check "... and a tick leaves it alone while it waits for you" bash -c 'kill -0 "$1" && ! grep -q "bosun update" <<<"$2"' _ "$waiting_pid" "$(uc)"
+  u_status() { "${U_ENV[@]}" "${U_LIVE[@]}" "$U_LINK/bin/bosun" status --json 2>/dev/null; }
+  check "the status, its update handed to the check-in loop: no update running, and a line for the window at a prompt" bash -c '
+    jq -e ".update.state == \"none\" and (.detail | index(\"u-waiting restarts for the update once you answer it\"))" <<<"$1" >/dev/null' _ "$(u_status)"
+
+  # The next version while the last update still waits for a window: it is not blocked, and takes the window
+  # over. v3 changes nothing the windows were launched with, so the windows v2 restarted are left alone; the one
+  # at a prompt was launched on v1, so it is still owed its restart.
+  printf '\nv3: a line of the readme.\n' >>"$U_UP/README.md"
+  ug commit -qam "v3, a line of the readme"
+  U_V3_COMMIT="$(ug rev-parse HEAD)"
+  u_last_backup="$(jq -r .backup "$U_STATE/update.json")"
+  u_last_id="$(jq -r .id "$U_STATE/update.json")"
+  out="$(ul update --dry-run 2>&1)"
+  check "a next update while a window is still owed: the plan is not blocked, and lists it as owed from the last update" bash -c '
+    ! grep -q "The update is blocked" <<<"$1" && grep -q "^Still owed from the last update, which this one takes over:" <<<"$1" &&
+      grep -qx "  u-waiting: a restart" <<<"$1" && grep -qx "  u-waiting: ask first" <<<"$1" && grep -qx "  u-busy: leave" <<<"$1"' _ "$out"
+  ul update --yes >"$U/takeover.out" 2>&1
+  rc=$?
+  check "... it takes the window over, and its wait ends at once, as the window waits for your answer (exit 0)" bash -c '
+    [ "$1" = 0 ] && grep -qx "Stopped waiting: every window still waited for waits for your answer." "$2" &&
+      grep -qx "  u-waiting waits for your answer at its prompt; once you answer, bosun update advance, run by hand, restarts it for the update" "$2"' _ "$rc" "$U/takeover.out"
+  check "... its record carries the last one and brings the window along, handed over" bash -c '
+    jq -e --arg last "$2" ".step == \"agents\" and .pending == [\"u-waiting\"] and .windows[\"u-waiting\"] == [\"repo\", \"ask first\"] and
+      .carried.id == \$last and (.handed_over | length > 0)" "$1/update.json" >/dev/null' _ "$U_STATE" "$u_last_id"
+  check "... the last update's summary saved next to its backup, the window carried into the next update" bash -c '
+    grep -qE "^  u-waiting +carried into the next update$" "$1/summary.md" && grep -qE "^  u-busy +restarted; resumed after the update$" "$1/summary.md" &&
+      grep -qE "^  orch +asked to re-read policy.md; re-read, checked in, carrying on$" "$1/summary.md"' _ "$u_last_backup"
+  check "... and the new summary says it is still waited for, owed by the last update too" \
+    grep -qE "^  u-waiting +nothing yet; still waited for \(owed by the last update too\)$" "$U/takeover.out"
+  check "... the window untouched, the link at v3, and the status calls no update running" bash -c '
+    kill -0 "$1" && [ "$(cd "$2" && pwd -P)" = "$3" ] && jq -e ".update.state == \"none\"" <<<"$4" >/dev/null' \
+    _ "$waiting_pid" "$U_LINK" "$(cd "$U_VERSIONS" && pwd -P)/${U_V3_COMMIT:0:12}" "$(u_status)"
+  echo idle >"$U/status.u-waiting"
+  printf '{"pid":%d,"status":"idle","version":"2.0.0","statusUpdatedAt":%d,"name":"u-waiting"}' "$waiting_pid" "$(date +%s)000" >"$HOME/.claude/sessions/$waiting_pid.json"
   out="$(uc)"
-  check "... and the next tick takes its answer: the update is done" bash -c '
-    grep -q "u-busy: answered: resumed after the update" <<<"$1" && jq -e ".step == \"done\" and .pending == []" "$2/update.json" >/dev/null' _ "$out" "$U_STATE"
-  check "... and saves its summary next to the backup, with every window's outcome" bash -c '
+  check "once you answered it, a tick restarts it for the update" bash -c 'grep -q "bosun update: u-waiting: restarted" <<<"$1" && ! kill -0 "$2" 2>/dev/null' _ "$out" "$waiting_pid"
+  check "... with the update prompt, which it answers" wait_for 15 test -s "$U_STATE/update/notes/u-waiting.status"
+  out="$out$(uc)"
+  check "... and a tick takes its answer: the update is done" bash -c '
+    grep -q "u-waiting: answered: resumed after the update" <<<"$1" && jq -e ".step == \"done\" and .pending == []" "$2/update.json" >/dev/null' _ "$out" "$U_STATE"
+  check "... and saves its summary next to its backup, saying the window restarted, owed by the last update too" bash -c '
     backup="$(jq -r .backup "$2/update.json")" && grep -qF "bosun update: done; its summary is in $backup/summary.md" <<<"$1" &&
-      grep -qE "^  u-busy +restarted; resumed after the update$" "$backup/summary.md" && grep -qE "^  orch +asked to re-read policy.md; re-read, checked in, carrying on$" "$backup/summary.md"' _ "$out" "$U_STATE"
+      grep -qE "^  u-waiting +restarted; resumed after the update \(owed by the last update too\)$" "$backup/summary.md"' _ "$out" "$U_STATE"
   check "... after which a tick has nothing to do" bash -c '! grep -q "bosun update" <<<"$1"' _ "$(uc)"
   tmux -L "$U_TMUX" kill-server 2>/dev/null
   rm -f "$U_CONFIG/sessions.yml"
@@ -5969,8 +6015,8 @@ HAND
   # `morning --now` renders fine, and goes on being reloaded: a job that fails does not stop the others).
   ug rm -q templates/launchd.plist
   printf '<plist><dict><string>__LABEL__</string>\n' >"$U_UP/templates/launchd-watchdog.plist"
-  ug commit -qam "v3, its launchd templates broken"
-  U_V3_COMMIT="$(ug rev-parse HEAD)"
+  ug commit -qam "v4, its launchd templates broken"
+  U_V4_COMMIT="$(ug rev-parse HEAD)"
   ub update --dry-run >"$U/broken-plan.out" 2>&1
   check "a next version whose launchd templates are broken: its plan is blocked, naming each job" bash -c '
     grep -q "The update is blocked." "$1" && grep -q "could not render the plist of com.bosun.update-test;" "$1" &&
@@ -5980,7 +6026,7 @@ HAND
   cp "$u_jobs.watchdog.plist" "$U/watchdog.plist"
   u_bootouts() { grep -cE "launchctl bootout gui/$(id -u)/com.bosun.update-test(\.watchdog)?\$" "$WORK/system.log"; }
   bootouts="$(u_bootouts)"
-  "${U_ENV[@]}" bash -c 'source "$1/lib/common.sh"; load_config; reload_changed_jobs' _ "$U_VERSIONS/${U_V3_COMMIT:0:12}" >/dev/null 2>&1
+  "${U_ENV[@]}" bash -c 'source "$1/lib/common.sh"; load_config; reload_changed_jobs' _ "$U_VERSIONS/${U_V4_COMMIT:0:12}" >/dev/null 2>&1
   rc=$?
   check "... and reloading its jobs fails (exit 1), leaving each installed plist as it was, and loaded" bash -c '
     [ "$1" = 1 ] && cmp -s "$2.plist" "$3/morning.plist" && cmp -s "$2.watchdog.plist" "$3/watchdog.plist" && [ "$4" = "$5" ]' \

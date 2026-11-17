@@ -35,6 +35,12 @@ TASK = "orchestrator/tasks/{}.md"  # a task type's built-in text
 # The rules every task gets, whatever its types: a site's own _common.md only adds to them.
 COMMON = TASK.format("_common")
 
+OWED = "Still owed from the last update, which this one takes over:"
+OWED_WHAT = {
+    "restart": "a restart",
+    "re-read": "a re-read of its prompts",
+    "answer": "its answer to the update",
+}
 CUT_SHORT = "a kg forget was cut short: the next kg write finishes it, then run bosun update again"
 GOING_BACK = "going back is not supported: the {store} store is at format {found}, newer than {target}"
 
@@ -120,6 +126,9 @@ class Plan:
     # The console is bosun's launchd job, loaded and wanted: the update restarts it after the switch
     # (an older record has none: said as before).
     console_job: bool = False
+    # The windows the last update still waits for, which this one takes over, each with what it is owed
+    # (update_agents.Owed: restart, re-read, answer); an older record has none.
+    owed: tuple[tuple[str, str], ...] = ()
 
 
 def _matches(path: str, patterns: Sequence[str]) -> bool:
@@ -266,6 +275,7 @@ _READ: dict[str, tuple[Callable[[Any], Any], Any]] = {
     "kept": (_pairs, ()),
     "unwritten": (_strings, ()),
     "console_job": (lambda value: value is True, False),
+    "owed": (_pairs, ()),
 }
 
 
@@ -319,6 +329,7 @@ def render_plan(plan: Plan) -> str:
     out += _section("Config keys renamed or removed:", [_rename_line(a, b) for a, b in plan.renames])
     out += _section(f"Prompts changed ({len(plan.prompts)}):", plan.prompts)
     out += _section("Windows:", [_window_line(n, t) for n, t in plan.windows])
+    out += _section(OWED, [f"{name}: {OWED_WHAT.get(what, what)}" for name, what in plan.owed])
     out += _section("Jobs to reload:", plan.jobs)
     out += _section("Console:", _console_lines(plan))
     out += _section("Handed tasks keep their old text (bosun delegate --update):", plan.handed)
