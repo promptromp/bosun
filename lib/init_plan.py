@@ -871,6 +871,7 @@ class Plan:
     app_verb: str = "install"  # `bosun app install`, or `update` where the app is already there
     console_before: str = "0"  # BOSUN_CONSOLE_ALWAYS as bosun.env had it, which a refused install restores
     cancel_wake: str = ""  # the sudo line that cancels bosun's own repeating wake, the answer being no
+    cancel_event: str = ""  # that wake, as pmset prints it: install.sh --cancel-wake cancels only it
 
 
 def env_change(facts: Facts, answers: Answers) -> FileChange:
@@ -974,10 +975,11 @@ def wake_command(facts: Facts, answers: Answers) -> str:
     return "" if current else f"sudo pmset repeat wakeorpoweron {answers.days} {wake_at}:00"
 
 
-def cancel_wake_command(facts: Facts, answers: Answers) -> str:
-    """The sudo line that cancels bosun's own repeating wake, when the answer is no and it is set: on a
-    re-run, the wake bosun.env's schedule sets, alone among the repeating events (pmset cancels them all, as
-    `bosun uninstall` asks for it only then); else nothing."""
+def wake_to_cancel(facts: Facts, answers: Answers) -> str:
+    """The repeating event, as pmset prints it, that a no cancels: on a re-run, the wake that the schedule
+    bosun.env has when init starts sets (not the answers', which may move it), alone among the repeating
+    events (pmset cancels them all, as `bosun uninstall` asks for it only then); else nothing. install.sh
+    --cancel-wake cancels only while pmset's events are exactly this one."""
     if answers.wake or not facts.env or len(facts.repeating) != 1:
         return ""
     days = facts.env.get("BOSUN_DAYS", DEFAULT_DAYS)
@@ -986,7 +988,12 @@ def cancel_wake_command(facts: Facts, answers: Answers) -> str:
         wake_at = clock(minutes(facts.env.get("BOSUN_START_TIME", DEFAULT_START)) + delay)
     except ValueError:  # a schedule that does not parse sets no wake of bosun's
         return ""
-    return CANCEL_WAKE if is_our_wake(facts.repeating[0], days, wake_at, days) else ""
+    return facts.repeating[0] if is_our_wake(facts.repeating[0], days, wake_at, days) else ""
+
+
+def cancel_wake_command(facts: Facts, answers: Answers) -> str:
+    """The sudo line that cancels bosun's own repeating wake (wake_to_cancel), or nothing."""
+    return CANCEL_WAKE if wake_to_cancel(facts, answers) else ""
 
 
 def windows_reason(facts: Facts, answers: Answers) -> list[str]:
@@ -1143,6 +1150,7 @@ def build_plan(facts: Facts, answers: Answers, state: DirState, force: bool = Fa
         app_verb="update" if facts.app_present else "install",
         console_before=facts.env.get("BOSUN_CONSOLE_ALWAYS", "0"),
         cancel_wake=cancel_wake_command(facts, answers),
+        cancel_event=wake_to_cancel(facts, answers),
     )
 
 
@@ -1189,7 +1197,8 @@ def step_lines(plan: Plan, home: str) -> list[str]:
     lines = []
     if plan.trust:
         lines.append(f"  bosun trust --any {' '.join(tilde(d, home) for d in plan.trust)}")
-    flag = " --with-wake" if plan.wake_command else " --cancel-wake" if plan.cancel_wake else ""
+    cancel = f" --cancel-wake {shlex.quote(plan.cancel_event)}" if plan.cancel_wake else ""
+    flag = " --with-wake" if plan.wake_command else cancel
     lines.append(f"  ./install.sh{flag}   links `bosun`, loads its launchd jobs, runs `bosun doctor`")
     if plan.wake_command:
         lines.append(f"  {plan.wake_command}   wakes the Mac on schedule; pmset needs admin rights")

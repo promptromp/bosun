@@ -632,7 +632,14 @@ class PlanTest(unittest.TestCase):
         env = {"BOSUN_DAYS": "MTWRF", "BOSUN_START_TIME": "09:00"}
         rerun = facts(env=env, repeating_wake=ours, repeating=(ours,))
         plan = self.plan(rerun, Answers(wake=False))
-        self.assertEqual(plan.cancel_wake, "sudo pmset repeat cancel")
+        self.assertEqual((plan.cancel_wake, plan.cancel_event), ("sudo pmset repeat cancel", ours))
+        moved = self.plan(
+            rerun, Answers(wake=False, start="10:00", days="MWF")
+        )  # judged by bosun.env's schedule
+        self.assertEqual(moved.cancel_event, ours)
+        self.assertIn(
+            f"./install.sh --cancel-wake '{ours}'", "\n".join(init_plan.step_lines(moved, "/Users/me"))
+        )
         steps = "\n".join(init_plan.step_lines(plan, "/Users/me"))
         self.assertIn("./install.sh --cancel-wake", steps)
         self.assertIn("sudo pmset repeat cancel   cancels bosun's repeating wake", steps)

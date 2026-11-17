@@ -815,7 +815,15 @@ class CommandTest(WorldTest):
         self.bosun_init("--answers", self.answers_file(menu_app=False))
         self.pmset_schedule = "Repeating power events:\n  wakepoweron at 8:01AM weekdays only\n"
         self.bosun_init("--answers", self.answers_file(wake=False, menu_app=False))
-        self.assertEqual(self.calls[-1], ["install.sh", "--cancel-wake"])
+        ours = "wakepoweron at 8:01AM weekdays only"
+        self.assertEqual(self.calls[-1], ["install.sh", "--cancel-wake", ours])
+        # a no that also moves the start: what is cancelled is the wake bosun.env's old schedule set
+        self.bosun_init("--answers", self.answers_file(wake=False, start="09:00", menu_app=False))
+        self.assertEqual(self.calls[-1], ["install.sh", "--cancel-wake", ours])
+        self.assertIn('BOSUN_START_TIME="09:00"', (self.config / "bosun.env").read_text())
+        self.pmset_schedule = "Repeating power events:\n  wakepoweron at 8:01AM weekdays only\n"
+        self.bosun_init("--answers", self.answers_file(wake=False, start="08:00", menu_app=False))
+        self.assertEqual(self.calls[-1], ["install.sh"])  # 08:01 is not the wake bosun.env's 09:00 sets
         with mock.patch.object(init, "can_ask_for_sudo", return_value=False):
             _, out, _ = self.bosun_init("--answers", self.answers_file(wake=False, menu_app=False))
         self.assertIn(

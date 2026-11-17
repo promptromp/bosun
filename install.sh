@@ -1,5 +1,5 @@
 #!/bin/bash
-# Usage: ./install.sh [--example <name>] [--with-wake | --cancel-wake]
+# Usage: ./install.sh [--example <name>] [--with-wake | --cancel-wake <event>]
 #
 # Idempotent. Safe to re-run after editing bosun.env.
 #   1. seed ~/.config/bosun from examples/<name> (default: generic); never overwrites
@@ -10,14 +10,15 @@
 #      BOSUN_LEARN_ENABLED=1; and the console, with BOSUN_CONSOLE_ALWAYS=1. One whose setting is off is removed
 #   3. print (or with --with-wake, run via sudo) the pmset repeating-wake command, unless the wake is bosun's
 #      already; with BOSUN_WAKE=0 (the wake is not bosun's to set) neither, unless --with-wake. --cancel-wake
-#      cancels bosun's own (sudo pmset repeat cancel: bosun init passes it after a no, when bosun's is the only
-#      repeating event); a sudo that is refused is a warning, never a failed install
+#      <event> cancels the repeating event bosun init judged bosun's own (as pmset prints it, "wakepoweron at
+#      8:01AM weekdays only"; init passes it after a no, when bosun's is the only one): sudo pmset repeat cancel,
+#      which cancels every repeating event, so only while pmset's repeating events are exactly that one, and
+#      otherwise it refuses, saying why. A refusal, or a sudo that is refused, is a warning, never a failed install
 #   4. link `bosun` into ~/.local/bin
 #   5. run `bosun doctor`
 # A job it loads fresh, or whose time it moves, leaves the time it was loaded ($BOSUN_STATE_DIR/loaded-<morning|learn|
 # watchdog>, reload_job in lib/common.sh): the watchdog owes no run that was due before then, which launchd would
-# not run. --cancel-wake looks again first: it refuses, saying why, unless pmset has exactly one repeating event,
-# bosun's own left from before (BOSUN_WAKE=0).
+# not run.
 # Exit status: 0 done; 1 a step failed (its ERROR line says which), and the steps after it were not made; 2 bad
 # usage; 3 every step was made, and `bosun doctor` found problems (its FAIL lines).
 set -uo pipefail
@@ -27,7 +28,7 @@ DOCTOR_FOUND_PROBLEMS=3 # lib/init.py goes on to the app and the start on it, an
 
 EXAMPLE=generic
 WITH_WAKE=0
-CANCEL_WAKE=0
+CANCEL_EVENT="" # --cancel-wake's: the repeating event bosun init judged bosun's own
 while [ $# -gt 0 ]; do
   case "$1" in
     --example)
@@ -35,7 +36,10 @@ while [ $# -gt 0 ]; do
       shift
       ;;
     --with-wake) WITH_WAKE=1 ;;
-    --cancel-wake) CANCEL_WAKE=1 ;;
+    --cancel-wake)
+      CANCEL_EVENT="${2:?the repeating event to cancel, as pmset prints it}"
+      shift
+      ;;
     -h | --help)
       usage
       exit 0
@@ -99,8 +103,8 @@ log "the morning run at $BOSUN_START_TIME on $BOSUN_DAYS; bosun watchdog every $
 # Wake just after the job time (set_wake, lib/common.sh), when the wake is bosun's to set.
 if [ "$WITH_WAKE" = "1" ]; then
   set_wake
-elif [ "$CANCEL_WAKE" = "1" ]; then
-  cancel_wake || log "WARN: bosun's repeating wake was not cancelled (see above; bosun doctor says what is set)"
+elif [ -n "$CANCEL_EVENT" ]; then
+  cancel_wake "$CANCEL_EVENT" || log "WARN: bosun's repeating wake was not cancelled (see above; bosun doctor says what is set)"
 elif [ "$BOSUN_WAKE" != "1" ]; then
   log "the Mac's repeating wake is not bosun's to set (BOSUN_WAKE=0): pmset is left as it is"
 elif [ "$(wake_owner "")" = ours ]; then # "": pmset is asked

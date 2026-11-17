@@ -4118,15 +4118,19 @@ for path in sys.argv[1:]:
   check "install says the wake is bosun's already, and prints no sudo line to set it again" bash -c 'grep -q "repeating wake is bosun'"'"'s already" <<<"$1" && ! grep -q "run once:" <<<"$1"' _ "$out"
   check "doctor with BOSUN_WAKE=0 and bosun's own wake still set warns that it is left from before, and how to cancel it" contains "$(env "${ours_env[@]}" BOSUN_WAKE=0 "$BOSUN" doctor 2>&1)" "warn  pmset still has bosun's repeating wake:"
   check "... and with BOSUN_WAKE=1 it is bosun's" contains "$(env "${ours_env[@]}" BOSUN_WAKE=1 "$BOSUN" doctor 2>&1)" "ok    pmset repeating wake:"
-  # install.sh --cancel-wake (cancel_wake): pmset cancels every repeating event, so it looks again before it does.
-  cancel() { env BOSUN_CONFIG_DIR="$INSTALL_CFG" "${ours_env[@]}" "$@" bash -c 'source "$1/lib/common.sh"; load_config; cancel_wake' _ "$ROOT"; }
-  printf 'Repeating power events:\n  wakepoweron at 8:01AM weekdays only\n  shutdown at 11:00PM every day\n' >"$WORK/pmset-sched"
-  check "cancelling bosun's wake is refused while pmset has another repeating event, which it would take too" fails_with "pmset has 2 repeating events, and cancelling takes them all" cancel BOSUN_WAKE=0
-  printf 'Repeating power events:\n  wakepoweron at 8:01AM weekdays only\n' >"$WORK/pmset-sched"
-  check "... and while the wake is bosun's to set (BOSUN_WAKE=1): no leftover" fails_with "it is not bosun's own left from before (whose: ours; BOSUN_WAKE=1)" cancel BOSUN_WAKE=1
+  # install.sh --cancel-wake <event> (cancel_wake): it cancels only while pmset's repeating events are exactly the
+  # event bosun init judged bosun's (pmset cancels them all), whatever schedule bosun.env has by then.
+  cancel() { env BOSUN_CONFIG_DIR="$INSTALL_CFG" BOSUN_START_TIME=09:00 bash -c 'source "$1/lib/common.sh"; load_config; cancel_wake "$2"' _ "$ROOT" "$1"; }
+  ours_event="wakepoweron at 8:01AM weekdays only"
+  printf 'Repeating power events:\n  %s\n  shutdown at 11:00PM every day\n' "$ours_event" >"$WORK/pmset-sched"
+  check "cancelling bosun's wake is refused while pmset has another repeating event, which it would take too" fails_with "pmset has 2 repeating events, and cancelling takes them all" cancel "$ours_event"
+  printf 'Repeating power events:\n  wakepoweron at 6:30AM every day\n' >"$WORK/pmset-sched"
+  check "... and when pmset's is not the event init judged bosun's (given by hand, or changed since)" fails_with "pmset's (wakepoweron at 6:30AM every day) is not the one bosun init judged bosun's ($ours_event)" cancel "$ours_event"
   check "... neither ran pmset repeat cancel" bash -c '! grep -q "repeat cancel" "$1"' _ "$WORK/system.log"
-  cancel BOSUN_WAKE=0 >/dev/null 2>&1
-  check "bosun's own wake alone, with BOSUN_WAKE=0, is cancelled with sudo pmset repeat cancel" grep -q "sudo pmset repeat cancel" "$WORK/system.log"
+  printf 'Repeating power events:\n  %s\n' "$ours_event" >"$WORK/pmset-sched"
+  cancel "$ours_event" >/dev/null 2>&1
+  check "that event alone is cancelled with sudo pmset repeat cancel, though bosun.env's start has moved to 09:00 since (a no that moved it)" grep -q "sudo pmset repeat cancel" "$WORK/system.log"
+  check "with no repeating event left there is nothing to cancel, and that is no failure" cancel "$ours_event"
   rm -f "$WORK/pmset-sched"
   # A ledger of its own: a link to an item that is gone (an old prune) warns and adds no failure;
   # a damaged journal fails. (Doctor's login check calls the fake claude, which writes the ledger.)

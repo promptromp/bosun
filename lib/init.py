@@ -212,13 +212,13 @@ def run_steps(plan: Plan) -> Installed:
     flags = []
     cancel_note = f" ({init_plan.CANCEL_TAKES_ALL})"
     for command, flag, note in (
-        (plan.wake_command, "--with-wake", ""),
-        (plan.cancel_wake, "--cancel-wake", cancel_note),
+        (plan.wake_command, ["--with-wake"], ""),
+        (plan.cancel_wake, ["--cancel-wake", plan.cancel_event], cancel_note),
     ):
         if not command:
             continue
         if can_ask_for_sudo():
-            flags.append(flag)
+            flags += flag
         else:
             print(
                 f"No terminal to ask for your password, so run this once yourself: {command}{note}",
