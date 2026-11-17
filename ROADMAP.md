@@ -402,8 +402,8 @@ and init, update and the watchdog bringing the app along. Run on a real Mac in t
 
 **Done (2026-11-13), part 2, the app itself** ([plan](docs/plans/menu-bar-app.md)): the Swift menu bar app (`app/`), its
 build, CI's `app` job, the release workflow and the VM suite (`tests/sandbox.sh mac app`); the guide is
-[The menu bar app](docs/menu-bar-app.md). Not yet released: `bosun app install` refuses until
-`app/publisher.json` has a Team ID and the publisher's secrets exist, so no install offers the app yet.
+[The menu bar app](docs/menu-bar-app.md). Released: the publisher's Team ID is in `app/publisher.json`, the
+release workflow signs and notarizes each `app-v<version>` tag, and `bosun init` installs the app.
 
 **Done (2026-11-14), the control panel** ([design](docs/design/control-panel.md), [plan](docs/plans/control-panel.md)):
 bosun.app 0.1.3 is there from login whatever the hour, with Stop bosun… and Quit bosun.app apart, a Settings window
