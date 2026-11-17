@@ -34,7 +34,11 @@ and a field is only ever added. A new level is a new word in `level`, which the 
 it knows it (never as all well); `running` says whether bosun's windows are open (null when they could not be
 read), which with the level tells a bosun to start from one that runs with an error. `update.last` is the
 record the last update left (`id`, `started_at`, `step`; null when there is none): an update that ended before
-any look saw it running is told by it, so the app can end "Updating…" for the one it started. `starting` is
+any look saw it running is told by it, so the app can end "Updating…" for the one it started. An update
+whose own run ended with windows still to bring along (left to the check-in loop: a window waiting at a
+prompt, or after a Ctrl-C) is not running, even while the loop's turn holds its lock; each such window is a
+line of the detail instead ("orchestrator restarts for the update once you answer it"), with no new field.
+`starting` is
 true exactly when the sentence says "bosun is starting (the morning run)": no window open, the gate says the
 morning run is going or about to, and the level is not an error (which names the run as failed instead). It is
 a fact of its own, not a word for the app to find in the sentence, because outside your hours the same run
@@ -145,6 +149,9 @@ class StatusFacts:
     gate: SessionGate | None = None  # None when it could not be told (the checks could not be made)
     update_running: bool = False
     update_waiting_for: tuple[str, ...] = ()
+    # The windows an update handed to the check-in loop once its own run ended, each with what it is owed
+    # (update_agents.Owed: restart, re-read, answer), said as a line each (owed_lines).
+    update_owed: tuple[tuple[str, str], ...] = ()
     update_last: LastUpdate | None = None  # the record the last update left (it stays after it ends)
     console_running: bool = False
     keep_awake_until: datetime | None = None  # local and naive
@@ -360,7 +367,34 @@ def state_lines(facts: StatusFacts, count: int, waiting: list[str], now: datetim
     if facts.update_running:
         wait = f", waiting for {', '.join(facts.update_waiting_for)}" if facts.update_waiting_for else ""
         lines.append(f"An update is running{wait}")
+    return [*lines, *owed_lines(facts)]
+
+
+# What a window an update handed over still gets, and when (OWED_WHEN: by its status now).
+OWED_WHAT = {
+    "restart": "restarts for the update",
+    "re-read": "re-reads its prompts for the update",
+    "answer": "carries on with the update",
+}
+OWED_WHEN = {"waiting": "once you answer it"}
+OWED_LATER = "once its turn is over"
+
+
+def owed_lines(facts: StatusFacts) -> list[str]:
+    """A line for each window an update handed to the check-in loop: what it gets, once you answer it
+    (it waits for you at a prompt) or once its turn is over."""
+    statuses = {str(w.get("name")): agent_status(w) for w in facts.windows or []}
+    lines = []
+    for window, what in facts.update_owed:
+        when = OWED_WHEN.get(statuses.get(window, ""), OWED_LATER)
+        lines.append(f"{window} {OWED_WHAT.get(what, OWED_WHAT['restart'])} {when}")
     return lines
+
+
+def agent_status(window: Mapping[str, Any]) -> str:
+    """The status of the agent in <window> (as `bosun sessions --json` lists it); "" when none runs."""
+    agent = window.get("agent")
+    return str(agent.get("status") or "") if isinstance(agent, Mapping) else ""
 
 
 def gate_says(facts: StatusFacts, count: int | None, kind: str) -> bool:

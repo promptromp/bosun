@@ -18,11 +18,12 @@ import update_facts
 import update_gate
 import update_notes
 import update_plan
+import update_state
 import versions
 from test_update import FROM, TO, World
 
 
-class BlockerTest(World):
+class PlanForTest(World):
     def plan(self) -> update_plan.Plan:
         with (
             mock.patch.object(
@@ -56,24 +57,42 @@ class BlockerTest(World):
         self.assertIn(str(self.config / "policy.md"), blocker)
         self.assertIn("no backup can copy it", blocker)
 
-    def test_a_window_answered_by_hand_does_not_block(self) -> None:
+    def test_windows_an_update_still_brings_along_never_block_the_next_one(self) -> None:
+        """Decision 3: the next update takes them over; its plan lists each with what it is owed."""
+        self.record(
+            "agents",
+            pending=("api", "orchestrator", "web"),
+            windows={
+                "api": ("repo", "wait until idle"),
+                "orchestrator": ("orchestrator", "re-read"),
+                "web": ("repo", "restart", "restarted"),
+            },
+        )
+        plan = self.plan()
+        self.assertEqual(plan.blockers, ())
+        self.assertEqual(plan.owed, (("api", "restart"), ("orchestrator", "re-read"), ("web", "answer")))
+        text = update_plan.render_plan(plan)
+        self.assertIn("Still owed from the last update, which this one takes over:", text)
+        self.assertIn("  web: its answer to the update", text)
+        self.record("agents")
+        self.assertEqual(self.plan().owed, ())
+
+    def test_a_window_answered_by_hand_is_owed_nothing(self) -> None:
         """No check-in loop took its answer yet: the plan counts it as answered, as bosun update does."""
         self.record("agents", pending=("api", "web app"), windows={"api": ("repo", "wait until idle")})
         update_notes.note(self.state, "web app", "status", "carried on by hand")
-        [blocker] = self.plan().blockers
-        self.assertIn("still brings along api:", blocker)
-        update_notes.note(self.state, "api", "status", "carried on by hand")
-        self.assertEqual(self.plan().blockers, ())
+        self.assertEqual(self.plan().owed, (("api", "restart"),))
 
-    def test_windows_an_update_still_brings_along_block_the_next_one(self) -> None:
-        """A new update would bring along its own windows and clear the notes of these."""
-        self.record("agents", pending=("api", "web"), windows={"api": ("repo", "wait until idle")})
-        [blocker] = self.plan().blockers
-        self.assertIn("still brings along api, web", blocker)
-        self.assertIn("bosun update note --window <w> --status", blocker)
-        self.assertIn("bosun update advance", blocker)
-        self.record("agents")
-        self.assertEqual(self.plan().blockers, ())
+    def test_an_update_that_failed_before_taking_them_over_still_owes_them(self) -> None:
+        """Its record carries the last one, whose windows the next update takes over in its place; and
+        the plan an update makes again after its switch reads them from the record it carried."""
+        last = self.record("agents", pending=("api",), windows={"api": ("repo", "restart")})
+        for step in ("failed", "released"):
+            self.record(step, carried=update_state.as_object(last))
+            self.assertEqual(self.plan().owed, (("api", "restart"),), step)
+        for step in ("agents", "done"):  # it took them over already: nothing more is owed from the last
+            self.record(step, carried=update_state.as_object(last))
+            self.assertEqual(self.plan().owed, (), step)
 
     def test_the_plan_says_whether_the_console_job_will_be_restarted(self) -> None:
         self.assertFalse(self.plan().console_job)

@@ -6,6 +6,7 @@ acme's invoice exporter."""
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import io
 import json
 import os
@@ -354,6 +355,24 @@ class StateTestCase(unittest.TestCase):
         )
         self.assertEqual(out["level"], "ok")
         self.assertNotIn("An update is running", out["detail"])
+
+    def test_windows_an_update_handed_over_say_what_they_get_and_when(self) -> None:
+        """Decision 2: once the update's own run ended (it is no longer running), each window it left to
+        the check-in loop is a line of the detail: once you answer it (it waits at a prompt), or once its
+        turn is over; never "An update is running"."""
+        windows = [window("orch", "waiting"), window("exporter", "busy"), window("docs", "waiting")]
+        owed = (("orch", "re-read"), ("exporter", "restart"), ("docs", "answer"))
+        out = snap(windows=windows, update_owed=owed)
+        self.assertEqual(out["update"]["state"], "none")
+        self.assertNotIn("An update is running", " ".join(out["detail"]))
+        self.assertEqual(
+            out["detail"][-3:],
+            [
+                "orch re-reads its prompts for the update once you answer it",
+                "exporter restarts for the update once its turn is over",
+                "docs carries on with the update once you answer it",
+            ],
+        )
 
     def test_windows_waiting_at_a_prompt_are_named_and_counted(self) -> None:
         windows = [window("orch"), window("exporter", "waiting"), window("docs", "waiting")]
@@ -1068,6 +1087,43 @@ class GatherTestCase(unittest.TestCase):
         after = self.gather()
         self.assertEqual(after.update_waiting_for, ())
         self.assertEqual(after.update_last, menu_status.LastUpdate("u1", "2026-11-11T09:00:00", "agents"))
+
+    def test_the_check_in_loop_s_turn_at_handed_over_windows_is_no_update_running(self) -> None:
+        """Decision 2: the loop's turn holds the lock for a while each tick, which its marker says, so the
+        menu does not show it as an update running (it would grey Check for Updates); the windows are told
+        as owed instead."""
+        record = update_state.UpdateState(
+            id="u1",
+            from_root="/a",
+            to_root="/b",
+            from_commit="1",
+            to_commit="2",
+            step="agents",
+            started_at="2026-11-11T09:00:00",
+            hold_until=0,
+            pending=("exporter",),
+            windows={"exporter": ("repo", "restart")},
+            handed_over="2026-11-11T09:05:00+00:00",
+        )
+        update_state.write(self.state, record)
+        with update_state.marking(self.state, update_state.TURN_MARKER), update_state.one_update(self.state):
+            found = self.gather()
+        self.assertEqual((found.update_running, found.update_waiting_for), (False, ()))
+        self.assertEqual(found.update_owed, (("exporter", "restart"),))
+        self.assertEqual(self.gather().update_owed, (("exporter", "restart"),))
+        # a takeover planning (its marker, no id yet, the record still the last one's, whatever its
+        # handed_over says: one that died in its own wait left none): an update runs, and the last one's
+        # windows are told as handed over, never as its own wait's
+        update_state.write(self.state, dataclasses.replace(record, handed_over=""))
+        with update_state.marking(self.state, update_state.RUN_MARKER):
+            planning = self.gather()
+            self.assertEqual(planning.update_running, True)
+            self.assertEqual(
+                (planning.update_waiting_for, planning.update_owed), ((), (("exporter", "restart"),))
+            )
+            update_state.mark_update(self.state, "u1")  # the running update is the one the record names
+            own = self.gather()
+        self.assertEqual((own.update_waiting_for, own.update_owed), (("exporter",), ()))
 
     def test_no_record_or_one_that_cannot_be_read_tells_no_last_update(self) -> None:
         self.assertIsNone(self.gather().update_last)

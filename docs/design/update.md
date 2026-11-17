@@ -190,8 +190,9 @@ check gets no protection from it, which is why the first update converts at a qu
    - a `kg forget` cut short, which stops the update until it is finished (see Backups).
 
    As built, these stop it at the plan too: a store whose format cannot be read, a link among what a
-   backup copies that leads nowhere, a launchd job the new version cannot render, versions that are
-   not side by side, and windows the last update still brings along (below). It also lists a console (bosun's background job, which the update restarts itself, or one
+   backup copies that leads nowhere, a launchd job the new version cannot render, and versions that are
+   not side by side. It lists the windows the last update still brings along, which this one takes over
+   (below), and a console (bosun's background job, which the update restarts itself, or one
    started by hand, which it does not), the handed tasks that keep their old text, and what to change by hand in my own files.
 
    It shows the plan and asks first, as `init` and `uninstall` do. `--yes` skips the question;
@@ -349,7 +350,13 @@ Each window gets one of three treatments, decided from the plan and the window's
     for. Ctrl-C leaves them to the check-in loop, which restarts each one once it is idle. For that,
     the update's record keeps the windows still waited for and what was done to each, and `bosun
     launch` records what each window was launched with (below);
-  - *waiting at a permission prompt or a question:* never restarted until it is answered;
+  - *waiting at a permission prompt or a question:* never restarted until it is answered. Such a window
+    never ends its wait by itself, so once every window the update still waits for waits for me, the
+    update's own wait ends as Ctrl-C ends it: it names each ("orchestrator waits for your answer at its
+    prompt; once you answer, the check-in loop restarts it for the update") and leaves them to the
+    check-in loop, which brings each along once it is answered and its turn is over. A busy window
+    among them keeps the wait going, as it ends by itself. So an update the menu bar app started, with
+    no terminal to press Ctrl-C in, never hangs on a prompt;
   - *someone typing in it* (within `BOSUN_SEND_TYPING_MINUTES`, or unsent text in its input box):
     left until they are done, as `send` waits.
 
@@ -397,7 +404,8 @@ Then it continues what it was doing, including any background work it listed. Th
 settled with the real Claude and Codex in the VM, and with free-text test cases.
 
 The update is done when every window that needed something has answered with its status. `bosun
-update` ends there, with the summary.
+update` ends there, with the summary, or once only windows waiting for me are left (above), which the
+check-in loop then finishes.
 
 ### The summary
 
@@ -430,12 +438,16 @@ Settled while building it:
   `bosun.env` at the switch, the jobs reloaded in the release. So an update carried on by the next
   `bosun update`, or finished by the check-in loop, says what one that ran in one go would; a record
   an older bosun wrote, which kept none of it, says less, never something false.
-- **When.** It is said when the update ends, also when Ctrl-C stops the wait (the windows still
-  waited for say so), and saved as `summary.md` once the update is done, by whichever run finishes it:
-  the update itself, the next `bosun update`, or the check-in loop's last turn.
+- **When.** It is said when the update ends, also when Ctrl-C, or only windows waiting for me, stop the
+  wait (the windows still waited for say so), and saved as `summary.md` once the update is done, by
+  whichever run finishes it: the update itself, the next `bosun update` (which takes over the windows
+  still waited for: their line says "carried into the next update", and the next summary says what came
+  of each, "owed by the last update too"), or the check-in loop's last turn.
 - **Each window's line** is what was done to it, as the record keeps it (the orchestrator's re-read
   naming the files it was asked to re-read), then its own answer; a window left alone says it kept
-  running, and the `checkin` window is not listed. The prompts are named in the plan's order.
+  running, and the `checkin` window is not listed. A window whose restart did not start says so, with the
+  launch's own reason and what to do ("did not start: <why>; fix that, then bosun refresh <window>"). The
+  prompts are named in the plan's order.
 - **What else it can say,** each only when there is something: what to change by hand in my own
   files, under Config; the tasks handed out that keep their old text, with the `bosun delegate
   --update` for each; and, under "Found after the switch", what the update itself found (a job not
@@ -590,7 +602,10 @@ Settled while building it:
   - the decision for each window, for every pairing of its state (idle, shell, busy, waiting) with
     what changed.
 - **Smoke tests**, hermetic, with fake Claude windows. An update between two local commits with:
-  - an idle, a `shell` and a busy window;
+  - an idle, a `shell` and a busy window, and one waiting at a prompt: the update ends its wait once only
+    that one is left, the status calls no update running, a second update takes the window over, and a
+    tick restarts it once it is answered;
+  - a restart whose launch is refused: refresh exits 5 with the launch's own error;
   - a hook and a ledger write arriving during the freeze: they wait, and nothing is lost;
   - a migration that fails: everything is back as before;
   - a `kill -9` at each step: the next run finishes or undoes it;
@@ -611,7 +626,10 @@ Settled while building it:
 
 - **`tests/sandbox.sh mac live claude|codex`** tries the take-stock and update prompts with the real
   agents (about a dollar a run), and whether a running Claude picks up a changed command file, with
-  free-text cases for the prompts in `tests/llm/`.
+  free-text cases for the prompts in `tests/llm/`. On Claude Code the orchestrator puts a question to me
+  (its question tool) just before the update: the update ends without waiting for it, says so, the status
+  calls no update running, and once the question is answered the check-in loop brings it along and the
+  record reaches `done`.
 
 ### Settled in the VM
 
@@ -779,7 +797,9 @@ My calls, which the user can overturn:
 - the first update, which converts the layout, waits for a quiet moment;
 - a hold on bosun's own background work, plus a short freeze under the stores' locks;
 - agents left alone unless something they were launched with changed;
-- the update waits for busy windows, and Ctrl-C hands them to the check-in loop;
+- the update waits for busy windows, and Ctrl-C hands them to the check-in loop, as it does by itself
+  once only windows waiting for me are left; the next update takes over the windows the last one still
+  waits for;
 - a window's launch inputs are its arguments (the conversation's name and the policy's text left out)
   and the files under the install they name, read through the link; the commit, the agent, the model
   and effort, the directory and the overrides are recorded with them, and they are compared after the
@@ -803,7 +823,10 @@ Decided while building it:
   run already going finishes, its writes waiting on the freeze like any other's.
 - **The update's record**, `update.json`: the update's id, both versions' folders and commits, its
   step, when it started, when its hold ends, the backup and what of it a put-back restores, the
-  windows still to bring along, the changes to my own files, how long writes were paused
+  windows still to bring along, when the update's own run handed them to the check-in loop
+  (`handed_over`), the last update's record whose windows it took over (`carried`) and which of them it
+  took (`taken_over`), the changes to my own
+  files, how long writes were paused
   (`freeze_ms`, from the stores' locks taken to their release), the error, and the findings after the switch (`bosun doctor`'s, and a job that
   could not be reloaded); and for the summary, the plan, the migrations that ran, what changed in
   `bosun.env`, the jobs reloaded and what `bosun doctor` failed at while planning. Each step is recorded before it starts, and the backup once it is taken, so
@@ -841,11 +864,34 @@ Decided while building it:
   the table above, and does each thing once: the record keeps each window's kind, the plan's treatment
   and what was done to it
   (`windows`), and the files the orchestrator re-reads (`reread`), written as each is done. So the
-  update's own wait (a turn every 5 s) and, after Ctrl-C, the check-in loop's turn (`bosun update
-  advance`, each tick while windows are pending), which take `update.lock` in turn, never repeat one; the
-  loop's turn does nothing while the update itself still runs.
+  update's own wait (a turn every 5 s) and, once it handed them over, the check-in loop's turn (`bosun
+  update advance`, each tick while windows are pending), which take `update.lock` in turn, never repeat
+  one; the loop's turn does nothing while an update runs. Once the update's own run handed them over, it
+  records when (`handed_over`). Who holds `update.lock` is never guessed from the record: each holder says
+  so in a marker of its own, its pid in `update/run` (an update, from before it waits for the lock until it
+  ends, and its update's id once its record has one) or `update/turn` (the check-in loop's turn, written
+  before it tries the lock), each made at once and exclusively (a temp file linked into place), a stale one
+  (its process gone) replaced, and removed as it ends only if it still names its process; a marker whose
+  process is gone counts as absent, and the turn's counts as the holder only with no other update's marker
+  live. An update runs (`update_state.update_runs`) while its marker is live, or while the lock is held with
+  no live turn marker (a writer putting back a freeze); so the status calls neither the loop's turn an
+  update running nor a takeover planning before it writes its record none. The record's pending windows are
+  the running update's own wait only when the marker names its id; a record at `agents` whose update is not
+  running is shown as handed over, whatever `handed_over` says. The next
+  update waits for the loop's turn (`TURN_SECONDS`), which gives way after the window it is on once the
+  update's marker is there, leaving the rest pending for it to take over; if it still times out, its
+  refusal says the check-in loop's turn holds the lock.
 - **The turn's cases.** A restart that refresh leaves running (busy again, someone typing: exit 3) or that
-  fails is tried at the next turn; a prompt `bosun send` could not deliver is sent again. A window
+  fails otherwise (a split window, an agent that would not stop) is tried at the next turn; a prompt `bosun
+  send` could not deliver is sent again. A restart whose launch failed is final: once refresh started a
+  launch, it waits (up to `BOSUN_START_TIMEOUT`) for the agent, and a launch that ends without one (refused,
+  the window left a plain shell) or whose agent exits at once makes it exit 5, with the launch's own last
+  error line last on stderr (from the file `bosun launch` leaves its last error in,
+  `launches/<session>/<window>.error`, removed by refresh before it respawns the pane and cleared as each
+  launch starts, which refresh reads and removes: a
+  refusal, an agent not installed, a copy of the conversation already running; else what the pane shows);
+  the turn records the window as "did not start: <why>" and no longer waits for it, rather than trying it
+  again every turn. A launch still going by then counts as started. A window
   restarted into its next conversation (exit 4) never sees the update prompt, so the turn notes its status
   itself ("started its next conversation"), and the background work it listed stays in its note, which
   the window's outcome names. One whose agent exited is started again with the update prompt. A window
@@ -876,7 +922,7 @@ Decided while building it:
   there and every window can answer (an encoding past 200 bytes is cut short and the whole name's digest
   added, so the file's name fits, and two names never share a note; the prompt file a restart reads is
   named for no window); an update clears the ones the previous update left before it starts
-  bringing windows along. A status note written by hand ends a window's wait: the next turn, or the next
+  bringing windows along, but those of a window it takes over with what it gave the last one. A status note written by hand ends a window's wait: the next turn, or the next
   `bosun update` (which settles answered windows before it plans, acting on none), takes it.
 - **Ctrl-C while the update waits** is noted, not raised, so it never cuts a restart short; the commands
   that act on the windows run in a session of their own, so the terminal's Ctrl-C never reaches them.
@@ -891,9 +937,32 @@ Decided while building it:
 - **An update cut short** after its release (at `checked` or `released`) brings the windows along from a
   plan made again from its two versions, saying what came of each; Ctrl-C there ends the command. One
   cut short at `agents` leaves the windows still waited for to the check-in loop (or to `bosun update
-  advance` by hand, when no loop runs). While windows are still pending, the next update is blocked at
-  its plan, which names them and how to finish them: a new update would replace what was done to them,
-  and clear their notes.
+  advance` by hand, when no loop runs).
+- **The next update takes over the windows the last one still waits for,** rather than being blocked by
+  them (one left at a permission prompt would otherwise hold every later update until answered). Windows
+  answered by a note are settled first, as before. Its plan lists the rest ("Still owed from the last
+  update, which this one takes over"), and its record keeps the last one's (`carried`). Once it switched,
+  each of them joins its own bringing-along, decided from its status and the new plan, which compares what
+  it was launched with (its launch record, still from before the last update) with the newest version: a
+  window owed a restart restarts when that differs (unless the newest version reverted it: then leaving it
+  alone is right, as a running agent runs bosun's commands through the install link); what it already gave
+  is kept (asked to take stock, the list it saved, which is passed back at its restart), unless the last
+  update had restarted it already, which the new update's restart replaces; one the new plan leaves alone
+  still gets what the last update began, or its answer is still waited for; an orchestrator owed a re-read
+  re-reads both updates' files. A window the last update asked to take stock, which the new plan only asks
+  to re-read, never gets its saved list back: accepted, as nothing restarts it, so its background work was
+  never ended. The new record keeps which windows it took over (`taken_over`: each of the last one's
+  windows it brings along, one the last had restarted and it restarts afresh too), and the last update's
+  summary is then finished and saved next to its backup: each of those carried into the next update, one
+  closed since closed, and any other "left alone by the next update: nothing it was launched with differs
+  from the newest version". The new summary says "owed by the last update too" of those it took over. An
+  update that fails, or is put back, before that gives them back: the last record is written again as it
+  was (`update_state.carried_back`, by the next `bosun update` or the check-in loop's turn), so they stay
+  the loop's; so does one killed before its freeze (`planned`, `rehearsed`, `holding`) once nothing holds
+  the lock and no update's marker is live, which the loop's turn records `failed` first. An update that
+  finds such a record when it holds the lock (the loop having given way to its marker) ends it `failed`
+  itself before it writes its own, and takes over the windows it carried. `update.lock` is
+  still taken in turn by the update and the loop's `bosun update advance`.
 
 Left to the builder:
 

@@ -353,9 +353,9 @@ Codex says nowhere which plugin a server is from) and turned off Codex's update 
 restart. Codex's built-in servers stay on, as Claude Code's Chrome does. A plugin's server that `installed_plugins.json`
 does not list (synced from the account, `--plugin-dir`, managed) is allowed by what `claude mcp list` shows for it.
 Claude Code adds up every scope's allow list, so a window whose repo (or my own settings) allows a server its
-list does not name refuses to start, saying which file and what to do. Next: a window whose restart in an
-update dies at its launch (that refusal, a failed Codex listing) is reported as restarted and still waited
-for; the summary should say it did not start, and why. Design note:
+list does not name refuses to start, saying which file and what to do. A window whose restart in an update
+dies at its launch (that refusal, a failed Codex listing, an agent that exits at once) is no longer waited for:
+the summary says it did not start, why, and what to do (2026-11-17). Design note:
 [docs/design/connectors.md](docs/design/connectors.md).
 
 **Done (2026-11-10): a hardening round.** Gaps an inventory of the adversarial cases turned up, each now
@@ -375,9 +375,9 @@ handled and tested:
 - after the clock went back, an update's prune could delete the backup it had just taken.
 
 Next: two install lines run at once (their clones race, with git's own error), a full disk end to end, the
-Mac sleeping in the middle of an update (its hold lifts after an hour), commands run with another user's
-HOME, and a window left at a permission prompt, which holds its update open and blocks the next one until
-answered.
+Mac sleeping in the middle of an update (its hold lifts after an hour), and commands run with another user's
+HOME. A window left at a permission prompt no longer holds its update open or blocks the next one: the update
+stops waiting once only such windows are left, and the next one takes them over (2026-11-17).
 
 ### Docs site
 

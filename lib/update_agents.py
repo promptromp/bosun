@@ -23,16 +23,23 @@ status now, what the window gets, and does it once:
 - relaunch one whose agent exited.
 
 A restart left running (busy again, someone typing) is tried again at the next turn, as is a prompt
-that could not be delivered. A window restarted into its next conversation (an orchestrator still on
+that could not be delivered. A restart whose launch failed (refused, its agent exited at once, the window
+left a plain shell) is final: the window is recorded as one that did not start, with the launch's reason,
+and no longer waited for. A window restarted into its next conversation (an orchestrator still on
 yesterday's, a repo window with a fresh one pending) starts that conversation's own prompt and never
 sees the update prompt, so the turn notes its status itself. What was done to each window is
 recorded in update.json (`windows`) as it is done, so no later turn does it again. Once no window is
 pending, the record says `done`.
+
+The windows the last update still waits for when the next one starts are that one's to bring along
+(take_over): each with what the new plan decides for it, what it already gave kept (asked to take stock,
+its list saved), and an orchestrator's re-read the union of both updates' files. The last update is then
+finished (carried_into), each of those windows named as carried into the next.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -60,9 +67,14 @@ RELAUNCHED = "relaunched"
 NEXT_CONVERSATION = "started its next conversation"  # also its status note: it never sees the prompt
 ANSWERED = "answered"
 CLOSED = "closed"
+DID_NOT_START = "did not start"  # recorded with the launch's reason after it: "did not start: <why>"
+CARRIED = "carried into the next update"  # what the last update's summary says of a window taken over
+# ... of one it still waited for that the next update did not take over: the newest version gives it nothing
+LEFT_BY_NEXT = "left alone by the next update: nothing it was launched with differs from the newest version"
 # After any of these a window only has to answer.
 STARTED = (ASKED_REREAD, RESTARTED, RELAUNCHED, NEXT_CONVERSATION)
-FINISHED = (ANSWERED, CLOSED)
+FINISHED = (ANSWERED, CLOSED, CARRIED, LEFT_BY_NEXT)  # and DID_NOT_START with its reason: finished()
+WAITING = "waiting"  # the status of a window at a permission prompt or a question, waiting for me
 # Left as they are (one bosun did not start among them), and the checkin window, whose loop is the release's.
 NOT_PENDING = (Treatment.LEAVE, Treatment.NOT_STARTED_BY_BOSUN, Treatment.RESTART_LOOP)
 PROMPTS_DIR = "orchestrator"  # the folder of bosun's prompts, left out of their names
@@ -100,6 +112,8 @@ SEEN_LINE = (
     "doing: {running}.\n"
 )
 SEEN_RUNNING = "(What bosun saw still running then: {running}.)"
+NOT_STARTED_HINT = "fix that, then bosun refresh {window}"
+OWED_TOO = "(owed by the last update too)"
 
 
 class Started(StrEnum):
@@ -108,6 +122,7 @@ class Started(StrEnum):
     YES = "started"  # with the update prompt
     LEFT_RUNNING = "left running"  # busy again, waiting, someone typing (exit 3): try again
     NEXT_CONVERSATION = "next conversation"  # into its next conversation, with its own prompt (exit 4)
+    DID_NOT_START = "did not start"  # its launch failed (exit 5): final, Actions.why_not_started says why
     FAILED = "failed"  # anything else: try again
 
 
@@ -139,6 +154,10 @@ class Actions(Protocol):
 
     def relaunch(self, window: str, prompt: str) -> Started:
         """Start <window>'s agent again, which exited, with <prompt>."""
+
+    def why_not_started(self, window: str) -> str:
+        """Why the last restart or relaunch of <window> did not start it (Started.DID_NOT_START): the
+        launch's own reason, in a line."""
 
     def left_running(self, window: str) -> str:
         """What the last turn that ended in <window> left running, described; "" when nothing."""
@@ -260,12 +279,26 @@ def _decide(win: _Window, status: str) -> Treatment:
     return update_plan.treatment(WindowFacts(win.name, win.kind, status, launch_changed=True), reread=False)
 
 
+def _not_started(done: Sequence[str]) -> bool:
+    """Whether a window whose record says <done> did not start: its launch failed (DID_NOT_START)."""
+    return any(what.startswith(f"{DID_NOT_START}:") for what in done)
+
+
+def finished(done: Sequence[str]) -> bool:
+    """Whether a window whose record says <done> no longer has to answer: it answered, closed, was
+    carried into the next update, or did not start."""
+    return bool(set(done) & set(FINISHED)) or _not_started(done)
+
+
 def _started(win: _Window, started: Started, what: str) -> UpdateState:
     if started is Started.YES:
         return win.did(what)
     if started is Started.NEXT_CONVERSATION:
         win.act.notes.save(win.name, STATUS, NEXT_CONVERSATION)
         return win.did(NEXT_CONVERSATION)
+    if started is Started.DID_NOT_START:
+        why = " ".join(win.act.why_not_started(win.name).split()) or "its launch failed"
+        return win.did(f"{DID_NOT_START}: {why}")
     return win.state  # left running, or it failed: the next turn decides again
 
 
@@ -305,7 +338,7 @@ _ACTIONS: dict[Treatment, Callable[[_Window], UpdateState]] = {
 def _bring(win: _Window, status: str) -> UpdateState:
     """The window's turn: nothing once it was started or answered; closed when it is gone; else what
     its status now calls for (nothing while it is busy or waiting for me)."""
-    if set(win.done) & {*STARTED, *FINISHED} or win.note(STATUS) is not None:
+    if set(win.done) & set(STARTED) or finished(win.done) or win.note(STATUS) is not None:
         return win.state
     if status == GONE:
         return win.did(CLOSED)
@@ -327,29 +360,119 @@ def settled(state: UpdateState, notes: Notes) -> UpdateState:
     for window in state.pending:
         if notes.read(window, STATUS) is not None and ANSWERED not in _entry(state, window)[2]:
             state = _with(state, window, ANSWERED)
-    pending = tuple(w for w in state.pending if not set(_entry(state, w)[2]) & set(FINISHED))
+    pending = tuple(w for w in state.pending if not finished(_entry(state, w)[2]))
     if pending and pending == state.pending:
         return state
     return update_state.advanced(state, "done" if not pending else state.step, pending=pending)
 
 
-def advance(state_dir: Path, statuses: Callable[[], Mapping[str, str]], act: Actions) -> list[str]:
+def advance(
+    state_dir: Path,
+    statuses: Callable[[], Mapping[str, str]],
+    act: Actions,
+    give_way: Callable[[], bool] = lambda: False,
+) -> list[str]:
     """A turn at each window the update in <state_dir> still waits for (the caller holds update.lock):
     each decided again from its status now (<statuses>: by window name, as `bosun sessions` lists
-    them) and acted on (<act>) at most once per step. Windows that answered are no longer pending,
-    and the record says `done` once none is. Returns the windows still waited for. A listing with no
-    window in it (the session's windows could not be listed) changes nothing."""
+    them) and acted on (<act>) at most once per step; before each window after the first, it stops if
+    <give_way> says so (an update waits for the lock: it takes the rest over). Windows that answered
+    are no longer pending, and the record says `done` once none is. Returns the windows still waited
+    for. A listing with no window in it (the session's windows could not be listed) changes nothing."""
     state = update_state.read(state_dir)
     if state is None or state.step != "agents":
         return []
     now = statuses()
-    if now:
-        for window in state.pending:
-            state = _bring(_Window(state_dir, state, window, act), now.get(window, GONE))
+    for at, window in enumerate(state.pending if now else ()):
+        if at and give_way():
+            break
+        state = _bring(_Window(state_dir, state, window, act), now.get(window, GONE))
     after = settled(state, act.notes)
     if after != state:
         update_state.write(state_dir, after)
     return list(after.pending)
+
+
+# ---- windows waiting for me, and the next update taking over ------------------------------------
+
+
+class Owed(StrEnum):
+    """What a window still waited for is owed once its turn is over (owed)."""
+
+    RESTART = "restart"  # a restart (after taking stock, if it was asked to)
+    REREAD = "re-read"  # the update prompt, to re-read its prompts
+    ANSWER = "answer"  # nothing more: it was started, and only has to answer
+
+
+def owed(state: UpdateState, window: str) -> Owed:
+    """What <window>, which the update <state> records still waits for, is owed."""
+    _kind, planned, done = _entry(state, window)
+    if set(done) & set(STARTED):
+        return Owed.ANSWER
+    return Owed.REREAD if planned == Treatment.REREAD.value else Owed.RESTART
+
+
+def only_waiting_for_me(statuses: Mapping[str, str]) -> bool:
+    """Whether every window still waited for (<statuses>: each one's status as listed) waits for me, at
+    a permission prompt or a question: none ends its wait by itself, so the update's own wait ends."""
+    return bool(statuses) and all(status == WAITING for status in statuses.values())
+
+
+def take_over(
+    windows: Mapping[str, tuple[str, ...]],
+    plan: Mapping[str, Treatment],
+    reread: Sequence[str],
+    last: UpdateState | None,
+) -> tuple[dict[str, tuple[str, ...]], tuple[str, ...], tuple[str, ...]]:
+    """The windows an update brings along (<windows>, to_bring_along's), with those the <last> update
+    still waits for taken over, by the new plan (<plan>: each open window's treatment): one it gives
+    something to do keeps what it already gave (asked to take stock, its list saved) unless the last
+    update had started it already; one it leaves alone still gets what the last update began or owed
+    it a re-read for (else nothing: the newest version gives it nothing). The files to re-read are
+    <reread> and the last update's, while its re-read was not asked yet. Returns the windows, the
+    files to re-read, and the windows whose notes are theirs to keep (what they gave the last update)."""
+    taken = dict(windows)
+    files, kept = list(reread), list[str]()
+    if last is None:
+        return taken, tuple(files), ()
+    for window in last.pending:
+        entry = _taken_entry(_entry(last, window), taken.get(window), window in plan)
+        if entry is None:
+            continue
+        taken[window] = entry
+        kept.append(window)
+        if entry[1] == Treatment.REREAD.value and ASKED_REREAD not in entry[2:]:
+            files += last.reread
+    return taken, tuple(dict.fromkeys(files)), tuple(kept)
+
+
+def _taken_entry(
+    last: tuple[str, str, tuple[str, ...]], new: tuple[str, ...] | None, still_open: bool
+) -> tuple[str, ...] | None:
+    """What a window the last update still waits for (<last>: its kind, its treatment then and what was
+    done) is to the next update, which gives it <new> (None: leaves it alone), keeping what it gave the
+    last one; None when it is not taken over (closed, started afresh, or given nothing by either)."""
+    kind, planned, done = last
+    if not still_open or (new is not None and set(done) & set(STARTED)):
+        return None
+    if new is not None:
+        return (*new, *done)
+    return (kind, planned, *done) if done or planned == Treatment.REREAD.value else None
+
+
+def carried_into(last: UpdateState, taken: Collection[str], open_windows: Collection[str]) -> UpdateState:
+    """The <last> update (settled) finished as the next one takes over the windows it still waited for:
+    `done`, each of those the next took over (<taken>, take_over's) named as carried into it, one no
+    longer open (not in <open_windows>, the next plan's) as closed, and any other as left alone by the
+    next update (the newest version gives it nothing)."""
+    for window in last.pending:
+        what = CARRIED if window in taken else CLOSED if window not in open_windows else LEFT_BY_NEXT
+        last = _with(last, window, what)
+    return update_state.advanced(last, "done", pending=())
+
+
+def _carried(state: UpdateState) -> frozenset[str]:
+    """The windows <state>'s update took over from the last one (`taken_over`)."""
+    return frozenset(state.taken_over)
 
 
 # ---- what came of each window ------------------------------------------------------------------
@@ -380,6 +503,8 @@ def _what_came(window: str, entry: Sequence[str], notes: Notes, asked: str) -> s
     if NEXT_CONVERSATION in done:
         listed = notes.read(window, STOCK) is not None
         return line + (f" (the background work it listed: {notes.where(window, STOCK)})" if listed else "")
+    if _not_started(done):
+        return f"{line}; {NOT_STARTED_HINT.format(window=window)}"
     answer = notes.read(window, STATUS)
     return line + (f"; {answer.splitlines()[0]}" if answer and ANSWERED in entry else "")
 
@@ -389,11 +514,13 @@ def outcomes(state: UpdateState, notes: Notes) -> list[tuple[str, str]]:
     to re-read named), its answer, where the background work it listed is kept when it never got it
     back (it started its next conversation), or that it is still waited for."""
     asked = f"{ASKED_REREAD} {', '.join(map(_prompt_name, state.reread))}" if state.reread else ASKED_REREAD
+    carried = _carried(state)
     return [
         (
             window,
             _what_came(window, entry, notes, asked)
-            + ("; still waited for" if window in state.pending else ""),
+            + ("; still waited for" if window in state.pending else "")
+            + (f" {OWED_TOO}" if window in carried else ""),
         )
         for window, entry in state.windows.items()
     ]

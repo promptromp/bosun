@@ -77,6 +77,16 @@ class NoteTest(unittest.TestCase):
         update_notes.clear_notes(self.state_dir)
         self.assertIsNone(update_notes.read_note(self.state_dir, "api", "status"))
 
+    def test_the_notes_of_windows_taken_over_from_the_last_update_are_kept(self) -> None:
+        """What a window gave the update it takes over (its list of background work) stays its own."""
+        for window in ("web app", "api", "docs"):
+            update_notes.note(self.state_dir, window, "stock", f"the list of {window}")
+        update_notes.clear_notes(self.state_dir, keep=("web app", "docs", "gone"))
+        self.assertEqual(update_notes.read_note(self.state_dir, "web app", "stock"), "the list of web app")
+        self.assertEqual(update_notes.read_note(self.state_dir, "docs", "stock"), "the list of docs")
+        self.assertIsNone(update_notes.read_note(self.state_dir, "api", "stock"))
+        update_notes.clear_notes(Path(self.state_dir / "nowhere"), keep=("api",))  # no notes: nothing to do
+
 
 if __name__ == "__main__":
     unittest.main()
