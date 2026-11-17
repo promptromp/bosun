@@ -21,15 +21,17 @@ through. This hook is the catch-all:
 - what `bash|sh|zsh -c` or `eval` runs, when the guard cannot read it (a command named by a variable
   or a substitution, quotes that do not close) -> ask you
 
-A Bash command is read as the shell reads it (parse, ShellReader): comments out, backslash-newlines joined,
-heredoc bodies as data; each simple command by its name's last path part (/usr/bin/git is git), past
-keywords, assignments, redirections and wrappers (WRAPPERS, by name), git's and gh's subcommand past their own
-options (compared); with the commands in its substitutions ($(...) and backticks outside single quotes, and in
-unquoted heredoc bodies) and what `bash -c`, `eval`, `env -S` and the others run, read again. When it cannot
-read a command for certain it asks: quotes or a heredoc that never close, a command named by a substitution,
-ANSI-C quoting or a pattern, a gated command whose arguments the shell expands unread, inline code that names
-an outward call, a gated command whose command word is quoted. What stays best effort is in
-docs/permissions.md.
+A Bash command is parsed (parse, ShellReader): comments out, backslash-newlines joined, heredoc bodies as
+data, arithmetic as a number; each simple command by its name's last path part (/usr/bin/git is git),
+past keywords, assignments, redirections and wrappers (WRAPPERS, SUBCOMMAND_WRAPPERS, by name), git's and
+gh's subcommand past their own options (compared); with the commands in its substitutions and what `bash
+-c`, `eval`, `env -S` and the others run, read again. When it cannot read a command for certain it asks:
+quotes or a heredoc that never close, a command named by a substitution, ANSI-C quoting, a pattern or a
+variable inside the name, a gated command whose arguments the shell expands unread, inline code that
+names an outward call, a gated command the ask rules may not see as written. Last, the taint check
+(taint): a gated command, a force push or an admin merge that the call's text names, quotes and
+parameters taken out, and that the parse does not explain (a command it read; the arguments or quoted
+heredoc of a data command) asks. What stays best effort is in docs/permissions.md.
 
 With BOSUN_APPROVALS_ENABLED=1, `bosun launch` adds more hooks to the orchestrator
 (docs/design/approvals.md), all only about the gated outward calls (GATED_MCP, GATED_COMMANDS):
@@ -65,6 +67,7 @@ import os
 import re
 import shlex
 import sys
+from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -201,13 +204,17 @@ CHROME_COMPUTER = "mcp__claude-in-chrome__computer"
 CHROME_PASSIVE_ACTIONS = frozenset({"screenshot", "scroll", "scroll_to", "zoom", "wait", "hover"})
 REDIRECTION = re.compile(r"^(?:\d*|&)[<>]")  # 2>/dev/null, >out, <<EOF, &>log
 REDIRECTION_ONLY = re.compile(r"^(?:\d*|&)?[<>]+&?$")  # 2> or >: its target is the next word
+# A redirection that duplicates or clobbers (2>&1, >&2, &>log, >|out), whose & or | would split the words:
+# ShellReader writes it without them (2>1, >2, >log, >out), as a redirection still.
+REDIRECTION_DUP = re.compile(r"\d*(?:&>>?|>&|<&|>\|)")
 # Words that can precede a command name: `do git push`, `{ bosun ...`, `X=1 git push`.
-SHELL_KEYWORDS = {"{", "}", "!", "do", "done", "then", "else", "elif", "fi", "if", "while", "until", "time"}
+SHELL_KEYWORDS = {"{", "}", "!", "do", "done", "then", "else", "elif", "fi", "if", "while", "until"}
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 # Commands that run the command in their arguments (`timeout 120 gh pr merge ...`), so the guard
 # judges the command they run: each with its options that take a separate value, and how many
 # arguments come before the command (timeout's duration). Before 2026-10-23 they hid what they ran.
 # Matched by the command's name (command_name: /usr/bin/env is env).
+ENV_VALUE_OPTIONS = frozenset({"-u", "--unset", "-C", "--chdir", "-P"})
 WRAPPERS: dict[str, tuple[frozenset[str], int]] = {
     "timeout": (frozenset({"-s", "--signal", "-k", "--kill-after"}), 1),
     "gtimeout": (frozenset({"-s", "--signal", "-k", "--kill-after"}), 1),
@@ -215,20 +222,49 @@ WRAPPERS: dict[str, tuple[frozenset[str], int]] = {
     "nohup": (frozenset(), 0),
     "command": (frozenset(), 0),
     "exec": (frozenset({"-a"}), 0),
-    "env": (frozenset({"-u", "--unset", "-C", "--chdir", "-P"}), 0),
+    "env": (ENV_VALUE_OPTIONS, 0),
+    "genv": (ENV_VALUE_OPTIONS, 0),
     "stdbuf": (frozenset({"-i", "-o", "-e"}), 0),
     "caffeinate": (frozenset({"-t", "-w"}), 0),
-    "sudo": (frozenset({"-u", "-g", "-C", "-h", "-p", "-U"}), 0),
-    "xargs": (frozenset({"-n", "-I", "-J", "-L", "-P", "-R", "-S", "-s", "-d", "-E", "-a"}), 0),
+    "sudo": (
+        frozenset(
+            {"-u", "-g", "-C", "-h", "-p", "-U", "-D", "--user", "--group", "--chdir", "--prompt", "--host"}
+        ),
+        0,
+    ),
+    "doas": (frozenset({"-u", "-C"}), 0),
+    "xargs": (
+        frozenset(
+            {"-n", "-I", "-J", "-L", "-P", "-R", "-S", "-s", "-d", "-E", "-a", "--max-args", "--max-lines"}
+            | {"--max-procs", "--delimiter", "--arg-file", "--eof", "--max-chars", "--process-slot-var"}
+        ),
+        0,
+    ),
     "arch": (frozenset({"-arch", "-e", "-d"}), 0),
     "script": (frozenset({"-F", "-t", "-T"}), 1),  # script [-q] <file> <command ...>
     "coproc": (frozenset(), 0),
+    "time": (frozenset({"-o", "-f", "--output", "--format"}), 0),  # the keyword (time -p) and /usr/bin/time
+    "setsid": (frozenset(), 0),
+    "flock": (frozenset({"-w", "--wait", "--timeout", "-E", "--conflict-exit-code"}), 1),  # flock <file> ...
+}
+# Commands whose subcommand runs the command after it (`uv run git push`): the subcommand, and its options
+# that take a separate value.
+SUBCOMMAND_WRAPPERS: dict[str, tuple[str, frozenset[str]]] = {
+    "uv": (
+        "run",
+        frozenset({"--with", "--python", "-p", "--project", "--directory", "--package", "--group", "--extra"})
+        | {"--env-file", "--index", "-w", "--with-requirements", "--only-group"},
+    ),
+    "poetry": ("run", frozenset({"--directory", "-C", "--project", "-P"})),
+    "pipx": ("run", frozenset({"--spec", "--python"})),
 }
 # Wrappers with an option that takes a whole command line (env -S 'git push -f', script -c '...'), read
 # again as `bash -c`'s; and whether the words after it are added to it (env's are).
 COMMAND_LINE_OPTIONS: dict[str, tuple[tuple[str, ...], bool]] = {
     "env": (("-S", "--split-string"), True),
+    "genv": (("-S", "--split-string"), True),
     "script": (("-c", "--command"), False),
+    "flock": (("-c", "--command"), False),
 }
 # Shells whose -c runs its argument, and their options that take a separate value (bash -o pipefail -c ...).
 SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh", "csh", "tcsh", "fish"})
@@ -251,27 +287,33 @@ GLOBAL_VALUE_OPTIONS = {
     ),
     "gh": frozenset({"-R", "--repo"}),
 }
-# Interpreters that run code given on their command line, by the options that take it. The guard reads
-# no such code: it asks when the code names git push, gh or a URL (OUTWARD_CODE), and otherwise leaves it
-# to auto mode (docs/permissions.md).
-INLINE_CODE: dict[str, tuple[str, ...]] = {
-    "python": ("-c",),
-    "perl": ("-e", "-E"),
-    "ruby": ("-e",),
-    "node": ("-e", "--eval", "-p", "--print"),
-    "osascript": ("-e",),
+# Interpreters that run code given on their command line: the short options that take it (also in a cluster:
+# python3 -Ic, perl -we) and the long ones (node --eval=...). The guard reads no such code: it asks when the
+# code names git push, gh or a URL (OUTWARD_CODE), and otherwise leaves it to auto mode (docs/permissions.md).
+INLINE_CODE: dict[str, tuple[str, tuple[str, ...]]] = {
+    "python": ("c", ()),
+    "perl": ("eE", ()),
+    "ruby": ("e", ()),
+    "node": ("ep", ("--eval", "--print")),
+    "osascript": ("e", ()),
 }
 VERSION_SUFFIX = re.compile(r"(?<=[a-z])[\d.]+$")  # python3.13, perl5.34
 OUTWARD_CODE = re.compile(r"\bgit\b.*\bpush\b|\bgh\s|https?://", re.DOTALL)
 # How deep the guard reads commands inside commands (a substitution in a bash -c in an eval ...).
 MAX_NESTING = 5
-# What a substitution the shell would run, and an ANSI-C quoted word ($'...'), stand as in the text around
-# them once read: the guard cannot tell what they expand to.
+# What a substitution the shell would run, a parameter expansion (${...}) and an ANSI-C quoted word ($'...')
+# stand as in the text around them once read (the guard cannot tell what they expand to), and arithmetic
+# (a number, never a command word).
 SUBSTITUTED = "$__substitution__"
+PARAMETER = "$__parameter__"
 ANSI_C = "$__ansi_c__"
+ARITHMETIC_WORD = "0"
+ARRAY = "$__array__"
+ARRAY_ASSIGNMENT = re.compile(r"(?:^|[\s;&|()])[A-Za-z_][A-Za-z0-9_]*(?:\[[^]]*\])?\+?=$")
 DYNAMIC = "$"
-# A command named by a pattern, a brace expansion, a substitution or ANSI-C quoting: the shell decides what
-# runs (`/usr/bin/g[i]t`, `$(echo git)`, `$'git'`). `[` and `[[` are tests.
+# A command named by a pattern, a brace expansion, a substitution, ANSI-C quoting or a variable inside the
+# name: the shell decides what runs (`/usr/bin/g[i]t`, `$(echo git)`, `$'git'`, `git${IFS}push`). `[` and
+# `[[` are tests; a name that is a variable (`$L` for `L="bosun ledger"`) asks only inside a wrapper.
 OPAQUE_NAME = re.compile(r"[*?\[]|\{[^}]*(?:,|\.\.)|" + re.escape(SUBSTITUTED) + "|" + re.escape(ANSI_C))
 TESTS = frozenset({"[", "[["})
 # An argument the shell expands in a way the guard does not read: ANSI-C quoting, a brace expansion.
@@ -279,9 +321,24 @@ EXPANDED_WORD = re.compile(r"\{[^}]*(?:,|\.\.)[^}]*\}|" + re.escape(ANSI_C))
 # Where a word starts (a # there starts a comment), and where it ends.
 WORD_BREAKS = " \t\n;&|()<>"
 METACHARACTERS = " \t\n;&|<>()"
-ARITHMETIC = re.compile(r"\$?\(\((?:[^()]|\([^()]*\))*\)\)")  # $((1<<2)), ((x << 1))
 HEREDOC_OPERATOR = re.compile(r"(?<!<)<<(?!<)-?[ \t]*")  # not a here-string (<<<)
 SHOWN_CHARS = 120  # of a command the guard cannot read, in what it says
+# The taint check (taint): the call's text with quotes, backslashes and parameters taken out, cut into words
+# at blanks, commas and equals signs (IFS tricks), with the shell's separators as words of their own.
+TAINT_PARAMETER = re.compile(r"\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*|\$[0-9@*#?$!-]")
+TAINT_WORD = re.compile(r"[;&|()<>`\n]|[^\s;&|()<>`,=]+")
+TAINT_SEPARATORS = frozenset(";&|()<>`\n")
+# Commands whose arguments, and the bodies of their quoted heredocs, are data the guard knows they never run
+# (a proposal's --run text, a brief): a gated command named there is explained.
+DATA_COMMANDS = frozenset({"bosun", "echo", "printf", "cat", "grep", "jq"})
+DATA_ALIAS = re.compile(
+    r"(?:^|[\s;&|])(?:function\s+(?P<keyword>[A-Za-z_][\w-]*)\s*(?:\(\s*\))?\s*\{"
+    r"|(?P<function>[A-Za-z_][\w-]*)\s*\(\s*\)\s*\{|(?P<variable>[A-Za-z_]\w*)=[\"']?)\s*(?P<first>\S+)",
+    re.MULTILINE,
+)
+COMMENT_LINE = re.compile(r"(?m)(?<!\\\n)^[ \t]*#.*$")
+FORCE_PUSH = "a force push"
+ADMIN_MERGE = "gh pr merge --admin"
 
 
 def name_words(tool_name: str) -> list[str]:
@@ -316,8 +373,9 @@ def command_name(word: str) -> str:
 
 def without_prefix(words: list[str]) -> list[str]:
     """<words> from the command name on: without keywords like `do`, assignments like `X=1`, redirections
-    like `2>/dev/null` and wrappers like `timeout 120` (WRAPPERS, by name: /usr/bin/timeout too). A wrapper
-    given a whole command line (env -S) stays: wrapped reads its command line."""
+    like `2>/dev/null` and wrappers like `timeout 120` or `uv run` (WRAPPERS, SUBCOMMAND_WRAPPERS, by name:
+    /usr/bin/timeout too). A wrapper given a whole command line (env -S) stays: wrapped reads its command
+    line."""
     index = 0
     while index < len(words):
         word = words[index]
@@ -325,56 +383,79 @@ def without_prefix(words: list[str]) -> list[str]:
             index += 1
         elif REDIRECTION.match(word):
             index += 2 if REDIRECTION_ONLY.match(word) else 1
-        elif command_name(word) in WRAPPERS and command_line_at(words[index:]) is None:
+        elif is_wrapper(words, index):
             index = after_wrapper(words, index)
         else:
             break
     return words[index:]
 
 
+def is_wrapper(words: list[str], index: int) -> bool:
+    """Whether words[index] is a wrapper that runs the command after it (not one given a command line)."""
+    name = command_name(words[index])
+    if name in SUBCOMMAND_WRAPPERS:
+        return words[index + 1 : index + 2] == [SUBCOMMAND_WRAPPERS[name][0]]
+    return name in WRAPPERS and command_line_at(words[index:]) is None
+
+
 def after_wrapper(words: list[str], index: int) -> int:
-    """Where the command run by the wrapper at <index> starts: after its options and arguments."""
-    value_options, arguments = WRAPPERS[command_name(words[index])]
+    """Where the command run by the wrapper at <index> starts: after its options and arguments (a named
+    coprocess's name too: coproc NAME { ...; })."""
+    name = command_name(words[index])
+    if name in SUBCOMMAND_WRAPPERS:
+        value_options, arguments, index = SUBCOMMAND_WRAPPERS[name][1], 0, index + 1
+    else:
+        value_options, arguments = WRAPPERS[name]
     index += 1
     while index < len(words) and words[index].startswith("-") and words[index] != "--":
         index += 2 if words[index] in value_options else 1
     if index < len(words) and words[index] == "--":
         index += 1
+    if name == "coproc" and words[index + 1 : index + 2] == ["{"]:
+        index += 1
     return min(index + arguments, len(words))
 
 
 def option_value(words: list[str], index: int, option: str) -> tuple[str, int] | None:
-    """The value of <option> if words[index] gives it (`-S value`, `-Svalue`, `--split-string=value`), and
-    the index after it; None if it does not."""
+    """The value of <option> if words[index] gives it (`-S value`, `-Svalue`, `--split-string=value`, or in a
+    cluster of short options: `-iS value`), and the index after it; None if it does not."""
     word = words[index]
     if word == option:
         return (words[index + 1] if index + 1 < len(words) else ""), index + 2
     if word.startswith(option + "="):
         return word.split("=", 1)[1], index + 1
-    if not option.startswith("--") and word.startswith(option) and not word.startswith("--"):  # -Svalue
-        return word[2:], index + 1
-    return None
+    if (
+        option.startswith("--")
+        or not word.startswith("-")
+        or word.startswith("--")
+        or option[1] not in word[1:]
+    ):
+        return None
+    rest = word[word.index(option[1], 1) + 1 :]
+    return (rest, index + 1) if rest else ((words[index + 1] if index + 1 < len(words) else ""), index + 2)
 
 
 def command_line_at(words: list[str]) -> tuple[str, int] | None:
     """The command line a wrapper (COMMAND_LINE_OPTIONS) is given as an option's value, and the index after
-    it; None for a wrapper given none (or another command)."""
+    it (among its options, after as many arguments as the wrapper takes: flock <file> -c '...'); None for a
+    wrapper given none (or another command)."""
     name = command_name(words[0])
     if name not in COMMAND_LINE_OPTIONS:
         return None
-    options, value_options = COMMAND_LINE_OPTIONS[name][0], WRAPPERS[name][0]
+    options, (value_options, arguments) = COMMAND_LINE_OPTIONS[name][0], WRAPPERS[name]
     index = 1
-    while index < len(words) and words[index].startswith("-"):
+    while index < len(words) and (words[index].startswith("-") or arguments > 0):
         found = next((v for option in options if (v := option_value(words, index, option))), None)
         if found:
             return found
+        arguments -= 0 if words[index].startswith("-") else 1
         index += 2 if words[index] in value_options else 1
     return None
 
 
 @dataclass
 class QuoteState:
-    """Which quotes are open while scanning a command line by line."""
+    """Which quotes are open while scanning a command line."""
 
     single: bool = False
     double: bool = False
@@ -427,12 +508,14 @@ class Part:
 @dataclass(frozen=True)
 class Parsed:
     """What a Bash command line runs, as far as the guard reads it: its parts (the line itself first),
-    its own simple commands as written, quotes and backslashes kept (what a settings rule's prefix sees),
-    and why the guard cannot read all it runs, if it cannot."""
+    its own simple commands as written, quotes, backslashes and backslash-newlines kept (what a settings
+    rule's prefix sees), why the guard cannot read all it runs, if it cannot, and the bodies of the quoted
+    heredocs of its data commands (DATA_COMMANDS), for the taint check."""
 
     parts: list[Part]
     written: list[list[str]]
     unread: str = ""
+    data: tuple[str, ...] = ()
 
     @property
     def commands(self) -> list[list[str]]:
@@ -440,22 +523,45 @@ class Parsed:
         return [words for part in self.parts for words in part.commands]
 
     def with_inner(self, inner: Parsed) -> Parsed:
-        return Parsed([*self.parts, *inner.parts], self.written, self.unread or inner.unread)
+        return Parsed(
+            [*self.parts, *inner.parts], self.written, self.unread or inner.unread, self.data + inner.data
+        )
 
 
-def arithmetic_at(text: str, position: int) -> int | None:
-    """Where an arithmetic expansion or command that starts at <position> ends ($((1<<2)), ((x << 1))), or
-    None: none starts there, or it holds a substitution, which is read as one."""
-    found = ARITHMETIC.match(text, position)
-    if found is None or "$(" in found.group()[3:] or "`" in found.group():
+def arithmetic_end(text: str, position: int, unquoted: bool) -> int | None:
+    """Where arithmetic that starts at <position> ends: $((...)), $[...], and, <unquoted>, a ((...)) command,
+    nested parentheses counted; None when none starts there, or it holds a substitution (read as one)."""
+    if text.startswith("$[", position):
+        end = matching(text, position + 2, "[", "]")
+    elif text.startswith("$((", position) or (unquoted and text.startswith("((", position)):
+        start = position + (text[position] == "$")
+        end = matching(text, start + 1, "(", ")")
+        end = end if text[end - 1 : end + 1] == "))" else -1
+    else:
         return None
-    return found.end()
+    inner = text[position:end]
+    return None if end < 0 or "$(" in inner[2:] or "`" in inner else end + 1
 
 
-def comment_end(text: str, position: int) -> int | None:
+def matching(text: str, start: int, opening: str, closing: str) -> int:
+    """The index of the <closing> that closes one opened just before <start>, nested pairs counted
+    (-1 when none does)."""
+    depth = 0
+    for index in range(start, len(text)):
+        if text[index] == opening:
+            depth += 1
+        elif text[index] == closing:
+            if depth == 0:
+                return index
+            depth -= 1
+    return -1
+
+
+def comment_end(text: str, position: int, before: str) -> int | None:
     """Where a comment that starts at <position> ends (the newline after it, or the end of <text>), or None
-    when none starts there: a # starts one only where a word starts, outside quotes (the caller's)."""
-    if text[position] != "#" or (position > 0 and text[position - 1] not in WORD_BREAKS):
+    when none starts there: a # starts one only where a word starts (<before>, the character the shell read
+    just before it, is a break or nothing), outside quotes (the caller's)."""
+    if text[position] != "#" or (before and before not in WORD_BREAKS):
         return None
     end = text.find("\n", position)
     return len(text) if end < 0 else end
@@ -474,15 +580,24 @@ def body_end(text: str, start: int, delimiter: str) -> tuple[int, bool]:
     return len(text), False
 
 
+def word_at(text: str, position: int, word: str) -> bool:
+    """Whether <word> stands at <position> as a word of its own (case, esac)."""
+    before = text[position - 1] if position else ""
+    after = text[position + len(word) : position + len(word) + 1]
+    return text.startswith(word, position) and before in ("", *WORD_BREAKS) and after in ("", *WORD_BREAKS)
+
+
 @dataclass
 class ParenReader:
     """The command of a $( ... ) read to the ) that closes it, as the shell reads it: quotes, backslashes,
-    nested parentheses, arithmetic, comments, and heredocs, whose bodies (data, an apostrophe in them too)
-    start at the next newline."""
+    nested parentheses, arithmetic, parameter expansions (${...}), comments, a case's patterns (x) closes
+    nothing before its esac), and heredocs, whose bodies (data, an apostrophe in them too) start at the
+    next newline."""
 
     text: str
     quotes: QuoteState = field(default_factory=QuoteState)
     depth: int = 0
+    cases: int = 0  # case ... esac open
     pending: list[str] = field(default_factory=list)  # heredoc delimiters whose bodies come next
     closed_at: int = -1
 
@@ -501,21 +616,34 @@ class ParenReader:
             return position + 1
         if char == "\n" and self.pending:
             return self.after_bodies(position + 1)
-        return comment_end(self.text, position) or self.unquoted(position)
+        before = self.text[position - 1] if position else ""
+        return comment_end(self.text, position, before) or self.unquoted(position)
 
     def unquoted(self, position: int) -> int:
-        arithmetic = arithmetic_at(self.text, position)
+        text = self.text
+        skipped = self.skipped(position)
+        if skipped is not None:
+            return skipped
+        self.cases += word_at(text, position, "case") - word_at(text, position, "esac")
+        if text[position] == ")" and self.depth == 0 and self.cases <= 0:
+            self.closed_at = position
+        self.depth += {"(": 1, ")": -1}.get(text[position], 0) if self.cases <= 0 or self.depth else 0
+        return position + 1
+
+    def skipped(self, position: int) -> int | None:
+        """Past arithmetic, a parameter expansion or a heredoc operator at <position>; None for none."""
+        text = self.text
+        arithmetic = arithmetic_end(text, position, unquoted=True)
         if arithmetic is not None:
             return arithmetic
-        operator = HEREDOC_OPERATOR.match(self.text, position)
-        if operator:
-            delimiter, _, end = shell_word(self.text, operator.end())
-            self.pending.append(delimiter)
-            return max(end, operator.end())
-        if self.text[position] == ")" and self.depth == 0:
-            self.closed_at = position
-        self.depth += {"(": 1, ")": -1}.get(self.text[position], 0)
-        return position + 1
+        if text.startswith("${", position):
+            return matching(text, position + 2, "{", "}") + 1 or len(text)
+        operator = HEREDOC_OPERATOR.match(text, position)
+        if operator is None:
+            return None
+        delimiter, _, end = shell_word(text, operator.end())
+        self.pending.append(delimiter)
+        return max(end, operator.end())
 
     def after_bodies(self, position: int) -> int:
         for delimiter in self.pending:
@@ -546,36 +674,53 @@ def ansi_c_end(text: str, start: int) -> int:
     return min(position + 1, len(text))
 
 
+BACKTICK_ESCAPE = re.compile(r"\\([`$\\])")
+
+
 def substitution_at(text: str, position: int) -> tuple[str, int] | None:
-    """The command of a substitution that starts at <position> ($(...) or `...`), and where the text goes
-    on after it; None if none starts there."""
+    """The command of a substitution that starts at <position> ($(...) or `...`; in a backquoted one, \\`,
+    \\$ and \\\\ are what the inner command sees: ` (a nested one), $ and \\), and where the text goes on
+    after it; None if none starts there."""
     if text.startswith("$(", position):
         close = closing_paren(text, position + 2)
         return text[position + 2 : close], close + 1
     if text.startswith("`", position):
         close = closing_backtick(text, position + 1)
-        return text[position + 1 : close], close + 1
+        return BACKTICK_ESCAPE.sub(r"\1", text[position + 1 : close]), close + 1
     return None
+
+
+def heredoc_command(text: str) -> str:
+    """The name of the simple command a heredoc operator at the end of <text> belongs to ("" when its quotes
+    do not close or there is none)."""
+    found, closed = split_simple(text)
+    words = without_prefix(found[-1]) if closed and found else []
+    return command_name(words[0]) if words else ""
 
 
 @dataclass
 class ShellReader:
     """A command line read in one pass as the shell reads it, before its words are split: quotes and
-    backslashes (a backslash before a newline joins the lines); comments (a # that starts a word, outside
-    quotes) left out; each substitution the shell would run ($(...) and `...`, outside single quotes,
-    inside double quotes too) taken out, SUBSTITUTED in its place and its command kept (<held>); an ANSI-C
-    quoted word ($'...') as ANSI_C, and a $"..." as the "..." it is; arithmetic ($((1<<2))) kept as it is;
-    and heredoc bodies, which start at the next newline, left out as data, those of unquoted heredocs kept
-    (<expanding>), where substitutions still run. <body>: the text is such a body, whose quotes are text,
-    with no comments or heredocs."""
+    backslashes (a backslash before a newline joins the lines); comments (a # that starts a word, as the
+    shell has read it, outside quotes) left out; each substitution the shell would run ($(...), `...`, <(...)
+    and >(...), outside single quotes, the first two inside double quotes too) taken out, SUBSTITUTED in
+    its place and its command kept (<held>); a parameter expansion (${...}) as PARAMETER, the substitutions
+    in it held; an ANSI-C quoted word ($'...') as ANSI_C, and a $"..." as the "..." it is; arithmetic
+    ($((...)), $[...], ((...))) as a number; a redirection that duplicates or clobbers without its & or |;
+    and heredoc bodies, which start at the next newline, left out as data, those of unquoted heredocs
+    kept (<expanding>), where substitutions still run, and those of quoted heredocs of DATA_COMMANDS
+    (<data>). <body>: the text is such a body, whose quotes are text, with no comments or heredocs. <raw>
+    is the text as written (backslash-newlines kept), for what a settings rule sees."""
 
     text: str
     body: bool = False
     quotes: QuoteState = field(default_factory=QuoteState)
     kept: list[str] = field(default_factory=list)
+    raw: list[str] = field(default_factory=list)
     held: list[str] = field(default_factory=list)
     expanding: list[str] = field(default_factory=list)
-    pending: list[tuple[str, bool]] = field(default_factory=list)  # heredocs whose bodies come next
+    data: list[str] = field(default_factory=list)
+    pending: list[tuple[str, bool, str]] = field(default_factory=list)  # heredocs whose bodies come next
     unclosed: bool = False  # a heredoc that never closes
 
     @property
@@ -587,6 +732,15 @@ class ShellReader:
     def runs(self) -> bool:
         """Whether the shell would run a substitution in it, or in its unquoted heredocs' bodies."""
         return bool(self.held) or any(ShellReader(body, body=True).read().held for body in self.expanding)
+
+    @property
+    def before(self) -> str:
+        """The last character the shell has read ("" at the start)."""
+        return next((part[-1] for part in reversed(self.kept) if part), "")
+
+    def emit(self, text: str, raw: str | None = None) -> None:
+        self.kept.append(text)
+        self.raw.append(text if raw is None else raw)
 
     def read(self) -> ShellReader:
         position = 0
@@ -603,59 +757,115 @@ class ShellReader:
         if expanded is not None:
             return expanded
         if self.body or self.quotes.toggle(char) or self.quotes.open:
-            self.kept.append(char)
+            self.emit(char)
             return position + 1
         return self.unquoted(position)
 
     def expansion(self, position: int) -> int | None:
-        """Past arithmetic (kept) or a substitution (held) that starts at <position>; None for neither."""
-        arithmetic = arithmetic_at(self.text, position)
+        """Past arithmetic, a parameter expansion or a substitution that starts at <position> (each written
+        as what stands for it); None for none."""
+        text = self.text
+        arithmetic = arithmetic_end(text, position, unquoted=not (self.quotes.open or self.body))
         if arithmetic is not None:
-            self.kept.append(self.text[position:arithmetic])
+            self.emit(ARITHMETIC_WORD, text[position:arithmetic])
             return arithmetic
-        found = substitution_at(self.text, position)
+        if text.startswith("${", position):
+            end = matching(text, position + 2, "{", "}")
+            end = len(text) if end < 0 else end
+            self.held += ShellReader(text[position + 2 : end], body=True).read().held
+            self.emit(PARAMETER)
+            return end + 1
+        found = substitution_at(text, position)
         if found is None:
             return None
         self.held.append(found[0])
-        self.kept.append(SUBSTITUTED)
+        self.emit(SUBSTITUTED)
         return found[1]
 
     def escape(self, position: int) -> int:
-        if self.text[position + 1 : position + 2] == "\n" and not self.body:
-            return position + 2  # a backslash before a newline joins the lines
-        self.kept.append(self.text[position : position + 2])
+        pair = self.text[position : position + 2]
+        if pair == "\\\n" and not self.body:
+            self.raw.append(pair)  # a backslash before a newline joins the lines; a rule sees them apart
+            return position + 2
+        self.emit(pair)
         return position + 2
 
     def unquoted(self, position: int) -> int:
         text, char = self.text, self.text[position]
         if text.startswith(("$'", '$"'), position):
             return self.dollar_quote(position)
-        skipped = comment_end(text, position)
+        skipped = comment_end(text, position, self.before) or self.special(position)
         if skipped:
             return skipped
-        operator = HEREDOC_OPERATOR.match(text, position)
-        if operator is not None:
-            delimiter, quoted, end = shell_word(text, operator.end())
-            self.pending.append((delimiter, quoted))
-            self.kept.append(text[position:end])
-            return max(end, operator.end())
-        self.kept.append(char)
+        self.emit(char)
         return self.bodies(position + 1) if char == "\n" and self.pending else position + 1
+
+    def special(self, position: int) -> int | None:
+        """Past a redirection that duplicates or clobbers, a process substitution or a heredoc operator at
+        <position>; None for none."""
+        text = self.text
+        duplicate = REDIRECTION_DUP.match(text, position) if self.before in ("", *WORD_BREAKS) else None
+        if duplicate:
+            self.emit(duplicate.group().replace("&", "").replace("|", ""), duplicate.group())
+            return duplicate.end()
+        if text.startswith(("<(", ">("), position):
+            close = closing_paren(text, position + 2)
+            self.held.append(text[position + 2 : close])
+            self.emit(SUBSTITUTED)
+            return close + 1
+        if text[position] == "(" and ARRAY_ASSIGNMENT.search(self.words):
+            close = closing_paren(text, position + 1)
+            self.emit(ARRAY, text[position : close + 1])  # a=(git push -f): words, run only when expanded
+            return close + 1
+        operator = HEREDOC_OPERATOR.match(text, position)
+        if operator is None:
+            return None
+        delimiter, quoted, end = shell_word(text, operator.end())
+        self.pending.append((delimiter, quoted, heredoc_command(self.words)))
+        self.emit(text[position:end])
+        return max(end, operator.end())
 
     def dollar_quote(self, position: int) -> int:
         if self.text[position + 1] == '"':
             return position + 1  # the "..." is read next, as a double-quoted string
-        self.kept.append(ANSI_C)
-        return ansi_c_end(self.text, position + 2)
+        end = ansi_c_end(self.text, position + 2)
+        self.emit(ANSI_C, self.text[position:end])
+        return end
 
     def bodies(self, position: int) -> int:
-        for delimiter, quoted in self.pending:
+        for delimiter, quoted, command in self.pending:
             end, closed = body_end(self.text, position, delimiter)
             self.unclosed = self.unclosed or not closed
-            self.expanding += [] if quoted else [self.text[position:end]]
+            body = self.text[position:end]
+            self.expanding += [] if quoted else [body]
+            self.data += [body] if quoted and command in DATA_COMMANDS else []
             position = end
         self.pending = []
         return position
+
+
+def naive_comments_out(text: str) -> str:
+    """<text> as a reader that knows no backslash-newline might take it: a # that starts a word on a line,
+    outside quotes, ends that line. What a settings rule may see of a call (`echo a\\` then `#;git push`
+    on the next line: the push stays out of sight)."""
+    quotes = QuoteState()
+    lines = []
+    for line in text.split("\n"):
+        cut, position = len(line), 0
+        while position < len(line) and cut == len(line):
+            char = line[position]
+            if char == "\\" and not quotes.single:
+                position += 2
+                continue
+            if (
+                not quotes.toggle(char)
+                and not quotes.open
+                and comment_end(line, position, line[position - 1 : position])
+            ):
+                cut = position
+            position += 1
+        lines.append(line[:cut])
+    return "\n".join(lines)
 
 
 def split_simple(text: str, posix: bool = True) -> tuple[list[list[str]], bool]:
@@ -697,8 +907,8 @@ def says_c(option: str) -> bool:
 
 def wrapped(words: list[str]) -> str | None:
     """What a wrapper runs as a command line, to be read again: the command string of `bash|sh|zsh|...
-    -c ...` ("" when it lacks one: it runs nothing), eval's arguments joined, or the command line env -S
-    or script -c is given (env's with the words after it); None for any other command."""
+    -c ...` ("" when it lacks one: it runs nothing), eval's arguments joined, or the command line env -S,
+    script -c or flock -c is given (env's with the words after it); None for any other command."""
     name = command_name(words[0])
     if name == EVAL:
         return " ".join(words[1:])
@@ -712,24 +922,36 @@ def wrapped(words: list[str]) -> str | None:
 
 
 def inline_code(words: list[str]) -> str | None:
-    """The code an interpreter (INLINE_CODE) is given on its command line (python -c '...'), or None."""
-    options = INLINE_CODE.get(VERSION_SUFFIX.sub("", command_name(words[0])), ())
-    at = next((index for index, word in enumerate(words) if word in options), None)
-    return None if at is None else " ".join(words[at + 1 : at + 2])
+    """The code an interpreter (INLINE_CODE) is given on its command line (python -c '...', python3 -Ic,
+    perl -we, node --eval=...), or None."""
+    letters, long_options = INLINE_CODE.get(VERSION_SUFFIX.sub("", command_name(words[0])), ("", ()))
+    options = [*long_options, *(f"-{letter}" for letter in letters)]
+    for index in range(1, len(words)):
+        found = next((value for option in options if (value := option_value(words, index, option))), None)
+        if found:
+            return found[0]
+    return None
 
 
 def shown(text: str) -> str:
-    return " ".join(text.replace(SUBSTITUTED, "$(...)").replace(ANSI_C, "$'...'").split())[:SHOWN_CHARS]
+    for placeholder, said in ((SUBSTITUTED, "$(...)"), (ANSI_C, "$'...'"), (PARAMETER, "${...}")):
+        text = text.replace(placeholder, said)
+    return " ".join(text.split())[:SHOWN_CHARS]
+
+
+def opaque_name(name: str) -> bool:
+    """Whether the shell decides what a command name runs (OPAQUE_NAME, or a variable inside it)."""
+    return name not in TESTS and (OPAQUE_NAME.search(name) is not None or DYNAMIC in name[1:])
 
 
 def unreadable_words(words: list[str], wrapper: str) -> str:
     """Why the guard cannot tell what the simple command <words> does, or "": named by a pattern, a brace
-    expansion, a substitution or ANSI-C quoting; inside a wrapper (<wrapper>: bash -c, eval), named by a
-    variable; a gated command whose arguments the shell expands unread; inline code that names an outward
-    call."""
+    expansion, a substitution, ANSI-C quoting or a variable inside the name; inside a wrapper (<wrapper>:
+    bash -c, eval), named by a variable; a gated command whose arguments the shell expands unread; inline
+    code that names an outward call."""
     name = words[0]
-    if name not in TESTS and OPAQUE_NAME.search(name):
-        return "named by a pattern, a substitution or ANSI-C quoting"
+    if opaque_name(name):
+        return "named by a pattern, a substitution, ANSI-C quoting or a variable"
     if wrapper and name.startswith(DYNAMIC):
         return "named by a variable"
     if gate_of(words, GATED_COMMANDS) and any(EXPANDED_WORD.search(word) for word in words[1:]):
@@ -761,15 +983,15 @@ def parse(command: str, wrapper: str = "", depth: int = 0) -> Parsed:
     if depth > MAX_NESTING:
         return Parsed([], [], f"commands nested more than {MAX_NESTING} deep")
     read = ShellReader(command).read()
-    text = read.words
     held = [
         *read.held,
         *(inner for body in read.expanding for inner in ShellReader(body, body=True).read().held),
     ]
-    found, closed = split_simple(text)
+    found, closed = split_simple(read.words)
     commands = [words for words in map(without_prefix, found) if words]
     reason = unreadable(wrapper, command, read, closed, commands)
-    parsed = Parsed([Part(command, commands)], split_simple(text, posix=False)[0], reason)
+    written = split_simple(naive_comments_out("".join(read.raw)), posix=False)[0]
+    parsed = Parsed([Part(command, commands)], written, reason, tuple(read.data))
     for inner in held:
         parsed = parsed.with_inner(parse(inner, depth=depth + 1))
     for words in commands:
@@ -866,14 +1088,16 @@ def force_push(words: list[str]) -> str | None:
     words = compared(words)
     pushes = words[0] == "git" and "push" in words[1:]
     if pushes and any(is_force_flag(arg) for arg in words[words.index("push") + 1 :]):
-        return "git push with force (-f, --force*, or a +refspec) is never allowed"
+        return "git push with force (-f, --force*, --mirror, or a +refspec) is never allowed"
     return None
 
 
+def is_admin_flag(arg: str) -> bool:
+    return arg == "--admin" or arg.startswith("--admin=")
+
+
 def admin_merge(words: list[str]) -> str | None:
-    if compared(words)[:3] == ["gh", "pr", "merge"] and any(
-        w == "--admin" or w.startswith("--admin=") for w in words
-    ):
+    if compared(words)[:3] == ["gh", "pr", "merge"] and any(map(is_admin_flag, words)):
         return "gh pr merge --admin is never allowed"
     return None
 
@@ -903,8 +1127,7 @@ def forbidden_bash(command: str) -> str | None:
 
 def unseen_gate(parsed: Parsed) -> str | None:
     """A gated outward command (GATED_COMMANDS) that the settings' `ask` rules do not see, as they match
-    a command as written by its first words (a full path, git's options before its subcommand, a wrapper,
-    a substitution, bash -c or eval): what it is, or None."""
+    a command as written by its first words: what it is, or None."""
     for words in parsed.commands:
         gate = gate_of(words, GATED_COMMANDS)
         if gate and not any(tuple(written[: len(gate[0])]) == gate[0] for written in parsed.written):
@@ -912,10 +1135,75 @@ def unseen_gate(parsed: Parsed) -> str | None:
     return None
 
 
+# ---- the taint check: what the parse does not explain asks -------------------------------------------
+
+
+def taint_words(text: str) -> list[str]:
+    """<text> as the taint check reads it (TAINT_PARAMETER, TAINT_WORD): lines that are only a comment left
+    out (a # first on a line no backslash continues: a comment in every shell, or data), backslash-newlines
+    joined, parameters ($VAR, ${...}) as a blank, quotes and backslashes taken out, cut at blanks, commas and
+    equals signs, the shell's separators words of their own."""
+    text = COMMENT_LINE.sub("", text).replace("\\\n", "")
+    return TAINT_WORD.findall(re.sub(r"[\"'\\]", "", TAINT_PARAMETER.sub(" ", text)))
+
+
+def data_names(command: str) -> frozenset[str]:
+    """The data commands (DATA_COMMANDS) and the names this call gives them: a function whose body starts
+    with one (`L() { bosun ledger "$@"; }`) or a variable that holds one (`L="bosun ledger"`, run as $L)."""
+    defined = {
+        found["keyword"] or found["function"] or found["variable"]
+        for found in DATA_ALIAS.finditer(command)
+        if command_name(found["first"]) in DATA_COMMANDS
+    }
+    return DATA_COMMANDS | defined | {f"${name}" for name in defined} | {f"${{{name}}}" for name in defined}
+
+
+def arguments_after(words: list[str], index: int) -> list[str]:
+    """The words after words[index] up to the next separator."""
+    end = next((i for i in range(index + 1, len(words)) if words[i] in TAINT_SEPARATORS), len(words))
+    return words[index + 1 : end]
+
+
+def occurrences(words: list[str]) -> Counter[str]:
+    """What <words> name, wherever they stand: a gated command (git push, gh pr merge, ...: GATED_COMMANDS
+    by compared, so past a full path and git's and gh's options), a push with a force flag after it (git or
+    not: a command named by a variable), and pr merge with --admin."""
+    found: Counter[str] = Counter()
+    for index, word in enumerate(words):
+        gate = gate_of(words[index:], GATED_COMMANDS) if word not in TAINT_SEPARATORS else None
+        if gate:
+            found[gate[1]] += 1
+        after = arguments_after(words, index)
+        if word == "push" and any(map(is_force_flag, after)):
+            found[FORCE_PUSH] += 1
+        if words[index : index + 2] == ["pr", "merge"] and any(map(is_admin_flag, after)):
+            found[ADMIN_MERGE] += 1
+    return found
+
+
+def explained(parsed: Parsed, data: frozenset[str] = DATA_COMMANDS) -> Counter[str]:
+    """What the parse accounts for: each gated command it read (the guard judges those), and whatever the
+    arguments of a data command (<data>: a proposal's --run text) or the body of its quoted heredoc names."""
+    found: Counter[str] = Counter()
+    for words in parsed.commands:
+        if command_name(words[0]) in data or words[0] in data:
+            found += sum((occurrences(taint_words(arg)) for arg in words[1:]), Counter())
+        elif gate := gate_of(words, GATED_COMMANDS):
+            found[gate[1]] += 1
+    return found + sum((occurrences(taint_words(body)) for body in parsed.data), Counter())
+
+
+def taint(command: str, parsed: Parsed) -> str | None:
+    """What <command> names that the parse does not explain (an outward command, a force push, an admin
+    merge in a form the guard does not read for certain), or None."""
+    unexplained = occurrences(taint_words(command)) - explained(parsed, data_names(command))
+    return next(iter(unexplained), None)
+
+
 def bash_decision(command: str) -> dict[str, str] | None:
     """The plain guard's answer to a Bash command: deny what is never allowed; ask before a gated
-    outward command the permission rules do not see, and before a command a wrapper runs that the
-    guard cannot read; else no decision."""
+    outward command the permission rules do not see, before a command the guard cannot read, and before
+    one whose text names an outward command the parse does not explain (taint); else no decision."""
     parsed = parse(command)
     reason = forbidden(parsed)
     if reason:
@@ -923,10 +1211,19 @@ def bash_decision(command: str) -> dict[str, str] | None:
     unseen = unseen_gate(parsed)
     if unseen:
         return ask(
-            f"this runs {unseen}, an outward action, in a form the permission rules do not see (a full path, "
-            "git's options before its subcommand, a wrapper, a substitution, bash -c or eval); confirm it"
+            f"this runs {unseen}, an outward action, in a form the permission rules do not see (a full "
+            "path, quoting or escapes in its name, git's options or gh's -R before its subcommand, a "
+            "redirection or a wrapper before it, a substitution, bash -c or eval); confirm it"
         )
-    return ask(f"{parsed.unread}; confirm it") if parsed.unread else None
+    if parsed.unread:
+        return ask(f"{parsed.unread}; confirm it")
+    tainted = taint(command, parsed)
+    if tainted:
+        return ask(
+            f"this names {tainted} in a form bosun guard does not read for certain (not a plain command it "
+            "parsed, nor data it knows is never run); confirm it"
+        )
+    return None
 
 
 def decide(event: dict[str, Any]) -> dict[str, str] | None:

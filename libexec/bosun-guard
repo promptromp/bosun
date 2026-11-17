@@ -8,8 +8,9 @@
 # options (git -C <dir> push), in $(...) and backticks, and in what bash|sh|zsh -c, eval and env -S run,
 # read again. It asks before a gated outward command (git push, gh pr merge, ...) in a form the
 # settings' ask rules do not see, and whenever it cannot read a command for certain (quotes or a
-# heredoc that never close, a command named by a substitution or a pattern). See lib/guard.py and
-# docs/permissions.md.
+# heredoc that never close, a command named by a substitution or a pattern), and when the call's text
+# names an outward command, a force push or an admin merge that its parse does not explain (the taint
+# check). See lib/guard.py and docs/permissions.md.
 # With BOSUN_APPROVALS_ENABLED=1, `bosun launch` also runs it as `--approvals` (PreToolUse:
 # deny unapproved outward calls), `--permission-request` (PermissionRequest: allow approved
 # ones) and `--post-tool-use` (PostToolUse, PostToolUseFailure: close the proposal an approved

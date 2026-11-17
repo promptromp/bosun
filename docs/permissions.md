@@ -13,28 +13,46 @@
 | Never | a free-text `bosun send` that names no work item; `send --new` or `send --start <msg>` instead of `delegate` | `bosun guard` denies `send` without `--id <ledger id>` or `--no-item`; updates to delegated work go through `delegate --update` |
 | Never | a command substitution the shell would run (`$(...)` or backticks, outside single quotes or in an unquoted heredoc) in `bosun delegate`, `bosun send` or `bosun ledger reach-out`, `ask`, `replied`, `propose`, `approve`, `spawn`, `link`, `unlink`, `fold` or `ticket-sync`, and in `bosun kg add-entity`, `propose`, `supersede`, `confirm`, `reject` or `batch` (whose `--quote`, `--name`, `--alias`, `--summary` and `--value` are your text or someone else's) | `bosun guard` denies it: their text often comes from Slack, PRs or a tracker, so it must never run commands |
 
-**What the guard reads, and what stays best effort.** `bosun guard` reads a Bash call as the shell does:
-comments out (a `#` that starts a word), a backslash before a newline joining the lines, heredoc bodies left out
-as data (the whole delimiter word, quotes taken out; a here-string `<<<` or arithmetic `$((1<<2))` opens none);
-each command by its name (`/usr/bin/git` is `git`), past keywords, assignments, redirections (`2>/dev/null git
-...`) and wrappers (`timeout`, `env`, `nice`, `nohup`, `xargs`, `sudo`, `arch`, `script`, `coproc` and the others
-in `WRAPPERS`, by name, so `/usr/bin/env` too); git's and gh's subcommand past their own options (`git -C <dir>
-push`, `gh -R acme/x pr merge`); the commands in `$(...)` and backticks, with their quotes, heredocs and nesting;
-and what `bash`, `sh`, `zsh`, `dash`, `ksh`, `csh`, `tcsh` or `fish -c`, `eval`, `env -S` and `script -c` run, read
-again. It denies a force push (`-f`, `--force*`, `--mirror`, a `+refspec`) and `gh pr merge --admin` (or
-`--admin=...`) wherever it finds them. When it cannot read a command for certain, it asks: quotes or a heredoc
-that never close; a command named by a substitution, ANSI-C quoting (`$'git'`) or a pattern (`/usr/bin/g[i]t`); a
-command a wrapper runs named by a variable; a gated command whose arguments use ANSI-C quoting or braces (`git
-push $'-f'`, `git push origin --{force,}`); inline code given to `python -c`, `perl -e`, `ruby -e`, `node -e` or
-`osascript -e` that names `git push`, `gh` or a URL; and a gated command whose command word is quoted or escaped
-(`\git push`, `"git" push`), which the `ask` rules may not see. It does not see, and leaves to auto mode and the
-policy: a command fed to a shell on its standard input (`echo 'git push -f' | sh`) or in a script file (`sh
-./x.sh`); a command named by a variable outside a wrapper (`G=git; $G push -f`, as `L="bosun ledger"; $L ...` is
-common); flags held in a variable (`git push $FLAGS`); git aliases (`git p` from your git config, or `git -c
-alias.p=push p`) and gh aliases (`gh alias set m 'pr merge --admin'`); an alias or function from the shell's startup
-files; commands run by `find -exec`, `parallel`, `watch`, `make` or a git hook; inline interpreter code that does not
-name `git push`, `gh` or a URL (one that builds the command from pieces); and a named coprocess (`coproc NAME {
-...; }`).
+**What the guard reads, and what stays best effort.** `bosun guard` parses a Bash call before it runs: comments
+(a `#` where a word starts, after what the shell has joined), a backslash before a newline joining the lines,
+heredoc bodies as data (the whole delimiter word, quotes taken out; a here-string `<<<`, arithmetic `$((...))`,
+`$[...]` or `((...))` and a parameter expansion `${...}` open none, and arithmetic is a number, never a command);
+the commands in `$(...)`, backticks (nested escaped ones too) and `<(...)`, with their quotes, heredocs, nesting
+and `case` patterns; redirections (`2>/dev/null`, `2>&1`, `>&2`, `&>log`, `>|out`) and array literals
+(`a=(...)`, data until expanded); each command by its name (`/usr/bin/git` is `git`), past keywords, assignments,
+redirections and wrappers (`timeout`, `time` and `time -p`, `env`, `nice`, `nohup`, `xargs`, `sudo`, `doas`,
+`setsid`, `flock`, `arch`, `script`, `caffeinate`, `coproc`, `uv run`, `poetry run`, `pipx run` and the others in
+`WRAPPERS`, by name, so `/usr/bin/env` too); git's and gh's subcommand past their own options (`git -C <dir>
+push`, `gh -R acme/x pr merge`); and what `bash`, `sh`, `zsh`, `dash`, `ksh`, `csh`, `tcsh` or `fish -c`, `eval`,
+`env -S`, `script -c` and `flock -c` run, read again. It denies a force push (`-f`, `--force*`, `--mirror`, a
+`+refspec`) and `gh pr merge --admin` (or `--admin=...`) wherever the parse finds them. It asks when it cannot
+read a command for certain: quotes or a heredoc that never close; a command named by a substitution, ANSI-C
+quoting (`$'git'`), a pattern (`/usr/bin/g[i]t`) or a variable inside the name (`git${IFS}push`); a command a
+wrapper runs named by a variable; a gated command whose arguments use ANSI-C quoting or braces (`git push $'-f'`,
+`git push origin --{force,}`); inline code given to `python -c` (`-Ic` too), `perl -e` (`-we` too), `ruby -e`,
+`node -e` (`--eval=` too) or `osascript -e` that names `git push`, `gh` or a URL; and a gated command the `ask`
+rules may not see as written (its name quoted or escaped, a full path, options, a redirection or a wrapper before
+it, a backslash-newline, inside a substitution or `bash -c`).
+
+Then a taint check, the backstop for what the parse may read wrong: the call's text, with quotes, backslashes
+and parameters (`$VAR`, `${...}`) taken out and cut at blanks, commas and equals signs (lines that are only a
+comment left out), is searched for a gated command (`git ... push`, `gh ... pr merge` and the others the gate
+lists, past their own options), a push with a force flag after it, and `pr merge` with `--admin`. What it finds
+that the parse did not explain asks: the parse explains a gated command it read as a command, and anything in
+the arguments of a data command (`bosun`, `echo`, `printf`, `cat`, `grep`, `jq`, or a function or variable this
+call makes one: `L() { bosun ledger "$@"; }`, `L="bosun ledger"`) or in the body of its quoted heredoc. So a
+proposal's `--run 'gh pr merge ...'` and a brief that mentions `git push` pass, and `ssh host 'git push -f'`, `find
+. -exec git push -f \;` or a comment after code that names one asks.
+
+What passes without a prompt, and so rests on auto mode and the policy: a plain gated command the `ask` rule
+sees (`git push origin main`; the rule asks, and with approvals on the gate does); a command fed to a shell on
+its standard input or in a script file, a data command's output or quoted heredoc piped to a shell included
+(`echo 'git push origin main' | sh`, `cat <<'EOF' | sh`); a command put together at run time whose words the
+text never names (`x=gi; $x"t" push origin main`, a script or inline code that builds `git push` from pieces);
+a force flag held in a variable (`git push $FLAGS`, which still asks as a push); git aliases (`git p` from your
+git config, or `git -c alias.p=push p`) and gh aliases (`gh alias set m 'pr merge --admin'`); an alias or a
+function from the shell's startup files; and a named coprocess's body (`coproc NAME { ...; }` is read, but a
+command it runs later through its file descriptors is not).
 
 ## What each window can reach
 
