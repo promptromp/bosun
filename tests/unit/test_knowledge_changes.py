@@ -1498,7 +1498,8 @@ class OutsideEditHistoryTest(JournalTestCase):
     def old_bosun_forgets(self, person: str) -> None:
         """What a bosun from before the journal does for kg forget: the person's entity, facts and
         identifiers out of the files, a plain sha256 record in forgotten.jsonl, the git history
-        restarted with every file in the folder; the journal and view.json as they were."""
+        restarted with every file in the folder (identifiers.jsonl and journal/local.jsonl too, as
+        its .gitignore did not leave them out); the journal and view.json as they were."""
         facts = store.read_jsonl(self.root / "facts.jsonl")
         gone = {i for i, f in km.fold_all(facts).items() if person in (f["subject"], f.get("object"))}
         (self.root / "facts.jsonl").write_text(
@@ -1516,7 +1517,11 @@ class OutsideEditHistoryTest(JournalTestCase):
         }
         store.append_records(self.root / "forgotten.jsonl", [forgotten])
         store.drop_history(self.root)
-        store.commit(self.root, "kg forget: a person deleted on request")
+        store.git(self.root, "init", "-q", "--template=", str(self.root), pinned=False)
+        older = store.GIT_IGNORE.removesuffix("".join(f"{name}\n" for name in store.PRIVATE_FILES))
+        (self.root / ".gitignore").write_text(older)
+        store.git(self.root, "add", "-A")
+        store.git(self.root, "commit", "-q", "--no-verify", "-m", "kg forget: a person deleted on request")
 
     def write_saying(self, *argv: str) -> str:
         said = io.StringIO()

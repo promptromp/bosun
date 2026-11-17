@@ -6,6 +6,7 @@ import io
 import json
 import sys
 import tempfile
+import threading
 import unittest
 from contextlib import redirect_stderr
 from datetime import UTC, datetime, timedelta
@@ -15,6 +16,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import signals
+import watchdog
 
 
 NOON = datetime(2026, 1, 5, 12, 0, tzinfo=UTC)
@@ -162,7 +164,26 @@ class RecordTest(unittest.TestCase):
             signals.record("alpha", "{not json", {"BOSUN_STATE_DIR": tmp})
             signals.record("alpha", json.dumps(PERMISSION), {"BOSUN_STATE_DIR": tmp})
             self.assertTrue(signals.signals_path(Path(tmp), "alpha").is_file())
-        self.assertIn("ERROR signals", err.getvalue())
+        [line] = err.getvalue().splitlines()
+        self.assertIn("ERROR: signals: could not record a alpha hook event", line)
+        # stamped as every log line, so the watchdog's log-errors check finds it in the hook log
+        self.assertTrue(watchdog.is_alerting_error(line), line)
+
+    def test_an_append_waits_for_one_that_holds_the_file(self) -> None:
+        # The async hooks run at once (a PermissionRequest, then its Notification): a trim that read the file
+        # before another hook's append would write it back without that line.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = signals.signals_path(Path(tmp), "alpha")
+            path.parent.mkdir(parents=True)
+            line = signals.signal_from(ASKING, NOON) or {}
+            appending = threading.Thread(target=signals.append, args=(Path(tmp), "alpha", line, 1 << 20))
+            with signals.locked(path):
+                appending.start()
+                appending.join(0.3)
+                self.assertTrue(appending.is_alive())
+                self.assertFalse(path.exists())
+            appending.join(5)
+            self.assertEqual(len(path.read_text().splitlines()), 1)
 
     def test_a_window_name_cannot_leave_the_signals_folder(self) -> None:
         path = signals.signals_path(Path("/state"), "../x/y")

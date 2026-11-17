@@ -1,35 +1,136 @@
 # Orchestrator
 
-The `orchestrator` window runs an interactive Claude Code session with Remote Control, so you can
-answer it from your phone. It hands tasks to repo windows whichever agent runs in them, Claude Code or
-[Codex](setup.md#running-repo-sessions-on-codex). Unlike the repo windows it:
+The orchestrator is the Claude Code window that runs your chores. It reads Slack and your pull requests, records
+each piece of work in the [ledger](ledger.md), hands tasks to the repo windows, follows up with the people you are
+waiting on, and asks you before anything goes out under your name. This page says what it does each day, what it
+hands to repo windows, and how to steer it.
 
-- **starts a fresh conversation every day** (`orchestrator-YYYY-MM-DD`). `refresh` restarts it once
-  it is idle the next morning. Continuity lives in the ledger, not the chat history.
-- runs in its **own permission setup**: `BOSUN_ORCHESTRATOR_FLAGS` (default
-  `--chrome --permission-mode auto`) plus `orchestrator/settings.json`, never
-  `--dangerously-skip-permissions`. It may read bosun's install folder and its versions folder, and
-  only read them: `Read(...)` rules are added to its settings' own `allow` list (a site's settings
-  file keeps its rules), as `bosun update` asks it to re-read files there and Claude Code asks first
-  before a read outside its working directories.
-- loads `orchestrator/policy.md` as an appended system prompt and the `orchestrator/plugin`
-  commands. The main one is `/bosun:chores morning|check-in`. With `BOSUN_KNOWLEDGE_ENABLED=1` the prompt ends
-  with the [ontology's rules](knowledge.md#in-the-agents-hands) (`orchestrator/knowledge.md`): look before
-  asking, record what you state as standing. `bosun chores --dry-run` gets them too.
-- reaches only the **connectors `BOSUN_ORCHESTRATOR_CONNECTORS` names** (empty: none), such as
-  `claude.ai Slack` and a tracker: see [Connectors](setup.md#connectors-what-each-window-may-reach). A
-  name it cannot find at launch is left out, and `bosun alert` tells you which.
-- must run in a folder Claude Code **already trusts** (`BOSUN_ORCHESTRATOR_DIR`, default your
-  repos dir). A trust prompt would block an unattended start; `bosun doctor` checks this.
+## How it differs from a repo window
+
+- **A fresh conversation every day** (`orchestrator-YYYY-MM-DD`): `refresh` restarts it once it is idle the next
+  morning. What carries over between days lives in the ledger, not in the chat.
+- **Its own permissions**: `BOSUN_ORCHESTRATOR_FLAGS` (default `--chrome --permission-mode auto`) plus
+  `orchestrator/settings.json`, never `--dangerously-skip-permissions`. See [Permissions](permissions.md).
+- **Its own instructions**: `orchestrator/policy.md` as an appended system prompt, and the `/bosun:chores morning|
+  check-in` command. With `BOSUN_KNOWLEDGE_ENABLED=1` the prompt ends with the
+  [ontology's rules](knowledge.md#in-the-agents-hands): look a fact up before asking you, and record what you state
+  as standing. `bosun chores --dry-run` gets them too.
+- **Only the connectors you name** in `BOSUN_ORCHESTRATOR_CONNECTORS` (empty: none), such as `claude.ai Slack` and a
+  tracker ([Connectors](configuration.md#connectors-what-each-window-may-reach)). A name it cannot find at launch is
+  left out, and `bosun alert` tells you which.
+- **A folder Claude Code already trusts** (`BOSUN_ORCHESTRATOR_DIR`, default your repos folder), since a trust prompt
+  would stop an unattended start; `bosun doctor` checks it.
+
+It may hand tasks to repo windows whatever agent runs in them, Claude Code, [Codex](configuration.md#running-repo-sessions-on-codex)
+or Antigravity.
+
+<details class="note" markdown>
+<summary>What it may read of bosun itself</summary>
+
+The orchestrator may read bosun's install folder and its versions folder, and only read them: `Read(...)` rules
+are added to its settings' own `allow` list (a site's settings file keeps its rules), as `bosun update` asks it to
+re-read files there and Claude Code asks first before a read outside its working directories.
+
+</details>
+
+## The chores
+
+Each day's conversation starts with `/bosun:chores morning`, and the check-ins run `/bosun:chores check-in`. The
+procedure is `orchestrator/plugin/commands/chores.md`, in the same steps:
+
+- **0. Orient:** record the run (`ledger mark-run`, which also prints where the Slack scan starts), read `bosun
+  context`, and the reports repo windows filed since the scan window began.
+- **1. Slack:** mentions and DMs in the scan window. Each message is checked against the ledger (`seen`) and
+  classified as `pr-review`, `td-review`, `my-pr`, `mention` or `fyi`.
+- **2. Review requests:** it reads their state on GitHub. If you already reviewed, it marks them `reviewed`;
+  otherwise it hands them to the repo window, which posts the review with inline comments and approves when
+  nothing blocks merging, or proposes opening a window for it.
+- **3. Tech design reviews:** it reads the Confluence page, drafts comments, and proposes posting them.
+- **4. Your open pull requests** (found with `bosun my-prs`, checked with `gh` and `bosun pr-threads`):
+  - changes requested: the repo window pushes fixes and answers every thread that waits for you; once none is
+    left, the orchestrator proposes re-requesting review, with the thread counts per round
+  - approved and green: it proposes a squash-merge
+  - waiting too long: it proposes a nudge in the original review-request thread
+- **5. Outreach** (what we wait on from other people): it proposes the message for new drafts, checks sent ones for
+  a reply, hands replies to the window holding the work, and proposes nudges. See
+  [Waiting on someone](#waiting-on-someone-outreach).
+- **6. Mentions:** new asks appear under FYI with a one-line summary, and a draft reply when one fits. A mention that
+  asks us to do something becomes a proposed task, with the command that would hand it over; nothing is handed
+  over before you say so.
+- **7. Tasks and tickets:** proposed tasks wait for your yes ([Tasks and links](#work-we-take-on-tasks-and-links));
+  accepted ones are handed over, and their pull requests linked. Tickets of open work are read with the tracker's
+  tools, and where a ticket and the work disagree, the exact change is proposed
+  ([External tickets](#external-tickets)).
+- **8. Report:** the reply is grouped as *Needs your approval* (numbered, with exact text, including earlier proposals
+  you have not answered and [learning](learning.md#learning)'s), *Handled automatically* and *FYI*. You answer "1
+  and 3 yes, 2 skip". On a Monday morning it also offers a stand-up draft per active
+  [workstream](#workstreams-what-an-item-is-for).
+
+With `BOSUN_ORCHESTRATOR_MORNING_CHORES=0` the day's conversation starts idle instead, and the chores run only when
+you or a check-in ask for them.
+
+<details class="note" markdown>
+<summary>The Slack scan window</summary>
+
+A check-in scans Slack since the last run. A morning scans the last `BOSUN_SLACK_LOOKBACK_HOURS` (24), or from the
+last scan if that was longer ago (a failed morning, days away), but at most `BOSUN_SLACK_MAX_LOOKBACK_HOURS` (96)
+back. Changes requested on your pull requests are answered thread by thread: every thread that waits for the author
+in a fresh `bosun pr-threads --awaiting-author`, any round.
+
+</details>
+
+### Which repositories and pull requests
+
+**The repo mask.** `BOSUN_REPO_MASK` limits the orchestrator to matching repositories: a space-separated list of
+`owner/repo` glob patterns, such as `my-org/*` or `my-org other-org/one-repo` (a bare owner means all its repos;
+empty means every repo). It is enforced in code, not just the prompt: `bosun my-prs` filters by it, the ledger
+refuses `review:`, `mypr:` and `ghissue:` items outside it, and `bosun context` only maps matching repos.
+
+**Your pull requests.** `bosun my-prs` finds your open pull requests with activity within `BOSUN_MY_PR_WINDOW`
+(default `48h`). Pass `--since 7d`, `--since 2w` or `--since 2026-09-01` for a wider sweep, and `--by created` to go
+by creation time instead of activity. Drafts are skipped unless you pass `--include-drafts`. You can also just ask
+the orchestrator ("check my PRs from the last week"). Pull requests already in the ledger stay tracked until merged
+or closed, whatever the window.
+
+### Check-ins
+
+The `checkin` window sends `/bosun:chores check-in` every `BOSUN_CHECKIN_MINUTES` (60), but only when the
+orchestrator has been idle for 5 minutes and you have not typed in tmux recently, so it never interrupts a
+conversation, and only when something is new since the last one: events not yet delivered, Slack messages the
+watcher found, a repo window's report, an outreach whose wait crossed a business day, or a new watchdog alert.
+Otherwise it logs `skip: nothing new since HH:MM`, at most `BOSUN_CHECKIN_MAX_QUIET_HOURS` (4) in a row, so the
+chores still run. Every check-in makes the orchestrator re-read its whole conversation, which is why quiet hours
+skip it.
+
+A permission prompt or question left open in the orchestrator pauses the check-ins until you answer it. The
+[watchdog](watchdog.md#watchdog) alerts you when it, or any other Claude window, has waited
+`BOSUN_ALERT_WAITING_MINUTES` (30).
+
+<details class="note" markdown>
+<summary>More on when a check-in goes out</summary>
+
+- `shell` counts as idle (the turn is over and only a background command still runs, such as a wait for a review
+  to settle): the check-in goes in ahead of that command's completion notice, and the 5 minutes count from the end
+  of the turn.
+- The first check-in comes one interval after the window starts, since the orchestrator begins the day with the
+  morning chores.
+- A check-in held back only by timing (the orchestrator busy or idle too briefly, or you typing) stays due: the loop
+  retries it every tick (`BOSUN_EVENTS_INTERVAL_SECONDS`, or every few minutes with events off) until it goes out,
+  logging the skip once, so a busy morning never pushes it a whole interval later. Events keep flowing while it
+  waits.
+- What counts as new is decided by `lib/checkin_gate.py`, with no Claude call: besides the above, a Slack watcher
+  that is off, failing or stalled counts (the check-in then scans Slack itself), and so does an outreach whose
+  `expect_by` passed. `BOSUN_CHECKIN_MAX_QUIET_HOURS=0` turns the gate off.
+
+</details>
 
 ## Delegated tasks and folder trust
 
-The orchestrator hands work to repo sessions with `bosun delegate <type> --id ... --ask ...`.
-The task text is built from `orchestrator/tasks/`: one file per task type with what the repo
-session may and may never do and what the orchestrator does afterwards, plus `_common.md` with
-the rules every task shares. The orchestrator only supplies the facts (ledger ids, link,
-requester, a one-line ask, and your instructions in `--details`), so the rules cannot drift.
-`bosun delegate --list` shows the types:
+The orchestrator hands work to repo windows with `bosun delegate <type> --id ... --ask ...`. The task's text is
+built from `orchestrator/tasks/`: one file per task type, with what the repo window may and may never do and what
+the orchestrator does afterwards, plus `_common.md` with the rules every task shares. The orchestrator supplies only
+the facts (the ledger id, the link, who asked, a one-line ask, and your instructions in `--details`), so the rules
+cannot drift. `bosun delegate --list` shows the types:
 
 | Task | The repo session may | It never |
 |---|---|---|
@@ -38,119 +139,241 @@ requester, a one-line ask, and your instructions in `--details`), so the rules c
 | New work for me | work in a git worktree, push a new branch, open a draft PR | request reviewers, mark the PR ready, merge, post in Slack |
 | Review someone else's PR | post one review with inline comments; APPROVE if nothing blocks merging, otherwise COMMENT; skip a PR that is merged, closed or already approved by someone else, unless the ask names something specific | request changes, push to the PR branch, merge, post in Slack |
 
-Asking for review stays with you: the orchestrator proposes marking the PR ready (a draft does not
-notify code owners) and the Slack message, with the exact text. No task merges, force-pushes,
-pushes to the default branch or posts in Slack, Jira or Confluence. The orchestrator delegates
-`review` and `fix-my-pr` tasks on its own; other work (for example a Slack ask for a code change)
-only once you ask or approve, and so does handing an item over again before its window reported,
-or moving it to another window. Each session reports with `bosun ledger report` (see Ledger).
-These rules live in the task text: a repo session follows them, but neither auto mode nor
-`--dangerously-skip-permissions` technically prevents it from doing more.
-To change a rule, edit the task file; `tests/smoke.sh` checks that the ledger steps are valid and
-that this table matches.
+Asking for review stays with you: the orchestrator proposes marking the pull request ready (a draft does not notify
+code owners) and the Slack message, with the exact text. No task merges, force-pushes, pushes to the default branch
+or posts in Slack, Jira or Confluence. The orchestrator hands over `review` and `fix-my-pr` tasks on its own; other
+work (a Slack ask for a code change, say) only once you ask or approve, and so does handing an item over again
+before its window reported, or moving it to another window. Each window reports with `bosun ledger report`.
 
-**Site overlays.** To adapt the orchestrator to your team without forking, put files in the config
-directory: `policy.md` is appended to the orchestrator policy; `tasks/<type>.md` adds a task type
-(same format as `orchestrator/tasks/`; a file named like a built-in type replaces it); and
-`tasks/_common.md` adds rules to every task (the built-in shared rules always stay).
-`bosun doctor` lists the overlays in use.
+These rules live in the task's text: a repo window follows them, but neither auto mode nor
+`--dangerously-skip-permissions` technically stops it from doing more. To change a rule, edit the task file;
+`tests/smoke.sh` checks that its ledger steps are valid and that this table matches.
 
-Claude Code shows a folder trust prompt the first time it opens a repository (trusting a parent
-folder does not cover it) and has no setting or flag to skip it; only headless `-p` runs skip it.
-An unattended start would stall there. `bosun trust <dir>` records the same entry each agent in use
-writes when you accept the prompt (Claude Code: `hasTrustDialogAccepted` in `~/.claude.json`; Codex:
-`trust_level` in `~/.codex/config.toml`; both internal formats) for git repos inside the repo mask, and `bosun send --new|--start` (and so
-`delegate --new|--start`) call it for their folder (`BOSUN_TRUST_MASKED_REPOS=1`). Outside the mask they fail at once with the command to
-run. `bosun doctor` checks every session folder.
+**Your own rules.** To adapt the orchestrator to your team without forking, put files in your config folder:
+`policy.md` is appended to the orchestrator's policy; `tasks/<type>.md` adds a task type (in the format of
+`orchestrator/tasks/`; a file named like a built-in type replaces it); and `tasks/_common.md` adds rules to every
+task (the built-in shared rules always stay). `bosun doctor` lists the ones in use.
 
-## Chores
+**Folder trust.** Claude Code shows a trust prompt the first time it opens a repository (trusting a parent folder
+does not cover it), and has no setting or flag to skip it; only headless `-p` runs skip it. An unattended start
+would stop there. `bosun trust <dir>` records the same entry each agent in use writes when you accept the prompt
+(Claude Code: `hasTrustDialogAccepted` in `~/.claude.json`; Codex: `trust_level` in `~/.codex/config.toml`; both
+internal formats), for git repos inside the repo mask. `bosun send --new|--start` (and so `delegate --new|--start`)
+call it for their folder (`BOSUN_TRUST_MASKED_REPOS=1`); outside the mask they fail at once with the command to
+run. `bosun doctor` checks every window's folder.
 
-`orchestrator/plugin/commands/chores.md` holds the whole procedure:
+## Waiting on someone: outreach
 
-0. **Orient:** record the run (`ledger mark-run`, which also prints where the Slack scan starts),
-   read `bosun context`, and the reports repo sessions filed since the scan window began.
-1. **Slack:** mentions and DMs in the scan window: since the last run for check-ins; in the
-   morning the last `BOSUN_SLACK_LOOKBACK_HOURS` (24), or from the last scan if that was
-   longer ago (a failed morning, days away), but at most `BOSUN_SLACK_MAX_LOOKBACK_HOURS` (96)
-   back. Each message is checked against the ledger (`seen`) and classified as `pr-review`,
-   `td-review`, `my-pr`, `mention` or `fyi`.
-2. **Review requests:** derive state from GitHub. If you already reviewed, mark it `reviewed`.
-   Otherwise hand it to the repo window, which posts the review with inline comments and approves
-   when nothing blocks merging, or propose opening a window for it.
-3. **Tech design reviews:** read the Confluence page, draft comments, and propose posting them.
-4. **Your open PRs** (found with `bosun my-prs`; see the repo mask and window below), checked through `gh` and
-   `bosun pr-threads`:
-   - changes requested: the repo session pushes fixes and answers every thread that awaits you
-     (`pr-threads --awaiting-author`, any round); once that lists nothing, the orchestrator
-     proposes re-requesting review, with the thread counts per round
-   - approved and green: propose a squash-merge
-   - waiting too long: propose a nudge in the original review-request thread
-5. **Outreach** (what we wait on from other people): propose the message for new drafts, check
-   sent ones for a reply on their channel, hand replies to the window holding the work, propose
-   nudges. See [Waiting on someone](#waiting-on-someone-outreach).
-6. **Mentions:** new asks are surfaced under FYI with a one-line summary, with a draft reply
-   proposed when one fits. A mention that asks us to do something becomes a proposed task spawned
-   from it, with its `delegate new-work` / `investigate` command; nothing is delegated before you
-   say so.
-7. **Tasks and tickets:** proposed tasks wait for your yes (see
-   [Tasks and links](#work-we-take-on-tasks-and-links)); accepted ones are handed over, delegated
-   ones followed, and their PRs linked. Tickets of open work are read with the tracker's read
-   tools and recorded; where a ticket and the work disagree, the exact transition is proposed
-   (see [External tickets](#external-tickets)).
-8. **Report:** group the reply as *Needs your approval* (numbered, with exact text; also earlier
-   proposals you have not answered and `learn:` proposals, see [Learning](learning.md#learning)), *Handled
-   automatically* and *FYI*. You answer "1 and 3 yes, 2 skip". On a Monday morning it also offers
-   a stand-up draft per active workstream (see [Workstreams](#workstreams-what-an-item-is-for)).
+Work often stops on someone else: a product decision, another team's contract, a vendor's file format, a
+reporter's environment. Such an ask is an **outreach** item, so it does not live only in chat, a pull request
+description or a Slack reply.
 
-**Scope.** `BOSUN_REPO_MASK` limits the orchestrator to matching repositories. It is a
-space-separated list of `owner/repo` glob patterns, for example `my-org/*` or
-`my-org other-org/one-repo` (a bare owner means all its repos; empty means everything). It is
-enforced in code, not just the prompt:
+You never type its commands. Tell the orchestrator "ask Dana whether we can drop the shared password", "email the
+vendor to clarify the format and wait for them", "ping Priya again", "Marco answered in the thread, go ahead with b",
+and the policy turns each into the steps below. Repo windows record outreach for decisions they cannot make, and
+never send it; the orchestrator proposes the message. Questions for you are not outreach: repo windows ask you
+directly when you are at the window, or put the decision in their report.
 
-- `bosun my-prs` filters by it
-- the ledger refuses `review:`, `mypr:` and `ghissue:` items outside it
-- `bosun context` only maps matching repos
+| Field | |
+|---|---|
+| id | `out:<parent-id>/<id>` for the work item it blocks, or `out:<YYYY-MM-DD>/<id>` (the UTC day) when it belongs to none; `reach-out` prints it first. Older ids end in a number (`out:<parent-id>/1`) and stay valid |
+| `channel` | `slack`, `email`, `jira`, `github`, `confluence` or `other` |
+| `purpose` | `question`, `decision`, `clarification`, `approval`, `review`, `info-ack` (they confirm they saw it) or `fyi` (one-way: no reply expected, so it is done once sent) |
+| `to`, `subject`, `options`, `details`, `expect_by` | whom, what (one line), the choices, context, and an optional date |
+| `messages` | every message sent for it, the first and each follow-up: its reference (permalink, comment URL or message id), channel, and when it was sent |
+| `answer`, `reply_ref` | the reply in one line, and the reference to it (the evidence) |
 
-**PR window.** `bosun my-prs` discovers your open PRs with activity within
-`BOSUN_MY_PR_WINDOW` (default `48h`). Pass `--since 7d`, `--since 2w` or `--since 2026-09-01`
-for a wider sweep, and `--by created` to filter by creation time instead of activity. Drafts are
-skipped unless you pass `--include-drafts`. You can also
-just ask the orchestrator ("check my PRs from the last week"). PRs already in the ledger stay
-tracked until merged or closed, whatever the window.
+Its states: `draft` (recorded), `proposed` (the message waits for your approval), `sent` (each later message is a
+follow-up, counted as a nudge; an `fyi` item goes straight on to `applied`), `replied` (with the reply as evidence),
+`applied` (the reply reached the window holding the work, or you). `no-reply` gives up after the last nudge, and
+`dropped` is the way out from any state. [The ledger](ledger.md#each-item-moves-through-states) draws it.
 
-Each day's new orchestrator conversation starts with `/bosun:chores morning`; with
-`BOSUN_ORCHESTRATOR_MORNING_CHORES=0` it starts idle instead, and the chores run only when you
-or a check-in ask for them.
+- **The work waiting on it stays open.** `ledger list` shows `waiting on out:.../7k2m9q (slack to Dana, 2d)` on the
+  parent, and the ledger refuses to finish a parent while its outreach is open, unless `--force-open-outreach` with a
+  note saying why. A pull request that merged or closed is a fact, not a choice, so those states go through, and the
+  note names the outreach still open; its open review requests are dropped with it, since nobody owes that review
+  any more.
+- **Replies are matched, not classified again.** `ledger seen <permalink>` names the open outreach whose Slack
+  thread (or DM) a new message is in, so the reply is recorded on it instead of becoming a new mention. On other
+  channels the chores read the ticket, pull request or page comments, or ask you (email).
+- **Nudges are proposals.** After `BOSUN_NUDGE_AFTER_BUSINESS_DAYS` (1) without a reply, and below
+  `BOSUN_MAX_NUDGES` (2), the chores propose a follow-up in the same conversation; nothing is sent on its own. The
+  watchdog does not alert on outreach.
 
-The `checkin` window sends `/bosun:chores check-in` every `BOSUN_CHECKIN_MINUTES`. It only
-does so when the orchestrator has been idle for 5 minutes and you have not typed in tmux recently,
-so it never interrupts a conversation. `shell` counts as idle (the turn is over and only a
-background command still runs, such as a wait for a review to settle): the check-in goes in ahead
-of that command's completion notice, and the 5 minutes count from the end of the turn. The first
-check-in comes one interval after the window starts, since the orchestrator begins the day with
-the morning chores. A check-in held back only by timing (the orchestrator busy or idle too briefly,
-or you typing) stays due: the loop retries it every tick (`BOSUN_EVENTS_INTERVAL_SECONDS`, or
-every few minutes with events off) until it goes out, logging the skip once, so a busy morning
-never pushes it a whole interval later. Events keep flowing while it waits.
-A check-in also goes out only when something is new since the last one (`lib/checkin_gate.py`, no
-Claude call): events not yet delivered, Slack messages the watcher found (or a watcher that is off,
-failing or stalled, since the check-in then scans Slack itself), a repo session's report, an outreach
-whose wait crossed a business day or whose `expect_by` passed, or a new watchdog alert. Otherwise it
-logs `skip: nothing new since HH:MM`, at most `BOSUN_CHECKIN_MAX_QUIET_HOURS` (4; 0 turns the
-gate off) in a row, so the chores still run. Every check-in makes the orchestrator re-read its
-whole conversation, which is why quiet hours skip it.
+<details class="note" markdown>
+<summary>The commands, review nudges, times and duplicates</summary>
 
-A permission prompt or question left open in the orchestrator pauses the check-ins until you answer
-it. The [watchdog](watchdog.md#watchdog) alerts you when it, or any other Claude window, has waited
-`BOSUN_ALERT_WAITING_MINUTES` (30 by default).
+- **The commands.** `ledger propose` moves an outreach to `proposed` (rejecting the proposal moves it back), `ledger
+  sent --ref` records a message (several ids record one message on each, such as one nudge for several questions),
+  `ledger replied --evidence --summary` the reply, and `bosun delegate --update <out-id>` hands the reply to the
+  window holding the parent and marks it `applied`. `ledger fold <out-id> --into <other-id>` drops it when its
+  questions go into another message; `--note 'duplicate of <other-id>'` when it asks exactly what another asks. The
+  channels are one table in `lib/ledger.py`. No item id looks like a date: each starts with its kind's prefix.
+- **Matching replies.** When several open outreach items share a thread, `ledger seen` names all of them, latest
+  message first, so the orchestrator picks the one the reply answers (`--class outreach`).
+- **One conversation, one item.** `ledger reach-out` warns (it does not refuse) when the parent already has open
+  outreach to the same person, so an addition goes out as a follow-up on that item instead of a second one waiting
+  in the same thread. `ledger upsert <out-id> --field subject=... --field options='a | b'` keeps the record in line
+  with the message actually sent.
+- **Pull requests waiting on reviewers** have no fixed count of nudges (`BOSUN_MAX_REVIEW_NUDGES`, 0 = no cap): one
+  is nudged each business day while the next move is the reviewers', after a fresh check of the pull request, its
+  threads, the conversation and the ledger, at most once per reviewer per day. After
+  `BOSUN_REVIEW_ESCALATE_AFTER_NUDGES` (3) unanswered nudges the chores also propose another reviewer. `bosun context`
+  prints these limits.
+- **Times are when it happened, not when it was recorded.** The wait counts from the latest message's time. `ledger
+  sent` and `ledger replied` take it from `--at` (ISO 8601 with an offset, or local `YYYY-MM-DD HH:MM`; never in the
+  future), else from a Slack permalink's own time, else now; `sent --at` with a reference already recorded corrects
+  that message's time. The history entry keeps the recording time and says where the other came from
+  (`happened_at`, `time_from`).
+
+</details>
+
+## Work we take on: tasks and links
+
+Work we decide to do that has no pull request or page of its own yet is a **task**: what a colleague asks of us in a
+reply or a mention ("yes please, fix the other callers too"), what you tell the orchestrator to do, a follow-up a
+repo window finds. It is spawned from the item it came from, so its origin is a link rather than a note, and it is
+handed over under its own id.
+
+| State | |
+|---|---|
+| `proposed` | `ledger spawn [<from-id>] --title --ask [--via <permalink or 'user: ...'>] [--requester] [--repo] [--blocks]` records it; an exact repeat is unchanged, and a similar open task from the same source is a warning |
+| `accepted` | only on your word: `--evidence 'user: <what you said>'` is required, so a colleague's message never accepts work; it closes the task's pending proposal |
+| `delegated` | `bosun delegate new-work --id <task id>` (it refuses a task you did not accept, and an outreach id as the work item) |
+| `done` | what it produced landed (its pull request merged; `ledger tree` says so), or its report answered the ask |
+| `declined`, `dropped` | you said no; or it went away: `ledger fold <id> --into <other-id>` when its work goes on as part of another item, `--note 'duplicate of <id>'` when it was the same item twice (both record the link) |
+
+Tell the orchestrator "go ahead and do it" about an outreach reply or a mention, and it spawns the task with your
+words as `via`, accepts it and hands it over. A colleague's request ends up as a proposed task under *Needs your
+approval*. Repo windows spawn the follow-ups they find, and never start them.
+
+**Links** are stored once, on the item they start from, and read both ways: `spawned_from`, `produces`,
+`blocked_by`, `duplicate_of`, `folded_into`, `tracks`, `part_of` and `relates_to`
+([The ledger](ledger.md#links-where-work-came-from-and-what-came-of-it) says what each means). `ledger link` refuses
+unknown ids, links to the item itself and cycles; `ledger tree <id>` shows where an item came from and what came of
+it, with states. Design: [design/lineage.md](design/lineage.md).
+
+<details class="note" markdown>
+<summary>Folding, migrating links, and what <code>ledger list</code> shows</summary>
+
+- **`ledger fold <id> --into <other-id> [--note ...]`** records that an item's work went into another (a small task
+  done in another task's pull request, an outreach draft said as a follow-up on an existing conversation): it links
+  `folded_into`, withdraws the item's pending proposal (it was neither carried out on the item nor rejected), and
+  closes the item in its kind's way out (`dropped`; `dismissed` for kinds without it) with the note `folded into
+  <other-id>: ...`. It refuses an item with open outreach or blockers as `transition` does (`--force-open-outreach`),
+  and a finished target unless `--force-closed-target` (the work already landed with it). If the target is with a
+  repo window, it prints, and does not run, the `bosun delegate --update` that carries the folded item's title and
+  ask there. A drop note "merged into <id>" or "folded into <id>" records `folded_into` too. `prune` keeps a folded
+  item while its target is open, and with it what the folded item links to: prune never leaves a kept item with a
+  link to a pruned one.
+- **What lists show.** `ledger show` lists links under `derived`, with the lineage tree and hints; `ledger list`
+  shows `from <id>`, `-> <id>`, `tracks <id>`, `folded into <id>` and `absorbs <id>` (`folded_into` read back). An
+  outreach's `parent` stays a field and reads as a computed `blocked_by`. `ledger reports` prints the commands that
+  record a pull request a report names and link it to the work.
+- **`ledger migrate-links [--dry-run]`** moves ad hoc provenance into links once (an `origin` field naming an item,
+  "merged into <id>" and "duplicate of <id>" drop notes, and a `duplicate_of` recorded from a "merged into" note,
+  which becomes `folded_into`); it is safe to run again.
+
+</details>
+
+## External tickets
+
+A Jira issue or GitHub issue that tracks our work is a **ticket** item (`jira:EXP-123`, `ghissue:acme/exporter#7`),
+a read-only mirror. Tell the orchestrator "this PR is for EXP-123" and it runs `ledger link <pr> tracks
+jira:EXP-123`, which creates the ticket. The orchestrator reads it with the tracker's read tools and records what it
+shows with `ledger ticket-sync <id> --status '<status>' [--category ...] [--title ...] [--url ...] [--assignee ...]`;
+bosun never changes a ticket itself.
+
+A ticket's state is a category: `todo`, `in-progress`, `in-review`, `done` or `cancelled` (`unsynced` before the
+first read), from your overrides, the built-in status names, or `--category`. `ledger tickets [--all] [--mismatch]`
+lists the tickets of open work and where a ticket and the work disagree: closed while the work is open, still open
+after the pull request merged, `todo` while the pull request is in review, never or long ago synced. Each is a
+proposal under *Needs your approval* with the exact transition, because a tracker's write tool asks for permission
+and would stall an unattended check-in. A ticket outside your own projects (another team's, such as an
+infrastructure request in their intake state) is theirs to move: its mismatches print as `fyi:` lines, never as
+proposals, and the console does not count them under *Needs you*.
+
+Status names your tracker uses that the built-in names miss, and the projects that are yours, go in `bosun.env`:
+
+```sh
+BOSUN_TICKET_STATUS_MAP="jira:Ready for Review=in-review; jira/EXP:On Hold=todo"
+BOSUN_TICKET_STALE_HOURS="24"                      # a ticket of open work read longer ago is flagged
+BOSUN_TICKET_OWNED_PROJECTS="EXP acme/exporter"    # empty: every project is yours
+```
+
+## Workstreams: what an item is for
+
+A **workstream** (`ws:<slug>`) is a time-bound effort you drive, such as "Widget search". It groups ledger items for a
+weekly stand-up, stats and, later, the ontology. It is not a Jira epic (it may name one) and not a product area (it
+is part of one). Design, research and examples: [design/workstreams.md](design/workstreams.md).
+
+- **Make one:** `ledger ws add <slug> --title ... [--epic WID-100] [--channel <Slack channel id>] [--repo ...]
+  [--started/--ended/--target <date>] [--area <ontology entity>] [--parent <ws>] [--alias ...]` creates one or updates
+  its fields. `ws list`, `ws show`, `ws set-state <ws> active|paused|done --note ...` and `ws alias` cover the rest.
+  Any `<ws>` argument takes the id, the slug or an alias. A workstream can sit under one other, two levels at most.
+- **Put work in it:** `ledger link <id> part_of <ws>` puts an item in its one workstream; `--move` moves it. Tag the
+  root: what was spawned from it, what it produced, its outreach and what was folded into it inherit the workstream.
+  Nothing is copied.
+- **Draft the stand-up:** `ledger summary --ws <ws> [--since 2026-10-19] [--markdown]` drafts it from the ledger:
+  shipped, in review (and waiting on whom), waiting on others, decisions, blocked, next. `--all` does it per
+  workstream, then the unassigned. The default since is this Monday.
+
+<details class="note" markdown>
+<summary>How an item finds its workstream, and the checks</summary>
+
+- **Resolution order:** an item's own `part_of`, then one it inherits, then a tracked ticket whose epic is the
+  workstream's (`ticket-sync ... --parent <key>` records a ticket's epic or parent), then your rules in
+  `$BOSUN_CONFIG_DIR/workstreams.json` (repo globs, title words, origin Slack channel, kinds; see
+  `examples/generic/workstreams.json`) and the workstream's own channel, then unassigned. `ledger show <id>` says
+  which, and how.
+- **`ledger assign [--dry-run|--apply] [--ws W]`** turns epic and rule matches into explicit links on the topmost
+  items, printing each change and why. Ambiguous cases are printed as proposals and never applied.
+- **`ledger list --ws <ws|unassigned>`** filters; **`ledger lint`** flags evidence that disagrees, a child tagged
+  differently from its parent, redundant tags and a growing unassigned count.
+- **`ledger validate`** checks every rule of the whole ledger: [The ledger](ledger.md#reference).
+
+</details>
+
+## Your own MCP servers: a site settings file
+
+The orchestrator reaches only the servers and connectors `BOSUN_ORCHESTRATOR_CONNECTORS` names, so name yours there
+first (`"claude.ai Slack, plugin:acme-tracker:tracker, acme-wiki"`). A settings file cannot widen that, as bosun's
+list replaces any `allowedMcpServers` it holds (with `all` there is no list of bosun's, and the file's applies;
+`bosun doctor` says which).
+
+`orchestrator/settings.json` only names tools every install can have: the Slack plugin, the claude.ai Slack
+connector, `gh` and `git`. Your own MCP servers (issue tracker, wiki, CI, metrics) are still covered, because `bosun
+guard` asks before any MCP tool whose name has a write verb, and auto mode decides on the rest. To let the
+orchestrator use their read tools without a prompt, or to name their write tools explicitly, keep a settings file of
+your own:
+
+1. Copy bosun's: `cp ~/.local/share/bosun/orchestrator/settings.json ~/.config/bosun/orchestrator-settings.json`
+   (from a checkout of your own: its `orchestrator/settings.json`).
+2. Add the read tools to `permissions.allow`, such as `"mcp__my-tracker__search_issues"` and
+   `"mcp__my-wiki__get_page"` (a bare `"mcp__my-metrics"` allows every tool of a read-only server), and any write
+   tools to `permissions.ask`.
+3. Point bosun at it in `bosun.env`: `BOSUN_ORCHESTRATOR_SETTINGS="$BOSUN_CONFIG_DIR/orchestrator-settings.json"`.
+
+The file replaces `orchestrator/settings.json` rather than adding to it, so keep its rules; `bosun doctor` warns
+about any rule of bosun's file that yours lacks (one added after you copied it, say). The orchestrator picks the file
+up at its next launch.
+
+<details class="note" markdown>
+<summary>The guard's hook block in an old copy</summary>
+
+The file needs no `hooks` block for `bosun guard`: bosun adds the guard at launch, from the bosun that launches the
+window, whatever the settings file. A file copied before that still has the block, which runs the guard twice, and
+the two need not be the same version (a checkout's guard and the installed one's), so they may not decide alike;
+drop it. `bosun doctor` warns about that block.
+
+</details>
 
 ## After an update: the windows brought along
 
-Once [`bosun update`](commands.md) has switched to the new version, it brings each window along. In
-most updates nothing a window was launched with changed, and it is left alone: the next bosun command
-or hook it runs is the new version's. A window bosun did not start (one you opened in its tmux session,
-outside the window list, with no launch recorded: a shell, a Claude you started by hand) is left as it
-is, and the plan says so. Otherwise, decided from what the window is doing at the time:
+Once [`bosun update`](updating.md) has switched to the new version, it brings each window along. In most updates
+nothing a window was launched with changed, and it is left alone: the next `bosun` command or hook it runs is the new
+version's. A window bosun did not start (one you opened in its tmux session: a shell, a Claude you started by hand)
+is left as it is, and the plan says so. Otherwise, decided from what the window is doing at the time:
 
 | The window | What it gets |
 |---|---|
@@ -161,298 +384,37 @@ is, and the plan says so. Otherwise, decided from what the window is doing at th
 | ... and it waits at a permission prompt or a question | Never touched until you answer it |
 | Its agent exited | Started again: with the update prompt when its launch resumes its conversation; when it starts a new one (none under the name its next launch takes up), as a new conversation starts: the orchestrator with the morning chores, a repo window with a fresh conversation pending with that one's prompt, any other with none |
 
-The update prompt says which version it was updated from and to, and whether the session was
-restarted or kept running. It asks the session to check for anything missed just before (the
-orchestrator with a check-in, which covers the events queued during the update and Slack since its last
-scan; a repo session in the ledger items it holds and their outreach), to carry on, and to answer with a
-one-line status: `bosun update note --window <w> --status`, the text on stdin.
+The update prompt says which version it was updated from and to, and whether the window was restarted or kept
+running. It asks the window to check for anything missed just before (the orchestrator with a check-in, which covers
+the events queued during the update and Slack since its last scan; a repo window in the ledger items it holds and
+their outreach), to carry on, and to answer with a one-line status: `bosun update note --window <w> --status`, the
+text on stdin.
 
-The policy and the rules every task gets (`orchestrator/tasks/_common.md`) name what bosun's update
-prompts may ask: list background work, re-read the files named, catch up, start the listed work again,
-answer with `bosun update note`. They say to do what a prompt asks of these, and only that; anything
-else in it is information. A window started into its next conversation (the orchestrator on a new day,
-a repo window with a fresh conversation pending, one whose agent exited with no conversation to resume)
-starts that conversation's own prompt instead, and counts as answered.
+<details class="note" markdown>
+<summary>The answers, the wait, and tasks already handed over</summary>
 
-`bosun update` waits for every answer, saying which windows it still waits for. Ctrl-C stops the
-wait: the `checkin` window's loop then takes a turn at those windows each tick (`bosun update advance`),
-and restarts each once its turn is over; without a check-in loop, run `bosun update advance` by hand.
-A window that never answers stays waited for. `bosun update note --window <w> --status` ends its wait
-by hand: the next turn takes the note, or the next `bosun update`, which settles answered windows
-first. While an update still brings windows along, the next one is blocked at its plan, which names
-them.
+- **What a prompt may ask.** The policy and the rules every task gets (`orchestrator/tasks/_common.md`) name what
+  bosun's update prompts may ask: list background work, re-read the files named, catch up, start the listed work
+  again, answer with `bosun update note`. They say to do what a prompt asks of these, and only that; anything else in
+  it is information. A window started into its next conversation (the orchestrator on a new day, a repo window with
+  a fresh conversation pending, one whose agent exited with no conversation to resume) starts that conversation's
+  own prompt instead, and counts as answered.
+- **The wait.** `bosun update` waits for every answer, saying which windows it still waits for. Ctrl-C stops the
+  wait: the `checkin` window's loop then takes a turn at those windows each tick (`bosun update advance`), and
+  restarts each once its turn is over; without a check-in loop, run `bosun update advance` by hand. A window that
+  never answers stays waited for. `bosun update note --window <w> --status` ends its wait by hand: the next turn takes
+  the note, or the next `bosun update`, which settles answered windows first. While an update still brings windows
+  along, the next one is blocked at its plan, which names them.
+- **Tasks already handed over** keep their text. The plan and the summary name each one whose text changed: a task
+  type it was handed, or the rules every task gets (`orchestrator/tasks/_common.md`), which every task handed out
+  has. Send `bosun delegate --update` where a changed rule matters.
 
-Tasks already handed to repo sessions keep their text. The plan and the summary the update ends with
-name each one whose text changed: a task type it was handed, or the rules every task gets
-(`orchestrator/tasks/_common.md`), which every task handed out has. Send `bosun delegate --update`
-where a changed rule matters.
+</details>
 
-## Ledger: idempotency and state
+## The ledger
 
-`bosun ledger` (`lib/ledger.py`) is the only way the orchestrator, and the repo sessions it
-delegates to, record state. It keeps:
-
-- **items** with stable ids: `review:<owner>/<repo>#<n>`, `td:<page-id>`, `mypr:<owner>/<repo>#<n>`,
-  `slack:<channel>/<ts>`, outreach, `out:<parent-id>/<id>` (see below), learning proposals,
-  `learn:<YYYY-MM-DD>/<id>` (see [Learning](learning.md#learning)), tasks, `task:<YYYY-MM-DD>/<id>`, and
-  external tickets, `jira:<KEY>-<n>` or `ghissue:<owner>/<repo>#<n>` (see
-  [Tasks and links](#work-we-take-on-tasks-and-links)), and workstreams, `ws:<slug>` (see
-  [Workstreams](#workstreams-what-an-item-is-for)). Each kind has a state machine
-  (`bosun ledger kinds`); invalid transitions are rejected. The date in a task, outreach or
-  learning id is the UTC day it was made, and `<id>` is six characters such as `7k2m9q`, hashed
-  from this Mac's replica id and where the ledger's journal is (for learning, from the finding and
-  the run), so two Macs never make the same id and a pruned one never comes back. Copy ids from
-  what the command printed. Ids made before, ending in a number (`task:2026-10-15/1`), stay valid.
-- **links** between items (`spawned_from`, `produces`, `blocked_by`, `duplicate_of`, `folded_into`,
-  `tracks`, `part_of`, `relates_to`), stored once and read both ways.
-- **sources**: every processed Slack message (by permalink). A message still in tomorrow's scan
-  window is recognised and skipped.
-- **proposals**: actions awaiting your approval, which survive the daily restart.
-- **runs**: when each chores mode last ran, which sets the check-in scan window.
-- **delegations and reports**: `bosun delegate` records which window works on an item (and
-  the task's header, so the task can be sent again), and `delegate --update` sends that window
-  addenda framed with the item's id. Repo sessions record their outcome with
-  `bosun ledger report <id> --summary ... --result <URL or path> [--open ...] [--state ...]`,
-  which the orchestrator reads with `ledger reports`, so no step depends on chat history or on a
-  window's screen. A hand-over ends with a report, or when the item reaches a state that shows
-  the work done (`work_done` in `ledger kinds`: `reviewed`, `commented`, `awaiting-review`,
-  `approved`, or a terminal state). Until then `ledger list` shows `@<window> (awaiting report)`,
-  `delegate` refuses the item without `--again`, and `delegate --update <id> --window <window>`
-  can move it: the new window gets the whole task, the old one a stop notice by id (if it cannot
-  take it, the move is still made and the history says so). A report ends the hand-over, not the
-  work: `ledger list` shows `(working)` while the window's agent is mid-turn on the item (its
-  active item: the latest hand-over, report, `ledger working` or something I said there), and
-  `ledger delegation` has `"working"`; a window is free only when none of its items is working.
-- **what I said in repo windows** (`said`), with [events](events.md#events-from-repo-sessions) on: each
-  prompt I type there, on the item it is about, read with `ledger said [<id>]`.
-
-The re-review rule is enforced. `reviewed` -> `rereview-requested` (and `commented` ->
-`rereview-requested` for tech designs) requires `--evidence` of a new, explicit request after your
-last review: GitHub re-requesting you, or a new Slack message asking again. Nudges follow the
-chores procedure (the prompt, not code): only for your non-draft PR in `awaiting-review`, never
-once it is `approved`.
-Writes take a file lock and replace `ledger.json` atomically, keeping the previous version as
-`ledger.json.bak`; `ledger.md` is regenerated after each one. Each write first appends what it
-changed to the journal (`journal/ledger/` in the state folder), and `ledger.json` is the rebuild
-of that journal, recording the position it reflects and a digest of what it holds. A write cut
-short between the two is completed by the next write (a command that only reads shows it without
-saving), and one cut short inside the journal is set aside (`*.torn-<time>`, kept) and left out
-([Sync and sharing](design/sync.md#changes-not-files)). So copying `ledger.json.bak`, or any
-older `ledger.json`, back does not undo a write: the journal brings it forward again; undo a write
-with the command that reverses it. A change made to `ledger.json` by hand, or by an older bosun,
-is adopted by the next write: it goes into the journal as a transaction named `adopt`, with a line
-on stderr. What the journal cannot hold, such as removing a history entry (history only grows), is
-undone by that write, which says so and keeps the edited file as `ledger.json.bak` until the
-next write. Writes stop and say so when a journal file has gone missing or lost lines (the journal
-is behind `ledger.json`), or a line at the end of one, which every write reads, is damaged. Damage
-further up, or a gap in a file's numbering, stops only a write that has to rebuild (after a write
-cut short or a hand edit); until then `bosun ledger validate --journal` and `bosun doctor` report
-it. Either way, move `journal/ledger` aside, and the next write starts a new journal from
-`ledger.json`, as a new replica. `replica.json` may stay: a journal that starts again (moved aside,
-emptied or removed) always gets a new id, made by that write in place of the old one, so that no
-id is minted twice. `replica.json` is this Mac's id in the knowledge base's journal too, so the Mac
-gets a new id in both, which the knowledge base carries on under as well (its old replica file
-stays in its journal). A write cut short as it starts the new journal is finished by the next
-write, as any other. Each item keeps its last 200 history entries; the journal keeps
-all of them.
-
-## Waiting on someone: outreach
-
-Work often stops on someone else: a product decision, another team's contract, a vendor's file
-format, a reporter's environment. Such an ask is an **outreach** item, so it does not live only in
-chat, a PR description or a Slack reply:
-
-| Field | |
-|---|---|
-| id | `out:<parent-id>/<id>` for the work item it blocks, or `out:<YYYY-MM-DD>/<id>` (the UTC day) when it belongs to none (no item id looks like a date: each starts with its kind's prefix); `reach-out` prints it first. Older ids end in a number (`out:<parent-id>/1`) and stay valid |
-| `channel` | `slack`, `email`, `jira`, `github`, `confluence` or `other` (one table in `lib/ledger.py`) |
-| `purpose` | `question`, `decision`, `clarification`, `approval`, `review`, `info-ack` (they confirm they saw it) or `fyi` (one-way: no reply expected, so it is done once sent) |
-| `to`, `subject`, `options`, `details`, `expect_by` | whom, what (one line), the choices, context, and an optional date |
-| `messages` | every message sent for it, the first and each follow-up: ref (permalink, comment URL or message id), channel, and when it was sent (`--at`, else a Slack permalink's own time, else when recorded) |
-| `answer`, `reply_ref` | the reply in one line, and the reference to it (the evidence) |
-
-`draft` (recorded) -> `proposed` (the outgoing message awaits my approval: `ledger propose` moves
-it there, rejecting the proposal moves it back) -> `sent` (`ledger sent --ref`; later calls add
-follow-ups, counted as nudges; several ids record one message on each, e.g. one nudge for several
-questions; an `fyi` item goes straight on to `applied`) -> `replied` (`ledger replied --evidence --summary`) -> `applied`
-(`bosun delegate --update <out-id>` hands the reply to the window holding the parent, or it was
-surfaced to me). `no-reply` gives up after the last nudge; `dropped` is the way out from any state
-(`ledger fold <out-id> --into <other-id>` when its questions go into another message,
-`--note 'duplicate of <other-id>'` when it asks exactly what another asks).
-
-- **Parents show it and stay open.** `ledger list` shows `waiting on out:.../7k2m9q (slack to Dana, 2d)`
-  on the parent, and the ledger refuses to finish a parent (any terminal state, also through
-  `report --state`) while its outreach is open, unless `--force-open-outreach` (the note says why).
-  A PR that merged or closed is a fact, not a choice, so those states go through and the note
-  names the outreach still open. Its open review requests (purpose `review`) are dropped with it,
-  since nobody owes that review any more; other outreach (a question) stays open.
-- **Replies are matched, not re-classified.** `ledger seen <permalink>` names the open outreach
-  whose Slack thread (or DM) a new message is in (all of them, latest message first, when several
-  share it, so the orchestrator picks the one it answers), so the reply is recorded on it
-  (`--class outreach`) instead of becoming a new mention. Other channels: the chores read the
-  ticket, PR or page comments, or ask me (email); see step 5 of the chores.
-- **One conversation, one item.** `ledger reach-out` warns (it does not refuse) when the parent
-  already has open outreach to the same person, so an addition goes out as a follow-up on that
-  item instead of a second one waiting in the same thread. `ledger upsert <out-id> --field
-  subject=... --field options='a | b'` keeps the record in line with the message actually sent.
-- **Nudges are proposals.** After `nudge_after_business_days` without a reply, and below
-  `max_nudges`, the chores propose a follow-up in the same conversation; nothing is sent on its own.
-  A PR waiting on its reviewers has no fixed count (`max_review_nudges`, 0 = no cap): it is nudged
-  each business day while the next move is the reviewers', after a fresh check of the PR, its
-  threads, the conversation and the ledger, at most once per reviewer per day. After
-  `review_escalate_after_nudges` unanswered nudges the chores also propose another reviewer.
-  `bosun context` prints these limits; set them in `bosun.env` with
-  `BOSUN_NUDGE_AFTER_BUSINESS_DAYS` (1), `BOSUN_MAX_NUDGES` (2), `BOSUN_MAX_REVIEW_NUDGES` (0)
-  and `BOSUN_REVIEW_ESCALATE_AFTER_NUDGES` (3). The watchdog does not alert on outreach.
-- **Times are when it happened, not when it was recorded.** The wait counts from the latest
-  message's time. `ledger sent` and `ledger replied` take it from `--at` (ISO 8601 with an offset,
-  or local `YYYY-MM-DD HH:MM`; never in the future), else from a Slack permalink's own ts, else
-  now; `sent --at` with a ref already recorded corrects that message's time. The history entry
-  keeps the recording time and says where the other came from (`happened_at`, `time_from`).
-- **Free text.** You never type these commands. Tell the orchestrator "ask Dana whether we can drop
-  the shared password", "email the vendor to clarify the format and wait for them", "ping Priya
-  again", "Marco answered in the thread, go ahead with b"; the policy maps each to the steps above.
-  Repo sessions record outreach for decisions they cannot make (`orchestrator/tasks/_common.md`)
-  and never send it; the orchestrator proposes the message. Questions for you are not outreach:
-  repo sessions ask you directly when you are at the window, or put the decision in their report.
-
-## Work we take on: tasks and links
-
-Work we decide to do that has no artifact of its own yet is a **task**: what a colleague asks of
-us in a reply or a mention ("yes please, fix the other callers too", "could you also ..."), what
-you tell the orchestrator to do, a follow-up a repo session finds. It is spawned from the item it
-came from, so its origin is a link rather than a note, and it is handed over under its own id.
-Design and phasing: [docs/design/lineage.md](design/lineage.md).
-
-| State | |
-|---|---|
-| `proposed` | `ledger spawn [<from-id>] --title --ask [--via <permalink or 'user: ...'>] [--requester] [--repo] [--blocks]` records it; an exact repeat is unchanged, a similar open task from the same source is a warning |
-| `accepted` | only on your word: `--evidence 'user: <what you said>'` is required, so a colleague's message never accepts work; it closes the task's pending proposal |
-| `delegated` | `bosun delegate new-work --id <task id>` (it refuses a task you did not accept, and an outreach id as the work item) |
-| `done` | what it produced landed (its PR merged; `ledger tree` says so), or its report answered the ask |
-| `declined`, `dropped` | you said no; or it went away: `ledger fold <id> --into <other-id>` when its work goes on as part of another item, `--note 'duplicate of <id>'` when it was the same item twice (both record the link) |
-
-**Links** are stored once, on the item they start from, and read both ways (`ledger show` lists
-them under `derived`, with the lineage tree and hints): `spawned_from` (provenance, with `via`:
-the message that asked, or `user: ...`), `produces` (a task's PR), `blocked_by` (the item is not
-finished while the other is open, like an outreach parent), `duplicate_of` (the same item twice),
-`folded_into` (its work goes on as part of the other, e.g. in that task's PR; read back as
-`absorbs`), `tracks` (an external ticket), `part_of` (the item's one workstream, see
-[Workstreams](#workstreams-what-an-item-is-for)) and `relates_to`. `ledger link` refuses unknown ids,
-self-links and cycles; `ledger tree <id>` shows where an item came from and what came of it, with
-states; `ledger list` shows `from <id>`, `-> <id>`, `tracks <id>`, `folded into <id>` and
-`absorbs <id>`. An outreach's `parent` stays a field and reads as
-a computed `blocked_by`. `ledger reports` prints the commands that record a PR a report names and
-link it to the work. `ledger migrate-links [--dry-run]` moves ad hoc provenance into links once
-(an `origin` field naming an item, "merged into <id>" and "duplicate of <id>" drop notes, and a
-`duplicate_of` recorded from a "merged into" note, which becomes `folded_into`); it is idempotent.
-
-`ledger fold <id> --into <other-id> [--note ...]` records that an item's work went into another
-(a small task done in another task's PR, an outreach draft said as a follow-up on an existing
-conversation): it links `folded_into`, withdraws the item's pending proposal (it was neither
-carried out on the item nor rejected), and closes the item in its kind's way out (`dropped`;
-`dismissed` for kinds without it) with the note `folded into <other-id>: ...`. It refuses an item
-with open outreach or blockers as `transition` does (`--force-open-outreach`), and a finished
-target unless `--force-closed-target` (the work already landed with it). If the target is with a
-repo window it prints, and does not run, the `bosun delegate --update` that carries the folded
-item's title and ask there. A drop note "merged into <id>" or "folded into <id>" records
-`folded_into` too. `prune` keeps a folded item while its target is open, and with it what the
-folded item links to: prune never leaves a kept item with a link to a pruned one.
-
-Tell the orchestrator "go ahead and do it" about an outreach reply or a mention and it spawns the
-task with your words as `via`, accepts it and delegates it; a colleague's request ends up as a
-proposed task under *Needs your approval*. Repo sessions spawn follow-ups they find and never
-start them.
-
-## External tickets
-
-A Jira issue or GitHub issue that tracks our work is a **ticket** item (`jira:EXP-123`,
-`ghissue:acme/exporter#7`), a read-only mirror: tell the orchestrator "this PR is for EXP-123" and
-it runs `ledger link <pr> tracks jira:EXP-123`, which creates the ticket. The orchestrator reads
-it with the tracker's read tools and records what it shows with `ledger ticket-sync <id> --status
-'<status>' [--category ...] [--title ...] [--url ...] [--assignee ...]`; bosun never
-transitions a ticket itself. Its state is a category (`todo`, `in-progress`, `in-review`, `done`,
-`cancelled`; `unsynced` before the first read), from your overrides, the built-in status names or
-`--category` (ours, or the tracker's own, such as Jira's statusCategory). Status names your
-tracker uses that the built-in names miss go in `bosun.env`:
-
-    BOSUN_TICKET_STATUS_MAP="jira:Ready for Review=in-review; jira/EXP:On Hold=todo"
-    BOSUN_TICKET_STALE_HOURS="24"   # a ticket of open work read longer ago is flagged
-    BOSUN_TICKET_OWNED_PROJECTS="EXP acme/exporter"   # empty: every project is yours
-
-`ledger tickets [--all] [--mismatch]` lists the tickets of open work, how to read each, and where
-a ticket and the work disagree: closed while the work is open, still open after the PR merged,
-`todo` while the PR is in review, never or long ago synced. Each is a proposal under *Needs your
-approval* with the exact transition, because a tracker write tool asks for permission and would
-stall an unattended check-in. A ticket outside `BOSUN_TICKET_OWNED_PROJECTS` (another team's,
-such as an infrastructure request in their intake state) is theirs to move: its mismatches print as
-`fyi:` lines, never as proposals, and the console does not count them under *Needs you*.
-
-## Workstreams: what an item is for
-
-A **workstream** (`ws:<slug>`) is a time-bound effort you drive, such as "Widget search". It
-groups ledger items for a weekly stand-up, stats and, later, the ontology. It is not a Jira
-epic (it may name one) and not a product area (it is part of one). Design, research and examples:
-[docs/design/workstreams.md](design/workstreams.md).
-
-- `ledger ws add <slug> --title ... [--epic WID-100] [--channel <Slack channel id>] [--repo ...]
-  [--started/--ended/--target <date>] [--area <knowledge entity>] [--parent <ws>] [--alias ...]`
-  creates one or updates its fields. `ws list`, `ws show`, `ws set-state <ws> active|paused|done
-  --note ...` and `ws alias` cover the rest. Any `<ws>` argument takes the id, the slug or an
-  alias. A workstream can sit under one other, two levels at most.
-- `ledger link <id> part_of <ws>` puts an item in its one workstream; `--move` moves it. Tag the
-  root: what was spawned from it, what it produced, its outreach and what was folded into it
-  inherit the workstream. Nothing is copied.
-- Each item resolves in this order: its own `part_of`, then inherited, then a tracked ticket whose
-  epic is the workstream's (`ticket-sync ... --parent <key>` records a ticket's epic or parent),
-  then your rules in `$BOSUN_CONFIG_DIR/workstreams.json` (repo globs, title words, origin
-  Slack channel, kinds; see `examples/generic/workstreams.json`) and the workstream's own channel,
-  then unassigned. `ledger show <id>` says which, and how.
-- `ledger assign [--dry-run|--apply] [--ws W]` turns epic and rule matches into explicit links on
-  the topmost items, printing each change and why. Ambiguous cases are printed as proposals and
-  never applied.
-- `ledger summary --ws <ws> [--since 2026-10-19] [--markdown]` drafts a stand-up from the ledger:
-  shipped, in review (and waiting on whom), waiting on others, decisions, blocked, next. `--all`
-  does it per workstream, then the unassigned. The default since is this Monday.
-- `ledger list --ws <ws|unassigned>` filters; `ledger lint` flags evidence that disagrees, a child
-  tagged differently from its parent, redundant tags and a growing unassigned count.
-- `ledger validate [--journal] [--json]` checks every rule (a state its kind does not have, a link
-  lineage would refuse, a second `part_of`, a link to an unknown item, with the `ledger unlink` that
-  clears it, since only a prune from before it kept lineage whole leaves one) and exits 1 on any finding;
-  `--journal` also rebuilds the journal and lists its conflicts and each item where the rebuild and
-  `ledger.json` differ ([sync](design/sync.md)), and says when `ledger.json` was changed outside
-  the journal (the next write adopts it). A ledger from before journals is not a failure: it
-  prints "no journal yet; the next write starts it" and exits 0. With `--json` each finding has a
-  `severity`: `error` where writes are refused or a rebuild would lose data (journal damage, a
-  position that does not match, a rebuild that differs), `warning` for the rest, `note`.
-  `bosun doctor` runs it, and fails on an error but only warns on a warning.
-
-## Your own MCP servers: a site settings file
-
-The orchestrator reaches only the servers and connectors `BOSUN_ORCHESTRATOR_CONNECTORS` names, so name
-yours there first (`"claude.ai Slack, plugin:acme-tracker:tracker, acme-wiki"`); a settings file cannot
-widen that, as bosun's list replaces any `allowedMcpServers` it holds (with `all` there is no list of
-bosun's, and the file's applies; `bosun doctor` says which).
-
-`orchestrator/settings.json` only names tools every install can have: the Slack plugin, the
-claude.ai Slack connector, `gh` and `git`. Your own MCP servers (issue tracker, wiki, CI,
-metrics) are still covered, because `bosun guard` asks before any MCP tool whose name has a
-write verb (`editJiraIssue` counts: names split on `_`, `-` and case changes) and auto mode decides
-on the rest. To let the orchestrator use their read tools without
-a prompt, or to name their write tools explicitly, keep a settings file of your own outside the
-repo:
-
-1. `cp orchestrator/settings.json ~/.config/bosun/orchestrator-settings.json`
-2. Add the read tools to `permissions.allow`, for example `"mcp__my-tracker__search_issues"` and
-   `"mcp__my-wiki__get_page"` (a bare `"mcp__my-metrics"` allows every tool of a read-only
-   server), and any write tools to `permissions.ask`.
-3. Point bosun at it in `bosun.env`:
-   `BOSUN_ORCHESTRATOR_SETTINGS="$BOSUN_CONFIG_DIR/orchestrator-settings.json"`.
-
-The file replaces `orchestrator/settings.json` rather than adding to it, so keep its rules. It
-needs no `hooks` block for `bosun guard`: bosun adds the guard at launch, from the bosun that
-launches the window, whatever the settings file. A file copied before that still has the block,
-which runs the guard twice, and the two need not be the same version (a checkout's guard and the
-installed one's), so they may not decide alike; drop it. `bosun doctor` warns about that block and
-about any rule of `orchestrator/settings.json` the file lacks (for example one added after you
-copied it). The orchestrator picks the file up at its next launch.
+`bosun ledger` is the only way the orchestrator, and the repo windows it hands work to, record state: every item
+with a stable id and a state machine, the links between them, the Slack messages already processed, the proposals
+waiting for you, when each chores mode last ran, and where each item was handed over and what came back. That is what
+lets the orchestrator start a fresh conversation every day without losing anything. [The ledger](ledger.md) explains
+it, with every field and how it is kept in [its reference](ledger.md#reference).

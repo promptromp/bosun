@@ -75,14 +75,10 @@ class WeekWorld(unittest.TestCase):
         ):
             self.kg("propose", *argv, "--source", SOURCE)
         self.now = SUPERSEDED
-        self.kg(
-            "supersede",
-            self.fact_id("environment/staging-2", "status"),
-            "--value",
-            "running",
-            "--source",
-            SOURCE,
-        )
+        status = self.fact_id("environment/staging-2", "status")
+        out = self.kg("supersede", status, "--value", "running", "--source", SOURCE)
+        # A correction on a source waits for review: I replace the status by it, from a terminal.
+        self.kg("supersede", status, "--by", out.removeprefix("ok: ").split()[0])
         self.now = LEARNED
         self.kg(
             "propose", "process/release", "rule", "--value", "never deploy on a Friday", "--source", SOURCE

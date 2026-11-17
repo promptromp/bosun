@@ -2,5 +2,6 @@
 # Every sudo here is allowed and recorded: it can only reach these stand-ins.
 mkdir -p "$HOME/.sandbox"
 echo "sudo $*" >>"$HOME/.sandbox/system.log"
+[ "${1:-}" = "-v" ] && exit 0 # the password asked for ahead (install.sh --cancel-wake): always given here
 [ "${1:-}" = "-n" ] && shift
 exec "$@"

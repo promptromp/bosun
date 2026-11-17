@@ -87,6 +87,11 @@ class CallingSession:
     transcript: Path | None  # where its prompts are kept; None when bosun reads none of it
     verifies_quotes: bool  # whether bosun can check a quote of my words in it (the agent's Profile)
 
+    @property
+    def agent_name(self) -> str:
+        """The agent's name as people know it (its Profile's display name)."""
+        return AGENTS[self.agent].PROFILE.display_name
+
 
 def record(pid: int | str) -> dict[str, Any] | None:
     """The session of a running agent, whichever it is."""

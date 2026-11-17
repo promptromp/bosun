@@ -420,7 +420,7 @@ Agents
   api           restarted; resumed: waiting on CI for PR 12
   web           kept running (nothing it was started with changed)
 Backup: ~/.local/state/bosun/backups/20261104-153207-95545b0-c41b186 (3.1 MB)
-Going back: docs/setup.md#going-back
+Going back: docs/updating.md#going-back
 ```
 
 Settled while building it:
@@ -680,7 +680,7 @@ installed that day.
 - **The table holds.** The orchestrator kept running and re-read `policy.md`; the idle window was
   restarted; the window waiting on a background `sleep` took stock, was restarted and started the `sleep`
   again from its note; the busy one was waited for and restarted once its turn ended.
-- **Going back works as [the guide](../setup.md#going-back) says**, its commands unchanged: the older
+- **Going back works as [the guide](../updating.md#going-back) says**, its commands unchanged: the older
   version's folder (or `worktree add` of its whole commit, from the summary's 7 characters), the backup
   put back entry by entry, the link led back, `install.sh`, `bosun start`; the backup, put in a scratch
   folder, also passes the previous version's `ledger validate --journal`. `bosun update` then takes it

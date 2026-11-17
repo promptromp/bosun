@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,7 @@ NOW = datetime(2026, 11, 2, 12, 0, tzinfo=UTC)
 REAL_APP_UNAVAILABLE = (
     init_detect.app_unavailable
 )  # WorldTest patches it: its own tests read a scratch folder
+REAL_RUN_SHOWN = init.run_shown  # CommandTest patches it: install.sh never runs in a unit test
 
 
 class FakeTerminal:
@@ -87,6 +89,8 @@ class WorldTest(unittest.TestCase):
         real_output = init_detect.output_of
 
         def output_of(*command: str) -> str | None:
+            if command[:3] == ("pmset", "-g", "sched"):
+                return self.pmset_schedule
             return None if command[0] in ("gh", "pmset", "sudo") else real_output(*command)
 
         for tool in (
@@ -103,6 +107,7 @@ class WorldTest(unittest.TestCase):
             self.addCleanup(tool.stop)
 
     servers: dict[str, str] | None = None  # what `claude mcp list` shows; None: it fails
+    pmset_schedule: str | None = None  # what `pmset -g sched` prints; None: it fails
     unavailable = ""  # why there is no signed app to install; "": there is
 
     def mcp_list(self, claude_bin: str, cwd: Path, timeout: float = 30.0) -> dict[str, str]:
@@ -285,6 +290,28 @@ class DetectTest(WorldTest):
         self.assertEqual(facts.connectors, ("claude.ai Acme Mail", "acme-local"))
         self.assertEqual(self.mcp_calls, [("/opt/acme/claude", self.home)])
 
+    def test_claude_code_is_the_binary_the_config_names(self) -> None:
+        """BOSUN_CLAUDE_BIN, from the environment or else bosun.env (a $HOME in it expanded), is what the plan
+        needs on the PATH and what auth status and the listing ask, as preflight and doctor check it."""
+        self.config.mkdir(parents=True)
+        (self.config / "bosun.env").write_text('BOSUN_CLAUDE_BIN="$HOME/opt/claude"\n')
+        asked: list[str] = []
+
+        def which(name: str, *args: Any, **kwargs: Any) -> str | None:
+            asked.append(name)
+            return None if name.endswith("/claude") else f"/usr/bin/{name}"
+
+        configured = f"{self.home}/opt/claude"
+        with mock.patch.object(shutil, "which", which):
+            facts = init_detect.detect(self.config, NOW)
+        self.assertEqual(facts.missing_tools, (configured,))
+        self.assertNotIn("claude", asked)
+        self.assertEqual([call[0] for call in self.mcp_calls], [configured])
+        with mock.patch.dict(os.environ, {"BOSUN_CLAUDE_BIN": "/opt/acme/claude"}):
+            self.assertEqual(init_detect.configured_claude({"BOSUN_CLAUDE_BIN": "x"}), "/opt/acme/claude")
+        with mock.patch.dict(os.environ, {"BOSUN_CLAUDE_BIN": ""}):
+            self.assertEqual(init_detect.configured_claude({}), "claude")
+
     def test_a_failed_listing_is_no_connectors(self) -> None:
         self.assertEqual(init_detect.detect(self.config, NOW).connectors, ())
 
@@ -340,9 +367,10 @@ class CommandTest(WorldTest):
             """What bosun would run is recorded. Only git and ruby really run, on this scratch home:
             a test must never reach a real login or anything else that changes a machine."""
             name = Path(str(command[0])).name
-            if name in ("install.sh", "bosun"):
+            if name == "bosun":
                 self.calls.append([name, *command[1:]])
-                status = self.statuses.get(tuple(str(arg) for arg in command[1:3]), self.install_status)
+                self.environments.append(kwargs.get("env"))
+                status = self.statuses.get(tuple(str(arg) for arg in command[1:3]), 0)
                 return subprocess.CompletedProcess(command, status)
             if name == "bash" and command[2:3] and "reload_changed_jobs" in str(command[2]):
                 self.reloads.append(str(command[2]))  # the jobs made to follow the config again
@@ -351,13 +379,22 @@ class CommandTest(WorldTest):
                 return real_run(command, *args, **kwargs)
             raise AssertionError(f"a unit test tried to run {command}")
 
+        def shown(command: Any) -> tuple[int, list[str]]:
+            """install.sh, which init runs with what it prints shown and kept: recorded, its lines made up."""
+            self.assertEqual(Path(str(command[0])).name, "install.sh")
+            self.calls.append(["install.sh", *command[1:]])
+            return self.install_status, list(self.install_lines)
+
         self.install_status = 0
+        self.install_lines: list[str] = []
+        self.environments: list[Mapping[str, str] | None] = []  # what each bosun command was given
         self.reload_status = 0
         self.reloads: list[str] = []
         self.statuses: dict[tuple[str, ...], int] = {}  # what a command answers, by its first two words
-        patcher = mock.patch.object(subprocess, "run", run)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for target, name, fake in ((subprocess, "run", run), (init, "run_shown", shown)):
+            patcher = mock.patch.object(target, name, fake)
+            patcher.start()
+            self.addCleanup(patcher.stop)
         for name, value in (("can_ask_for_sudo", True),):
             sudo = mock.patch.object(init, name, return_value=value)
             sudo.start()
@@ -557,11 +594,86 @@ class CommandTest(WorldTest):
                 self.assertIn(text, err)
         self.assertFalse(self.config.exists())
 
-    def test_a_failed_doctor_is_reported(self) -> None:
+    DOCTOR_SAID = (
+        "Schedule",
+        "  ok    launchd job com.bosun.morning loaded",
+        "  FAIL  gh is not logged in: run 'gh auth login'",
+        "  warn  on battery",
+        "  FAIL  something is missing or not done yet:",
+        "    tmux: brew install tmux",
+        "    jq: brew install jq",
+        "",
+        "2 check(s) failed",
+    )
+
+    def test_problems_doctor_found_still_set_bosun_up_and_are_said_last(self) -> None:
+        """install.sh made every step and only doctor found problems (its exit 3): the app is added all the
+        same, and init ends with doctor's FAIL lines, with what is listed under them, said again."""
+        self.install_status, self.install_lines = init.EXIT_DOCTOR, list(self.DOCTOR_SAID)
+        status, out, err = self.bosun_init("--recommended")
+        self.assertEqual(status, init.EXIT_DOCTOR)
+        self.assertEqual(self.app_calls(), [["bosun", "app", "install"], ["bosun", "app", "login", "on"]])
+        self.assertEqual(out.count("bosun is set up"), 1)  # said once: the closing names doctor's problems
+        self.assertNotIn("bosun is set up", err)
+        self.assertTrue(err.rstrip().endswith("Fix them, then run bosun doctor again to check."))
+        self.assertIn(
+            "`bosun doctor` found problems:\n"
+            "  FAIL  gh is not logged in: run 'gh auth login'\n"
+            "  FAIL  something is missing or not done yet:\n"
+            "    tmux: brew install tmux\n    jq: brew install jq\n",
+            err,
+        )
+        self.assertNotIn("on battery", err)
+        self.assertNotIn("install.sh stopped", err)
+
+    def test_a_doctor_that_stopped_with_no_fail_line_says_its_last_lines(self) -> None:
+        self.install_status = init.EXIT_DOCTOR
+        self.install_lines = [
+            "Schedule",
+            "  ok    launchd job loaded",
+            "",
+            "doctor: line 9: jq: command not found",
+        ]
+        status, _, err = self.bosun_init("--recommended")
+        self.assertEqual(status, init.EXIT_DOCTOR)
+        self.assertIn(
+            "`bosun doctor` stopped before it was done; it said last:\nSchedule\n  ok    launchd job loaded\n"
+            "doctor: line 9: jq: command not found\nRun bosun doctor to see it whole.",
+            err,
+        )
+
+    def test_an_install_sh_that_stopped_says_what_stopped_it(self) -> None:
         self.install_status = 1
+        self.install_lines = [
+            "2026-11-16 09:00:00 [install] keeping existing bosun.env",
+            "2026-11-16 09:00:01 [install] ERROR: could not load the launchd jobs; see above",
+        ]
         status, _, err = self.bosun_init("--recommended")
         self.assertEqual(status, init.EXIT_BLOCKED)
-        self.assertIn("bosun doctor", err)
+        self.assertIn(
+            "install.sh stopped before it was done: could not load the launchd jobs; see above.", err
+        )
+        self.assertNotIn("bosun doctor", err)
+        self.assertEqual(self.app_calls(), [])
+        self.install_lines = []
+        self.assertIn("it exited with 1, without saying why", self.bosun_init("--recommended")[2])
+
+    def test_doctor_problems_keep_the_lines_under_a_failure_only(self) -> None:
+        self.assertEqual(init.doctor_problems(["  warn  x", "    under a warning", "  ok    y"]), ())
+        self.assertEqual(
+            init.doctor_problems(["  FAIL  a", "    b", "  ok    c", "    d"]), ("  FAIL  a\n    b",)
+        )
+        self.assertEqual(init.last_error(["[x] ERROR: one", "[x] ERROR: two ", "fine"]), "two")
+        self.assertEqual(init.last_error(["fine"]), "")
+
+    def test_what_install_sh_prints_is_shown_as_it_comes_and_kept(self) -> None:
+        script = self.home / "says.sh"
+        script.write_text("#!/bin/sh\necho one\necho two >&2\nexit 3\n")
+        script.chmod(0o755)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), mock.patch.object(init, "run_shown", REAL_RUN_SHOWN):
+            self.assertEqual(init.run_shown([str(script)]), (3, ["one", "two"]))
+        self.assertEqual(out.getvalue(), "one\ntwo\n")
 
     def test_trusted_folders_are_not_trusted_again(self) -> None:
         with mock.patch.object(claude_state, "trusted", return_value=True):
@@ -624,6 +736,45 @@ class CommandTest(WorldTest):
         self.assertIn("name: api", (self.config / "sessions.yml").read_text())
         self.assertEqual(self.calls[-1], ["bosun", "start"])
 
+    def test_the_windows_start_without_get_sh_s_variables_or_what_bosun_env_now_holds(self) -> None:
+        """`curl ... | BOSUN_HARNESS=codex sh`: init writes BOSUN_HARNESS into bosun.env, and the tmux server
+        `bosun start` starts must not carry it (nor get.sh's own variables), which would beat bosun.env in
+        every window until the server ends; a setting init does not write stays, as a real override."""
+        handed = {
+            "BOSUN_HARNESS": "codex",
+            "BOSUN_RERUN": "curl ... | sh",
+            "BOSUN_USER_PATH": "/usr/bin",
+            "BOSUN_INIT_CHANNEL": "main",
+            "BOSUN_INIT_UNATTENDED": "1",
+            "BOSUN_SKIP_PREFLIGHT": "1",
+        }
+        with mock.patch.dict(os.environ, handed):
+            self.wizard([*[init_wizard.ENTER] * 7, "y", "y"])
+        self.assertEqual(self.calls[-1], ["bosun", "start"])
+        started = self.environments[-1]
+        assert started is not None
+        self.assertEqual({key for key in handed if key in started}, {"BOSUN_SKIP_PREFLIGHT"})
+        self.assertEqual(started["BOSUN_CONFIG_DIR"], os.environ["BOSUN_CONFIG_DIR"])
+        self.assertEqual(started["PATH"], os.environ["PATH"])
+        self.assertIn("BOSUN_HARNESS", init_plan.answer_keys())
+
+    def test_the_wizard_offers_to_start_when_only_doctor_found_problems_and_says_them_last(self) -> None:
+        self.install_status, self.install_lines = init.EXIT_DOCTOR, list(self.DOCTOR_SAID)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            status, _ = self.wizard([*[init_wizard.ENTER] * 7, "y", "y"])
+        self.assertEqual(status, init.EXIT_DOCTOR)
+        self.assertEqual(self.calls[-1], ["bosun", "start"])
+        self.assertIn("gh is not logged in", err.getvalue())
+
+    def test_the_wizard_does_not_offer_to_start_when_install_sh_stopped(self) -> None:
+        self.install_status = 1
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            status, _ = self.wizard([*[init_wizard.ENTER] * 7, "y"])
+        self.assertEqual(status, init.EXIT_BLOCKED)
+        self.assertNotIn(["bosun", "start"], self.calls)
+
     def test_the_wizard_replaces_other_windows_once_you_saw_it_would(self) -> None:
         self.bosun_init("--recommended")
         self.repo("Development/web")
@@ -655,6 +806,31 @@ class CommandTest(WorldTest):
         self.assertFalse(self.config.exists())
 
     def test_no_wake_asked_for_means_no_wake_flag(self) -> None:
+        self.bosun_init("--answers", self.answers_file(wake=False, menu_app=False))
+        self.assertEqual(self.calls[-1], ["install.sh"])
+
+    def test_a_no_on_a_rerun_cancels_bosun_s_own_wake(self) -> None:
+        """bosun's wake for the schedule bosun.env has, alone among pmset's repeating events: a no cancels it
+        (install.sh --cancel-wake: sudo pmset repeat cancel), or says to with no terminal; another's stays."""
+        self.bosun_init("--answers", self.answers_file(menu_app=False))
+        self.pmset_schedule = "Repeating power events:\n  wakepoweron at 8:01AM weekdays only\n"
+        self.bosun_init("--answers", self.answers_file(wake=False, menu_app=False))
+        ours = "wakepoweron at 8:01AM weekdays only"
+        self.assertEqual(self.calls[-1], ["install.sh", "--cancel-wake", ours])
+        # a no that also moves the start: what is cancelled is the wake bosun.env's old schedule set
+        self.bosun_init("--answers", self.answers_file(wake=False, start="09:00", menu_app=False))
+        self.assertEqual(self.calls[-1], ["install.sh", "--cancel-wake", ours])
+        self.assertIn('BOSUN_START_TIME="09:00"', (self.config / "bosun.env").read_text())
+        self.pmset_schedule = "Repeating power events:\n  wakepoweron at 8:01AM weekdays only\n"
+        self.bosun_init("--answers", self.answers_file(wake=False, start="08:00", menu_app=False))
+        self.assertEqual(self.calls[-1], ["install.sh"])  # 08:01 is not the wake bosun.env's 09:00 sets
+        with mock.patch.object(init, "can_ask_for_sudo", return_value=False):
+            _, out, _ = self.bosun_init("--answers", self.answers_file(wake=False, menu_app=False))
+        by_hand = f"{init.ROOT / 'install.sh'} --cancel-wake 'wakepoweron at 8:01AM weekdays only'"
+        self.assertIn(f"run this once yourself: {by_hand} (it runs sudo pmset repeat cancel only while", out)
+        self.assertIn("one repeating event: it removes any other repeating event too)", out)
+        self.assertEqual(self.calls[-1], ["install.sh"])
+        self.pmset_schedule = "Repeating power events:\n  wakepoweron at 6:30AM every day\n"
         self.bosun_init("--answers", self.answers_file(wake=False, menu_app=False))
         self.assertEqual(self.calls[-1], ["install.sh"])
 

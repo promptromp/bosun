@@ -18,6 +18,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import activity
+import agent_state
 import approvals
 import claude_state
 import guard
@@ -74,11 +75,14 @@ def tool_result(text: str, moment: datetime) -> dict[str, Any]:
 
 
 class ApprovalsTestCase(unittest.TestCase):
-    """A scratch ledger with my PR, and a transcript file for the session."""
+    """A scratch ledger with my PR, and a transcript file for the session. `ledger approve` runs from
+    no agent's session (a terminal) unless a test says otherwise: the suite itself may run inside one,
+    which must not count."""
 
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
+        self.approving_in(None)
         self.state = Path(self.tmp.name) / "state"
         ledger.configure(self.state)
         minted.forget()
@@ -92,6 +96,12 @@ class ApprovalsTestCase(unittest.TestCase):
             # touch stands in for an outward command (the headless check does the same)
             "BOSUN_APPROVALS_GATED_COMMANDS": "touch, acme-deploy run",
         }
+
+    def approving_in(self, session: agent_state.CallingSession | None) -> None:
+        """Run `ledger approve` from <session>, as the agent session that ran it; None: from a terminal."""
+        patcher = mock.patch.object(agent_state, "calling_session", return_value=session)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     @property
     def review_request_id(self) -> str:
@@ -173,6 +183,282 @@ class MatchingTest(unittest.TestCase):
         )
 
 
+# The review's round-2 quotes (scratchpad rv2/q2.py) with what each gets. Those that count and should not, as
+# docs/design/approvals.md lists: a request that holds "go ahead", someone's words without quotation marks, a
+# yes with a time on it, a homoglyph negation (a Greek omicron), a bare number.
+ROUND_TWO_QUOTES: tuple[tuple[str, str, bool], ...] = (
+    ("sure, but not yet", "sure, but not yet", False),
+    ("sure", "sure, but not yet", False),
+    ("ok \u2014 actually no", "ok \u2014 actually no", False),
+    ("ok", "ok \u2014 actually no", False),
+    ("yes?", "yes?", False),
+    ("approve 2", "approve 2", True),  # round 3: a verb that picks a bare choice
+    ("1", "1", True),
+    ("all", "all", True),
+    ("go ahead and tell me what's pending", "go ahead and tell me what's pending", True),
+    ("go ahead", "go ahead and tell me what's pending", True),
+    ("send me the link", "send me the link", False),
+    ("can you send me the link", "can you send me the link?", False),
+    ("how should we proceed", "how should we proceed?", False),
+    ("who needs to approve this", "who needs to approve this?", False),
+    ("is the build fine", "is the build fine?", False),
+    ("the build is fine", "the build is fine", False),
+    ('Dana wrote "ok, ship it"', 'Dana wrote "ok, ship it" on the PR, what do you think?', False),
+    ('"ok, ship it"', 'Dana wrote "ok, ship it" on the PR, what do you think?', False),
+    ("ok, ship it", "Dana wrote: ok, ship it. Look at the thread", True),
+    ("don\u2019t send it", "don\u2019t send it", False),
+    ("don\xb4t send it", "don\xb4t send it", False),
+    ("don`t send it", "don`t send it", False),
+    ("dont send it", "dont send it", False),
+    ("isnt fine", "the build isnt fine", False),
+    ("the build isnt fine", "the build isnt fine", False),
+    ("ok nevermind", "ok nevermind", False),
+    ("okay, scratch that", "okay, scratch that", False),
+    ("fine, forget it", "fine, forget it", False),
+    ("ok abort", "ok abort", False),
+    ("yes, after lunch", "yes, after lunch", True),
+    ("send it? No way.", "send it? No way.", False),
+    ("send it?", "send it? No way.", False),
+    ("should we send it", "Should we send it? No.", False),
+    ("yes!!!!!", "yes!!!!! no wait", False),
+    ("yes", "yes. no wait", False),
+    ("Yes, send it.", "No. Yes, send it.", False),
+    ("send it", "No.\nsend it", False),
+    ("ok send it", "no\nok send it", False),
+    ("ok send it", "No!\nok send it", False),
+    ("look into mypr:acme/exporter#102", "look into mypr:acme/exporter#102 and summarize the review", False),
+    ("mypr:acme/exporter#102", "mypr:acme/exporter#102", False),
+    ("why is mypr:acme/exporter#102 open", "why is mypr:acme/exporter#102 open", False),
+    ("NO", "NO", False),
+    ("No.", "No.", False),
+    ("n", "n", False),
+    ("ok send it", "ok send it \uff4e\uff4f\uff54", False),
+    ("ok send it", "ok send it n\u200bot", False),
+    ("ok send it", "ok send it n\u03bf", True),
+    ("ok send it", "ok send it non-stop", False),
+    ("ok send it", "ok send it - no-go", False),
+    ("send it", "e.g. send it", False),
+    ("it. ok send it", "don't do it. ok send it", False),
+    ("ok send it", "don't do it. ok send it", False),
+    ("ok send it", "don't do it; ok send it", False),
+    ("ok send it", "ok send it, not the other one", False),
+    ("approved", "approved... not", False),
+    ("yes", "yes..no", False),
+    ("yes", "yes.no", False),
+    ("yes.", "yes.no", False),
+    ("1, 3", "1, 3", True),
+    ("both", "both", True),
+    ("all of them", "all of them", True),
+    ("1 and 3", "1 and 3?", False),
+    ("2b", "2b", True),
+    ("100", "100", True),
+    ("1+1", "1+1", True),
+    ("3 & 4", "3 & 4", True),
+    ("all?", "all?", False),
+    ("ok send it", "ok send it, holding pattern", True),
+    ("ok send it", "ok send it, I can't wait", False),
+    ("yesterday's deploy", "yesterday's deploy", False),
+    ("okay", "okay", True),
+    ("ok", "ok", True),
+    ("k", "k", False),
+    ("yes sir", "yes sir", True),
+)
+
+# The review's round-3 quotes (scratchpad rv3/q.py, q2.py), (quote, prompt, counts). Those that count and
+# should not are docs/design/approvals.md's list: a yes with a limit ("ok for all except 2", "yes, but only
+# 1"), with a time or a condition, someone's words passed on, a quoted no (`yes "no"`), a homoglyph.
+ROUND_THREE_QUOTES: tuple[tuple[str, str, bool], ...] = (
+    ("yes", "yes", True),
+    ("ok", "ok", True),
+    ("1 and 3", "1 and 3", True),
+    ("all", "all", True),
+    ("go ahead with 1 and 3", "go ahead with 1 and 3", True),
+    ("yes please", "yes please", True),
+    ("ok, send it", "ok, send it", True),
+    ("Yes!", "Yes!", True),
+    ("yes", "Yes!", True),
+    ("sure, do it", "sure, do it", True),
+    ("approved", "approved", True),
+    ("lgtm", "lgtm", True),
+    ("LGTM", "LGTM", True),
+    ("1 and 3 yes", "1 and 3 yes", True),
+    ("Ok.", "Ok.", True),
+    ("yes", "yes.", True),
+    ("ok \U0001f44d", "ok \U0001f44d", True),
+    ("yes, 1 and 3", "yes, 1 and 3", True),
+    ("1 and 3 yes", "1 and 3 yes, 2 later", False),
+    ("1 and 3, not 2", "1 and 3, not 2", False),
+    ("approve 1 and 3", "approve 1 and 3", True),
+    ("send 1 and 3", "send 1 and 3", True),
+    ("do 1 and 3", "do 1 and 3", True),
+    ("1 and 3 please", "1 and 3 please", True),
+    ("go with 1 and 3", "go with 1 and 3", True),
+    ("merge it", "merge it", False),
+    ("yes, merge it", "yes, merge it", True),
+    ("1, 3", "1, 3", True),
+    ("both", "both", True),
+    ("all of them", "all of them", True),
+    ("2", "2", True),
+    ("yes to all", "yes to all", True),
+    ("yep", "yep", True),
+    ("okay go ahead", "okay go ahead", True),
+    ("Yes, go ahead. Thanks!", "Yes, go ahead. Thanks!", True),
+    ("Yes, go ahead", "Yes, go ahead. Thanks!", True),
+    ("yes, no rush", "yes, no rush", False),
+    ("send it now", "send it now", True),
+    ("ship it", "ship it", True),
+    ("y", "y", False),
+    ("approve", "approve", False),
+    ("confirmed", "confirmed", True),
+    ("fine", "fine", False),
+    ("yes for mypr:acme/x#12", "yes for mypr:acme/x#12", True),
+    ("all good, send them", "all good, send them", True),
+    ("ok do 1 and 3", "ok do 1 and 3", True),
+    ("1+3", "1+3", True),
+    ("1 & 3", "1 & 3", True),
+    ("1 and 3.", "1 and 3.", True),
+    ("ok!!", "ok!!", True),
+    ("yes - go ahead", "yes - go ahead", True),
+    ("Yes \u2014 go ahead", "Yes \u2014 go ahead", True),
+    ("ok, send it", "ok, send it. I'll check later", False),
+    ("Sure thing", "Sure thing", True),
+    ("yes, but only 1", "yes, but only 1", True),
+    ("ok, it's fine, send it", "ok, it's fine, send it", True),
+    ("ok for all except 2", "ok for all except 2", True),
+    ("go", "go", False),
+    ("do it", "do it", True),
+    ("go ahead and tell me what's pending", "go ahead and tell me what's pending", True),
+    ("Dana wrote: ok, ship it", "Dana wrote: ok, ship it", True),
+    ("ok, ship it", "Dana wrote: ok, ship it", True),
+    ("yes, after lunch", "yes, after lunch", True),
+    ("yes, n\u03bf", "yes, n\u03bf", True),
+    ("ok, but you mustnt merge", "ok, but you mustnt merge", False),
+    ("ok, you neednt merge", "ok, you neednt merge", False),
+    ("yes", "yes, dont", False),
+    ("yes", "yes \u201cno\u201d", True),
+    ("yes", "yes \u2018no\u2019", True),
+    ("yes", "yes 'no'", True),
+    ("yes", "yes \xabno\xbb", False),
+    ("yes", "yes \u201eno\u201c", False),
+    ("yes", "yes\u200b", True),
+    ("yes", "n\u200bo, yes", False),
+    ("yes", "yes \uff1f", False),
+    ("yes", "yes \xbf", False),
+    ("ok", "ok. nope.", False),
+    ("Yes for 2", "Yes for 2, NO for 3", False),
+    ("yes, merge it once ci is green", "yes, merge it once ci is green", True),
+    ("yes, after the standup", "yes, after the standup", True),
+)
+
+
+class QuoteRuleTest(unittest.TestCase):
+    """What counts as my approval of a proposal (approvals.approval_quote_in, QUOTE_RULE): in a prompt with no
+    negation and no question anywhere (quoted text left out), all of it holding an approving phrase or a bare
+    choice, or at least MIN_QUOTE_CHARS of its whole words holding an approving phrase."""
+
+    def counts(self, quote: str, *prompts: str) -> bool:
+        return approvals.approval_quote_in(quote, prompts)
+
+    def test_round_two_and_three_quotes(self) -> None:
+        for quote, prompt, wanted in (*ROUND_TWO_QUOTES, *ROUND_THREE_QUOTES):
+            with self.subTest(quote=quote, prompt=prompt):
+                self.assertEqual(self.counts(quote, prompt), wanted)
+
+    def test_a_whole_prompt_counts_when_it_says_yes(self) -> None:
+        for quote, prompt in [
+            ("yes", "yes"),
+            ("send it", "Send it!"),
+            ("Yes!", "yes"),
+            ("1 and 3", "  1 and\n3 "),
+            ("1,3", "1,3"),
+            ("all", "all"),
+            ("all of them", "all of them!"),
+            ("Yeah, go ahead", "yeah, go ahead"),
+            ("lgtm", "LGTM"),
+            (f"yes, {PR}", f"yes, {PR}"),
+            (f"ok for {PR}", f"ok for {PR}"),
+            ("\uff59\uff45\uff53", "yes"),  # fullwidth letters are letters (NFKC)
+        ]:
+            with self.subTest(quote=quote):
+                self.assertTrue(self.counts(quote, prompt))
+
+    def test_a_prompt_that_says_no_or_asks_approves_nothing(self) -> None:
+        for prompt in [
+            "what is on my plate today?",
+            "no",
+            "hold on",
+            "go with option 2",  # not a bare choice
+            "approve",  # a bare verb
+            "merge 1 and 3",  # a merge asks again
+            "the build is fine",
+            PR,  # the id alone
+            f"approve {PR}",
+            "y",
+            "\U0001f44d",  # an emoji: later (M9)
+            "",
+        ]:
+            with self.subTest(prompt=prompt):
+                self.assertFalse(self.counts(prompt, prompt))
+
+    def test_a_negation_anywhere_in_the_prompt_voids_it(self) -> None:
+        for quote, prompt in [
+            ("yes, send it.", "Don't wait for CI. Yes, send it."),  # another sentence
+            ("ok send it", "ok send it, not the other one"),
+            ("ok send it", "no\nok send it"),
+            ("yes, send it", "Yes, send it\u2026 actually don\u2019t"),
+            ("ok send it", "ok send it, isnt that right"),
+            ("go ahead and send it", "go ahead and send it, nevermind the second"),
+            ("ok send it", "ok send it ok send it n\u200bot"),  # a zero-width space inside the not
+        ]:
+            with self.subTest(quote=quote, prompt=prompt):
+                self.assertFalse(self.counts(quote, prompt))
+
+    def test_quoted_text_is_someone_elses(self) -> None:
+        self.assertFalse(self.counts("ok, ship it", 'Dana wrote "ok, ship it" on the PR'))
+        self.assertFalse(self.counts("ok, ship it", "Dana wrote \u201cok, ship it\u201d on the PR"))
+        self.assertFalse(self.counts("lgtm", "she said 'lgtm' to me"))
+        self.assertTrue(self.counts("yes, send it", 'yes, send it to Dana: she asked for "the summary"'))
+        self.assertTrue(self.counts("ok, it's fine to send it", "ok, it's fine to send it"))  # apostrophes
+
+    def test_a_part_needs_whole_words_the_length_and_an_approving_phrase(self) -> None:
+        prompt = "1 and 3 YES, 2 skip; also check why the exporter's CI is red today"
+        self.assertTrue(self.counts("1 and 3 yes", prompt))
+        self.assertTrue(self.counts("go ahead with 1 and 3", "sure, go ahead with 1 and 3 and tell me after"))
+        for quote in [
+            "e",
+            "today",
+            "the exporter's CI is red",
+            "es, 2 skip",
+            "1 and 3 ye",
+            "yes",  # an approving phrase, too short as a part
+            "1 and 3",  # a bare choice, but not all of the prompt
+        ]:
+            with self.subTest(quote=quote):
+                self.assertFalse(self.counts(quote, prompt))
+        self.assertFalse(self.counts("yes and look", "yes", "and look"))  # across two prompts
+        self.assertFalse(self.counts(f"{PR} go", f"for {PR} go, the rest later"))  # the id says no yes
+
+    def test_an_approving_word_inside_another_word_is_none(self) -> None:
+        prompt = "yesterday's okayish draft is in the doc"
+        self.assertFalse(self.counts("yesterday's okayish", prompt))
+        self.assertFalse(self.counts("okayish draft", prompt))
+
+    def test_a_statement_needs_only_whole_words(self) -> None:
+        """approvals.words_in, which an ontology quote of my words uses: no approving phrase, no length, and
+        quoted text kept (a statement may quote a name)."""
+        prompt = 'Yes: smoke tests gate every release, the job is "nightly-export".'
+        self.assertTrue(approvals.words_in("smoke  tests gate", [prompt]))
+        self.assertTrue(approvals.words_in("yes", ["other", prompt]))
+        self.assertTrue(approvals.words_in('the job is "nightly-export"', [prompt]))
+        for quote in ("moke tests", "every relea", "e", ""):
+            with self.subTest(quote=quote):
+                self.assertFalse(approvals.words_in(quote, [prompt]))
+
+    def test_text_bosun_pasted_is_compared_as_typed(self) -> None:
+        self.assertTrue(self.counts("yes", "<pasted_content>yes</pasted_content>"))
+        self.assertFalse(self.counts("...", "..."))
+
+
 class GatedTest(unittest.TestCase):
     def gated(self, tool: str, **tool_input: Any) -> bool:
         return guard.outward_call({"tool_name": tool, "tool_input": tool_input}) is not None
@@ -199,6 +485,23 @@ class GatedTest(unittest.TestCase):
             "gh pr view 1 && gh pr comment 1 --body hi",
             "timeout 120 gh pr merge https://github.com/acme/exporter/pull/1 --squash 2>&1 | tail -2",
             "env GH_DEBUG=1 nohup git push origin main",
+            # git's own options before the subcommand, a full path, a substitution, a shell wrapper
+            "git -C /Users/me/Development/exporter push origin HEAD:main",
+            "git -c core.sshCommand=ssh --git-dir=/x/.git push origin main",
+            "/usr/bin/git push origin main",
+            "echo `gh pr merge 1 --squash`",
+            'echo "$(gh pr comment 1 --body hi)"',
+            "bash -c 'gh pr merge 1 --squash'",
+            'eval "git push origin main"',
+            # the other outward gh commands
+            "gh pr create --fill",
+            "gh issue comment 3 --body hi",
+            "gh issue create --title t --body b",
+            "gh issue edit 3 --add-label bug",
+            "gh issue close 3",
+            "gh release create v1.2.0",
+            "gh workflow run ci.yml",
+            "gh run rerun 12345",
         ]:
             with self.subTest(command=command):
                 self.assertTrue(self.gated("Bash", command=command))
@@ -211,7 +514,18 @@ class GatedTest(unittest.TestCase):
         ]:
             with self.subTest(tool=tool):
                 self.assertFalse(self.gated(tool))
-        for command in ["gh pr view 1 --json state", "bosun ledger list", "echo 'gh pr merge 1'"]:
+        for command in [
+            "gh pr view 1 --json state",
+            "bosun ledger list",
+            "echo 'gh pr merge 1'",
+            "gh issue view 3",
+            "gh issue list --state open",
+            "gh run view 12345 --log-failed",
+            "gh workflow list",
+            "gh release view v1.2.0",
+            "git -C /Users/me/Development/exporter log --oneline -3",
+            "bash -c 'git status'",
+        ]:
             with self.subTest(command=command):
                 self.assertFalse(self.gated("Bash", command=command))
 
@@ -340,6 +654,21 @@ class ChatApprovalTest(ApprovalsTestCase):
         self.assertIn("needs the user's approval first", reason)
         self.assertNotIn("Run exactly", reason)
 
+    def test_a_push_past_gits_options_is_gated_and_once_approved_asks_so_it_is_used_up(self) -> None:
+        """`git -C <dir> push` is a push (review-launch 3): denied without an approval; approved, the plain
+        guard asks, as the settings' `git push` rule cannot see it, so the PermissionRequest hook allows it
+        and uses the approval up."""
+        push = "git -C /Users/me/Development/exporter push origin HEAD:main"
+        self.assertIn("a push, an outward action", self.denial(self.event("Bash", command=push)) or "")
+        self.propose_touch(command=push)
+        self.say(typed(QUOTE, self.now()))
+        run("approve", PR, "--quote", QUOTE)
+        call = self.event("Bash", command=push)
+        self.assertIsNone(self.denial(call))
+        self.assertEqual(self.respond("", call)["permissionDecision"], "ask")  # type: ignore[index]
+        self.assertTrue(self.allowed(call))
+        self.assertIn("used_at", self.item(PR)["proposal"]["approval"])
+
     def test_an_approved_ci_build_restart_is_allowed(self) -> None:
         restart = "mcp__acme-ci__restart_build"
         args = {"owner": "acme", "name": "exporter", "build_number": 7}
@@ -367,8 +696,71 @@ class ChatApprovalTest(ApprovalsTestCase):
                 self.approve_touch(entry)
                 self.assertFalse(self.allowed(self.event("Bash", command=TOUCH)))
                 self.assertIn(
-                    "is not in anything the user typed", self.denial(self.event("Bash", command=TOUCH)) or ""
+                    "does not count: a quote counts only from a prompt typed",
+                    self.denial(self.event("Bash", command=TOUCH)) or "",
                 )
+
+    def test_approve_in_a_session_refuses_a_quote_the_guard_would_not_take(self) -> None:
+        self.approving_in(agent_state.CallingSession("claude", 4242, self.transcript, True))
+        self.propose_touch()
+        self.say(typed("what is on my plate today?", self.now()))
+        for quote in (
+            "e",
+            "today",
+            "on my plate",
+            "what is on my plate today?",
+            "what is on my plate today? yes",
+        ):
+            with self.subTest(quote=quote):
+                with self.assertRaises(ledger.LedgerError) as refused:
+                    run("approve", PR, "--quote", quote)
+                said = str(refused.exception)
+                self.assertIn(f"does not count as my approval of {PR} in this session", said)
+                self.assertIn("nothing was recorded", said)
+                self.assertIn(approvals.QUOTE_RULE, said)
+        self.assertNotIn("approval", self.item(PR)["proposal"])
+        self.say(typed("1 and 3 yes, and look at the CI", self.now()))
+        run("approve", PR, "--quote", QUOTE)
+        self.assertTrue(self.allowed(self.event("Bash", command=TOUCH)))
+
+    def test_a_reply_that_says_no_yes_approves_nothing(self) -> None:
+        """review round 1 (test_forge): a whole unrelated prompt, a "no", a negated "send". Refused by
+        approve in the session, and by the guard when approve was run where it could not check."""
+        for typed_text, quote in [
+            ("what is on my plate today?", "what is on my plate today?"),
+            ("no", "no"),
+            ("no, don't send it yet, I want to reword it", "don't send it"),
+        ]:
+            with self.subTest(quote=quote):
+                self.transcript.write_text("")
+                self.approving_in(agent_state.CallingSession("claude", 4242, self.transcript, True))
+                self.propose_touch()
+                self.say(typed(typed_text, self.now()))
+                with self.assertRaisesRegex(ledger.LedgerError, "does not count as my approval"):
+                    run("approve", PR, "--quote", quote)
+                self.approving_in(None)
+                run("approve", PR, "--quote", quote)
+                self.assertFalse(self.allowed(self.event("Bash", command=TOUCH)))
+
+    def test_approve_refuses_where_it_cannot_check_and_records_from_a_terminal(self) -> None:
+        """review round 1: a Codex or agy window, or a session whose transcript is not there, recorded the
+        quote unchecked and said to make the call, which the guard then denied. They are refused, saying
+        why; from a terminal (the base case) approve records, and the guard checks at the call."""
+        self.propose_touch()
+        self.approving_in(agent_state.CallingSession("codex", 4242, None, False))
+        with self.assertRaisesRegex(ledger.LedgerError, "bosun cannot check my words in Codex"):
+            run("approve", PR, "--quote", QUOTE)
+        gone = self.transcript.with_name("gone.jsonl")
+        for transcript in (None, gone):
+            with self.subTest(transcript=transcript):
+                self.approving_in(agent_state.CallingSession("claude", 4242, transcript, True))
+                with self.assertRaisesRegex(ledger.LedgerError, "transcript is not there"):
+                    run("approve", PR, "--quote", QUOTE)
+        self.assertNotIn("approval", self.item(PR)["proposal"])
+        self.approving_in(None)
+        run("approve", PR, "--quote", "e")
+        self.assertFalse(self.allowed(self.event("Bash", command=TOUCH)))
+        self.assertIn("does not count", self.denial(self.event("Bash", command=TOUCH)) or "")
 
     def test_what_bosun_pasted_is_not_mine(self) -> None:
         events_dir = self.state / "events"

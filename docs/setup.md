@@ -1,946 +1,230 @@
 # Setup
 
-Requirements, installation and configuration, and the morning's logins.
+This page gets bosun installed and running on your Mac: what you need, the install, and the first start. It ends
+once bosun runs. After that, [How a day runs](day.md) says what bosun does on its own,
+[Configuration](configuration.md) how to change it, [The menu bar app](menu-bar-app.md) what its icon offers, and
+[Updating and uninstalling](updating.md) how to keep it current or take it off.
 
 ## Requirements
 
-- macOS on Apple silicon or Intel, an **admin account** (for the one-time `sudo pmset`)
-- Charger connected and **lid open** (or an external display) overnight
-- [Homebrew](https://brew.sh), which also brings Apple's command line tools
-- `brew install tmux jq python gh` (`python3` must be 3.13 or newer; the macOS system one is 3.9), plus
-  `ruby` and `curl` (the macOS system ones are fine)
-- [GitHub CLI](https://cli.github.com), logged in: `gh auth login`
-- [Claude Code](https://claude.com/claude-code) 2.1.283 or newer, logged in, and opened once by hand:
-  run `claude`, go through its first screens, then `/exit`. The orchestrator always runs on it
-- Optional, to run repo sessions on it: [Codex](https://developers.openai.com/codex/cli) 0.166.0 or newer
-  (`brew install codex`), logged in (`codex login`). See
-  [Running repo sessions on Codex](#running-repo-sessions-on-codex)
-- Optional, a preview: Google's Antigravity CLI (`agy`) 1.5.5 or newer, signed in. See
-  [Running repo sessions on Antigravity](#running-repo-sessions-on-antigravity-a-preview)
-- Your login shell as it is: zsh (macOS's default) or bash, oh-my-zsh and Powerlevel10k included. Each window
-  starts through it as a terminal you open does (`<shell> -lic`), so your PATH and tools load. In those windows
-  oh-my-zsh's update question is switched off (`DISABLE_AUTO_UPDATE=true`: it would wait for a key and the
-  window would never start its agent; it counts while your `.zshrc` picks no update mode with `zstyle`), and
-  the helpers a prompt theme starts are stopped as the window's launch ends (`bosun orphans`)
+- **A Mac** on macOS, Apple silicon or Intel. To let bosun wake the Mac on schedule, your account must be an
+  administrator: bosun asks for your password once, for `sudo pmset`.
+- **[Homebrew](https://brew.sh)**, which also brings Apple's command line tools.
+- **A few tools:** `brew install tmux jq python gh`. bosun needs Python 3.13 or newer (the one macOS ships is
+  older). The system's `git`, `ruby` and `curl` are fine.
+- **The [GitHub CLI](https://cli.github.com)**, logged in: `gh auth login`.
+- **[Claude Code](https://claude.com/claude-code)** 2.1.283 or newer, logged in, and opened once by hand: run
+  `claude`, go through its first screens, then `/exit`. The orchestrator always runs on Claude Code.
+- **Optional:** [Codex](configuration.md#running-repo-sessions-on-codex) or [Antigravity](configuration.md#running-repo-sessions-on-antigravity-a-preview)
+  (a preview), to run some or all repo windows on another agent.
 
-You do not have to check these yourself. `bosun preflight` does, changes nothing, and lists everything
-missing at once, with what to do about each. `bosun init` and `bosun doctor` start with the same check.
+You don't have to check these yourself. The installer runs `bosun preflight`, which changes nothing, lists
+everything that is missing at once, and says what to do about each. You can run it any time, and `bosun doctor`
+starts with the same check.
+
+<details class="note" markdown>
+<summary>Your shell, oh-my-zsh and prompt themes</summary>
+
+Each window starts through your login shell, zsh or bash, as a terminal you open does (`<shell> -lic`), so your
+PATH and tools load. oh-my-zsh and Powerlevel10k work as they are. In bosun's windows oh-my-zsh's update question
+is switched off (`DISABLE_AUTO_UPDATE=true`), since it would wait for a key and the window would never start its
+agent; this holds as long as your `.zshrc` picks no update mode with `zstyle`. The helpers a prompt theme starts
+are stopped when a window's launch ends, and `bosun orphans` lists any left behind.
+
+</details>
+
+### A typical setup
+
+bosun works on a Mac you leave signed in. At your start time it wakes the Mac (a repeating `pmset` wake, a
+minute after the start time), keeps it awake through your hours (`caffeinate`), and lets it sleep after your
+"awake until" time. Between those, the Mac sleeps as usual. For that to work:
+
+| The Mac | Why |
+|---|---|
+| Stays logged in to your account. Asleep is fine | bosun's jobs run in your login session. After a restart or a log-out nothing runs until you log in again; then, by default, bosun starts by itself if it is one of your days and inside your hours ([Starting at login](menu-bar-app.md#starting-at-login)). |
+| On a laptop: is on its power adapter when bosun should be awake | Part of the keep-awake (`caffeinate -s`) holds only on power, and bosun counts on power for the scheduled wake. `bosun doctor` warns while the Mac runs on battery. |
+| On a laptop: has the lid open, or closed with an external display | With the lid closed and no external display, macOS keeps the Mac asleep whatever bosun asks. It only wakes for moments in the background, and work started then can hang. |
+| Keeps your login keychain unlocked while it sleeps | Claude Code keeps its login there, and after an unattended wake nobody is there to unlock it. `bosun doctor` fails if the keychain locks on sleep. |
+
+So a typical setup is a desktop Mac, or a laptop that stays on its power adapter at your desk, with the lid open
+or connected to a display. It wakes for the morning, works through your hours, and sleeps in the evening and
+overnight.
+
+`bosun doctor` checks the power, the lid and the keychain. To see a real wake on your own Mac, run
+`bosun wake-test`: it schedules a wake a few minutes ahead and puts the Mac to sleep, and `bosun wake-test
+--report` says afterwards what happened.
 
 ## Install
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | sh
-```
+1. **Run the install line** in Terminal:
 
-[`get.sh`](../get.sh) puts the newest release of bosun in `~/.local/share/bosun-versions`, a folder for each
-version beside the one repository they come from (`bosun.git`), makes `~/.local/share/bosun` a link to the
-version in use, and starts `bosun init`. It installs nothing else: if something is missing, it says what, gives you the
-lines to run and the pages to go to, and stops. Do those, and run the same line again. It takes a few
-minutes the first time, most of it Homebrew's, and once everything is there the questions take about a
-minute.
+    ```bash
+    curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | sh
+    ```
 
-To run the repo sessions on Codex, ask for it after the pipe, so that it checks Codex is ready too:
+    It puts the newest release of bosun in `~/.local/share/bosun` and starts `bosun init`. It installs nothing
+    else.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | BOSUN_HARNESS=codex sh
-```
+2. **Install what it says is missing**, if anything, then run the same line again. It lists everything at once,
+   with the lines to run. On a new Mac most of the time goes to Homebrew.
 
-Run it again to update: it hands over to the `bosun update` of the install you have (see
-[Updating](#updating)), which moves it as its own channel says, so it never moves an install off its channel.
-After the pipe, `sh -s -- --dry-run` says what it would do and does nothing, and `sh -s -- --unattended`
-asks nothing: it takes the recommended setup, or goes ahead with the update. On a first install that
-setup has no repo windows and gives the orchestrator no connectors, since nobody chose them, and its last
-line says so: run `bosun init` to add them, or name them in a file with `bosun init --answers` (below).
-It adds no menu bar app, which would open at login without anyone having said yes, but it does start
-bosun when you log in during your hours.
-Run again, it keeps what your config says. `BOSUN_DIR`, `BOSUN_REPO` and `BOSUN_BRANCH` override where it
-goes and what it gets; on an install that is already there, the defaults are what it came from, and a
-`BOSUN_REPO` given then is kept for the updates after it, and so is a `BOSUN_BRANCH` on the `main` channel (an install made with a branch is on it). On a releases install a branch given later is not followed until `BOSUN_UPDATE_CHANNEL="main"` is set.
+3. **Answer the questions** ([below](#the-questions)). Each takes one key: Return takes the recommended answer,
+   `r` starts again, and `q` leaves with nothing changed. bosun recommends its answers from what your Mac already
+   shows: the repos you use your agents in, the connectors `claude mcp list` shows, your usual hours, your logins.
+   It says why it recommends each. (`NO_COLOR=1` turns its colours off.)
 
-A new install gets the newest release (a tag `v<YYYY.MM.DD>`, as `bosun update` follows them). A repository that
-has no release yet gets the head of `main`, and `get.sh` says so. With `BOSUN_BRANCH` (after the pipe, as
-`BOSUN_HARNESS` above) it gets the head of that branch instead, and the install follows the branch, not the
-releases: `bosun init` writes `BOSUN_UPDATE_CHANNEL="main"` to `bosun.env` without asking, and `bosun update`
-goes on to the head of the branch (the line it prints to run again after what bosun needs is there keeps `BOSUN_REPO`, `BOSUN_DIR`
-and `BOSUN_BRANCH`, as it keeps `BOSUN_HARNESS`, quoted for your shell, and shows the repository with any credential in it hidden as `***`: a password or token in the address or its query string). The channel is the one setting; `bosun init --answers` takes it as
-`update_channel` (`releases` or `main`).
+4. **Accept the plan.** It lists every file and command before it touches anything. Then it writes your config
+   to `~/.config/bosun/`, trusts your repo folders in your agents, loads bosun's background jobs, and asks for
+   your password once, for the wake.
 
-`bosun init` reads what this Mac already shows: the repos you use your agents in, the MCP servers and
-connectors `claude mcp list` shows, your usual hours, your logins. In a terminal it asks a few questions,
-one key each: Return takes the recommended answer, `r` starts again and `q` leaves with nothing changed (in
-colour, in your terminal's own palette; `NO_COLOR=1` turns it off, as it does for the check before it). The last
-of them (once a signed build of it exists to install) is whether to add the menu bar app: `bosun.app` in
-`~/Applications`, opened at login (`bosun app install` adds it later; `bosun update` keeps an installed app
-current, and `BOSUN_MENU_APP=1` in `bosun.env` makes the watchdog say when it is gone).
-Among the proactive parts it asks whether to put the [ontology](knowledge.md#in-the-agents-hands) in the
-agents' hands (`BOSUN_KNOWLEDGE_ENABLED`, recommended yes).
-It says why it recommends what it does, and lists every file and command for you to accept before it
-touches anything. Then it writes the config, trusts the folders, and runs `install.sh`.
+5. **Start bosun.** The last question is "Start the windows now?". Say yes (see [Starting bosun](#starting-bosun)).
 
-Two of the questions are lists to tick. Which repos get a window: the one you use most is ticked, and the
-others it found are listed for you to add. Which connectors the orchestrator may use (asked when
-`claude mcp list` shows any): nothing is ticked, because only you know which are work tools; tick the ones
-it needs, such as Slack and your tracker. It writes them to `BOSUN_ORCHESTRATOR_CONNECTORS`. Repo windows
-get none: `BOSUN_CONNECTORS`, or `connectors:` in a `sessions.yml` entry, gives them some (see
-[Connectors](#connectors-what-each-window-may-reach)).
+How it decides, and what it never does: [design note](design/init.md).
 
-Without a terminal, or with `--dry-run`, it only prints the plan. To use answers from a file instead,
-which only needs what it changes:
+### The questions
 
-```bash
-bosun init --print-answers > answers.json
-$EDITOR answers.json           # repos, orchestrator_connectors, days, start, until, events, ...
-bosun init --answers answers.json
-bosun init --recommended       # or just take what it recommends
-```
+| Question | What it sets |
+|---|---|
+| Which repos should get a window? | One window per repo you tick. The one you use most is ticked, and the others it found are listed to add. |
+| Which connectors may the orchestrator use? | The MCP servers and connectors the orchestrator may reach. Nothing is ticked, because only you know which are work tools: tick the ones it needs, such as Slack and your tracker. Asked only when `claude mcp list` shows some. Repo windows get none ([Connectors](configuration.md#connectors-what-each-window-may-reach)). |
+| When should bosun run? | Your days, start time and "awake until" time, recommended from when you usually work. |
+| How proactive should it be? | Events, approvals in chat, the evening learning run and the [ontology](knowledge.md#in-the-agents-hands) in the agents' hands, all recommended. With Slack's plugin installed, also the Slack watcher. |
+| Which agent should run the repo sessions? | Claude Code, or Codex or Antigravity. Asked only when one of those is installed and logged in. |
+| Which model should the sessions use? | `opus` or `sonnet` for the windows (for the orchestrator, when repo windows run on another agent). |
+| How should repo sessions handle permissions? | Claude Code's auto mode (recommended) or no permission checks. Asked when repo windows run on Claude Code. See [Permissions](permissions.md). |
+| Should the Mac wake by itself? | The repeating `pmset` wake (`BOSUN_WAKE`). Recommended, unless another app already set a repeating wake (`pmset` keeps only one). See [The wake](#the-wake) below. |
+| Add bosun to the menu bar, and start it when you log in? | The [menu bar app](menu-bar-app.md), and whether bosun starts when you log in during your hours. Answer "no" and it asks the second part alone. |
+| Which AWS SSO profiles should each morning log in to? | The profiles the morning run logs in to ([AWS SSO](configuration.md#aws-sso)). Asked only when `~/.aws/config` has some. |
 
-Run it again whenever you like: it starts from your config, keeps anything you added to `bosun.env`,
-keeps a backup of what it changes, and never changes your `setup.sh` once it exists. How it decides,
-and what it never does: [design note](design/init.md).
+Run `bosun init` again whenever you like. It starts from your config, keeps anything you added to `bosun.env`,
+backs up what it changes (`bosun.env.pre-init-<time>`), and never changes your `setup.sh` once it exists.
+
+#### The wake
+
+The Mac's repeating wake is bosun's to set while `BOSUN_WAKE=1` (the default), and `bosun doctor` fails while that
+wake is not set. `bosun init` writes `BOSUN_WAKE="0"` when you answer No to the wake, or keep another app's repeating wake
+(pmset keeps only one): bosun then sets no wake, `install.sh` prints no `sudo pmset` line, and doctor only says so,
+with how to turn bosun's wake on (`bosun init` again, answering yes). A No on a re-run also cancels bosun's own wake,
+but only while it is the only repeating event: `sudo pmset repeat cancel` cancels every repeating event, another
+app's too. If you decline the sudo, the wake stays, and doctor warns about it.
+
+### Starting bosun
+
+If you said yes to "Start the windows now?", bosun is running: the orchestrator starts its morning chores, and
+each repo window starts its session. `bosun attach` opens the windows (detach with the tmux prefix and `d`;
+they keep running), and `bosun console` shows what they are doing.
+
+If you said "Not now", or set up with `--recommended`, `--answers` or `--unattended`, nothing runs yet. bosun
+starts by itself at your next start time on one of your days, or, if it starts at login, when you next log in
+during your hours. To start it now, run `bosun start`, or choose Start bosun in the menu bar app.
+
+From then on bosun runs on its own. [How a day runs](day.md) says what happens when, and how to stop it.
 
 ### If you get stuck
 
-`bosun preflight` tells you where you are, and `bosun doctor` tells you what is wrong once bosun is
-installed. The usual ones:
+`bosun preflight` tells you what is still missing, and once bosun is installed, `bosun doctor` tells you what is
+wrong. The usual ones:
 
 | What you see | What it means | What to do |
 |---|---|---|
-| `missing  Homebrew` | Nothing to install the tools with | Install it from [brew.sh](https://brew.sh), then do what it prints at the end to add it to your PATH, and open a new terminal |
+| `missing  Homebrew` | Nothing to install the tools with | Install it from [brew.sh](https://brew.sh), do what it prints at the end to add it to your PATH, and open a new terminal |
 | A tool you just installed is still `missing` | Your terminal has the old PATH | Open a new terminal |
-| `first-run screens not done` | Claude Code stops at its theme and security screens the first time, and a window nobody is watching would wait there for ever | Run `claude`, go through them, then `/exit` |
-| `not logged in: the login keychain is locked` | Claude Code keeps its login in your login keychain, and a session over ssh starts with it locked, even when the Mac's desktop unlocked it | Run `security unlock-keychain ~/Library/Keychains/login.keychain-db` (your login password), then the same line again |
-| `later  Claude in Chrome's screen not seen` | bosun starts windows with Chrome on (`--chrome` in `BOSUN_CLAUDE_FLAGS` and `BOSUN_ORCHESTRATOR_FLAGS`), and some versions of Claude Code first show what it may do in your browser and wait for Enter (newer ones show nothing). Nothing stops for it | Nothing now. If a window does stop at that screen, the watchdog names it (`stalled-start`, and the menu bar app's "Show What's Wrong..."): answer it there once, with `bosun attach <window>` |
+| `first-run screens not done` | Claude Code stops at its theme and security screens the first time, and a window nobody watches would wait there for ever | Run `claude`, go through them, then `/exit` |
 | `not logged in` under Claude Code | It has no login | Run `claude`, and follow what it asks |
-| A window answers "Credit balance too low · Add funds" while `claude -p` still works | Claude Code is signed in with an API key whose organization has only subscriber credits ("Promotional credits"), which do not cover Claude Code | Buy credit for the key's organization, or use a login (see [With an API key](#with-an-api-key-instead-of-a-login)) |
+| `not logged in: the login keychain is locked` | Claude Code keeps its login in your login keychain, and a session over ssh starts with it locked, even when the Mac's desktop unlocked it | Run `security unlock-keychain ~/Library/Keychains/login.keychain-db` (your login password), then the same line again |
 | `not logged in` under Codex | It has no login | Run `codex login`. With an API key: `printenv OPENAI_API_KEY \| codex login --with-api-key` |
-| A window is on a screen, and the watchdog reports `stalled-start` | The agent is asking something only you can answer, usually about trusting the folder | `bosun attach <window>` (the finding names it), then read it. Do not just press Return: on several of Claude Code's screens the default is to exit, and on Codex's it says yes |
-| `does not run on <your OS> yet`, or `bosun runs on macOS today` | bosun runs on macOS today, and Linux is next | See the [roadmap](../ROADMAP.md) |
-| `bosun.env does not parse, so none of it was read` | An edit left a line bash cannot read: an unclosed quote, a stray word. Read half, the file would give a config that is neither yours nor the defaults, so every command stops instead | Fix the line it names, or move the file aside to run on the defaults |
-| `bosun.env stops before its end when read, so none of it was read` | A line stops the shell that reads it, usually a variable that is not set where bosun runs (`$SOMETHING` from your shell's startup files, which launchd's jobs do not have), so every command stops instead of running on half of it | Set the value in the file itself, or remove the line |
-| `warn  bosun.env sets BOSUN_...: bosun does not read it` in `bosun doctor` | A typo, or a key bosun no longer has; it names the key you most likely meant | Fix the name. A key renamed is changed by `bosun update` |
-| `run bosun as yourself, not as root` | You ran it with `sudo`, which would leave root's files in your folders | Run it without `sudo`: it asks for `sudo` itself, once, for the wake schedule |
-| `another bosun start or refresh is setting up the windows` | Two runs at once, such as the morning job and one you typed; one sets the windows up while the other waits, up to 3 minutes | Nothing, usually: the first one does the work. Run it again if you need to |
-| `... and this runs inside it` (`start --restart`, `update`) | You ran it in one of bosun's own windows, which it would stop or wait on | Run it from another terminal. `bosun stop` works from inside: it stops its own window last |
+| `later  Claude in Chrome's screen not seen` | bosun starts windows with Chrome on (`--chrome`), and some versions of Claude Code first show what it may do in your browser and wait for Enter. Nothing stops for it now | Nothing now. If a window does stop at that screen, the watchdog names it (`stalled-start`): answer it there once, with `bosun attach <window>` |
+| A window is on a screen, and the watchdog reports `stalled-start` | The agent is asking something only you can answer, usually whether to trust the folder | `bosun attach <window>` (the alert names it), then read it. Don't just press Return: on several of Claude Code's screens the default is to exit, and on Codex's it says yes |
+| A window answers "Credit balance too low · Add funds" while `claude -p` still works (the watchdog's `no-credit`, and `no-credit` in `bosun status` and `bosun doctor`) | Claude Code is signed in with an API key whose organization has only subscriber credits ("Promotional credits"), which do not cover Claude Code | Add credit in the Console's billing, then tell the window to carry on (`bosun send <window> ...`); or use your subscription: remove the API key (`ANTHROPIC_API_KEY` in your shell profile, or `apiKeyHelper` in `~/.claude/settings.json`), restart the window (`bosun refresh <window>`), then `/login` in it (see [With an API key](configuration.md#with-an-api-key-instead-of-a-login)) |
 | `its agent, ..., is not installed for this window's shell` in a window | The window's shell cannot find its agent (Claude Code, Codex or `agy`), so the window stays a plain shell; you also get an alert | Install it, or name its path in `bosun.env` (`BOSUN_CLAUDE_BIN`, `BOSUN_CODEX_BIN`, `BOSUN_AGY_BIN`) |
+| `bosun.env does not parse, so none of it was read` | An edit left a line bash cannot read, such as an unclosed quote. Half a file would be a config that is neither yours nor the defaults, so every command stops instead | Fix the line it names, or move the file aside to run on the defaults |
+| `bosun.env stops before its end when read, so none of it was read` | A line stops the shell that reads it, usually a variable that is not set where bosun runs (`$SOMETHING` from your shell's startup files, which launchd's jobs do not have) | Set the value in the file itself, or remove the line |
+| `warn  bosun.env sets BOSUN_...: bosun does not read it` in `bosun doctor` | A typo, or a key bosun no longer has; it names the key you most likely meant | Fix the name. A renamed key is changed for you by `bosun update` |
+| `run bosun as yourself, not as root` | You ran it with `sudo`, which would leave root's files in your folders | Run it without `sudo`: it asks for `sudo` itself, once, for the wake |
+| `another bosun start or refresh is setting up the windows` | Two runs at once, such as the morning job and one you typed. One sets the windows up while the other waits, up to 3 minutes | Nothing, usually: the first one does the work. Run it again if you need to |
+| `... and this runs inside it` (`start --restart`, `update`) | You ran it in one of bosun's own windows, which it would stop or wait on | Run it from another terminal. `bosun stop` works from inside: it stops its own window last |
+| `does not run on <your OS> yet`, or `bosun runs on macOS today` | bosun runs on macOS today, and Linux is next | See the [roadmap](../ROADMAP.md) |
 
 If none of these fit, open an issue with what `bosun preflight` and `bosun doctor` print:
 <https://github.com/promptromp/bosun/issues>.
 
-### By hand
+### Other ways to install
 
-If you prefer your own checkout and to write the config yourself:
+| You want to | Run |
+|---|---|
+| See what it would do, and change nothing | `curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh \| sh -s -- --dry-run` |
+| Run the repo windows on Codex (it checks Codex is ready too) | `curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh \| BOSUN_HARNESS=codex sh` |
+| Answer no questions | `curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh \| sh -s -- --unattended` |
+| Take the recommended setup, with no questions | `bosun init --recommended` |
+| Give your answers in a file | `bosun init --print-answers > answers.json`, edit it, then `bosun init --answers answers.json` |
+
+`--unattended` takes the recommended setup, but on a first install without repo windows, connectors or the menu
+bar app, since nobody chose them; its last line says so. It does set bosun to start when you log in during your
+hours. Run `bosun init` afterwards to add the rest, or give them in an answers file, which needs only what it
+changes (`repos`, `orchestrator_connectors`, `days`, `start`, `until`, `events`, ...). On a Mac where bosun is
+already installed, `--unattended` goes ahead with the update without asking. Without a terminal, or with
+`--dry-run`, `bosun init` only prints its plan.
+
+<details class="note" markdown>
+<summary>Where it installs, and installing from a branch</summary>
+
+[`get.sh`](../get.sh) keeps each version of bosun in a folder of its own in `~/.local/share/bosun-versions`,
+beside the one repository they come from (`bosun.git`), and makes `~/.local/share/bosun` a link to the version in
+use. A new install gets the newest release (a tag `v<YYYY.MM.DD>`), or the head of `main` while a repository has
+no release yet.
+
+`BOSUN_DIR`, `BOSUN_REPO` and `BOSUN_BRANCH`, set after the pipe as `BOSUN_HARNESS` is above, change where it goes
+and what it gets. With `BOSUN_BRANCH` it gets the head of that branch, and the install follows the branch rather
+than the releases (`bosun init` writes `BOSUN_UPDATE_CHANNEL="main"`). On an install that is already there, the
+defaults are what it came from. The line it prints to run again keeps these settings, and never shows a password
+or token in the address. How the channels and an existing install are handled:
+[design/update.md](design/update.md#channels).
+
+</details>
+
+<details class="note" markdown>
+<summary>Installing from a checkout of your own</summary>
+
+If you prefer your own checkout, and to write the config yourself:
 
 ```bash
 git clone https://github.com/promptromp/bosun.git ~/Development/bosun
 cd ~/Development/bosun
-./install.sh --example generic        # seeds the config from examples/generic
+./install.sh --example generic        # seeds ~/.config/bosun from examples/generic
 $EDITOR ~/.config/bosun/{bosun.env,sessions.yml,setup.sh}
-./install.sh                          # re-run after editing schedule values
+./install.sh                          # run it again after changing the schedule
 sudo pmset repeat wakeorpoweron MTWRF 08:01:00   # install.sh prints the exact line;
                                                  # ./install.sh --with-wake runs it for you
 bosun doctor
 ```
 
-**Why the wake comes after the job time.** launchd runs a calendar job that fell due during sleep
-as soon as the Mac wakes. Waking a minute *after* the job time (`BOSUN_WAKE_DELAY_MINUTES`)
-means the job starts within seconds of the wake and takes its keep-awake assertion immediately.
-Waking *before* the job would leave a gap in which an unattended Mac can doze off again.
+`install.sh` can be run again safely and never overwrites your config. It links `bosun` into `~/.local/bin` and
+loads bosun's [background jobs](configuration.md#background-jobs). A checkout of your own updates with `git pull`,
+not with `bosun update`. [`bosun uninstall`](updating.md#uninstall) takes bosun off as from an install, and leaves
+the checkout itself.
 
-`install.sh` is idempotent and never overwrites your config. It links `bosun` into
-`~/.local/bin` and loads the launchd jobs: the morning run, the [watchdog](watchdog.md#watchdog) and, with
-`BOSUN_LEARN_ENABLED=1`, the daily [learning](learning.md#learning) run
-(`<BOSUN_LAUNCHD_LABEL>.learn`) and, with `BOSUN_CONSOLE_ALWAYS=1`, the [console](console.md#console)
-(`<BOSUN_LAUNCHD_LABEL>.console`). One more job, `<BOSUN_LAUNCHD_LABEL>.now`, has no schedule: it runs
-`bosun morning --now` when `bosun morning --now --background` (which the menu bar app's Start runs) kickstarts it,
-so that launchd, not the caller, is the parent of what the morning run starts. With `BOSUN_START_AT_LOGIN=1`
-(the default for a new setup; an install from before the setting keeps it at `0`), a last job,
-`<BOSUN_LAUNCHD_LABEL>.login`, runs `bosun morning --at-login` when you log in: bosun starts then if it is one of
-your days and inside your hours (`BOSUN_START_TIME` to `BOSUN_AWAKE_UNTIL`), you have not quit it with the
-morning start paused (on any day, until you start it again) or stopped it earlier the same day, and it is not
-running already (a run launchd started counts); otherwise it logs why not (the day's morning log) and does
-nothing. With `BOSUN_START_AT_LOGIN=0` there is no such job: bosun starts at the morning
-time or from Start. Reloading the jobs (an update, `install.sh`) makes launchd run the login job too; a
-marker the reload leaves (`login-reload` in the state folder) tells the run it is not a login.
-[`bosun uninstall`](#uninstall) reverses it. A checkout of your own like this one updates with git, not
-with `bosun update`.
+The wake comes a minute after the start time (`BOSUN_WAKE_DELAY_MINUTES`) on purpose: launchd runs a calendar job
+that fell due during sleep as soon as the Mac wakes, so the morning job starts within seconds of the wake and takes
+its keep-awake at once. Waking *before* the job would leave a gap in which an unattended Mac could doze off again.
 
-## The menu bar app
+</details>
 
-`bosun.app` puts a small icon in the menu bar that says whether bosun is well, and has the few things you
-would otherwise type: start and stop bosun, update, open the console, and its settings. It is a control panel, there
-from login whatever the hour, apart from bosun's session (the orchestrator, the windows, the check-ins), whose
-automatic starts keep to your schedule. It lives in `~/Applications`, has no Dock icon. It reads nothing of bosun's but what
-`bosun status --json` and its other `--json` commands print, so it never disagrees with them, and changes
-settings only through [`bosun settings`](commands.md#changing-settings). Design: [design/menu-bar.md](design/menu-bar.md) and
-[design/control-panel.md](design/control-panel.md).
+## Moved from this page
 
-### Installing it
+Setup used to cover more. Those parts have pages of their own now.
 
-`bosun init` asks "Add bosun to the menu bar, and start it when you log in?" once the publisher's signed build
-exists, with three answers: show bosun in the menu bar and start it during your hours (recommended), show it in the
-menu bar only (it starts at the morning time, or when you click Start), or no menu bar app. The first two set
-`BOSUN_MENU_APP=1` and `BOSUN_CONSOLE_ALWAYS=1` (Open Console needs the console's job), install the app and turn Open
-at Login on; the first also sets `BOSUN_START_AT_LOGIN=1`, the second `0`. After "no", or where no app can be
-installed, the wizard asks "Start bosun when you log in?" alone (recommended yes), since starting works without the
-app. On an install made before, or after answering no:
+### The menu bar app
 
-```bash
-bosun app install     # download the release this version expects, verify it, place it in ~/Applications
-bosun app status      # what is installed and what this version wants
-```
+Moved to [The menu bar app](menu-bar-app.md).
 
-`install` accepts the app only if its signature meets the publisher's Developer ID requirement (the publisher's
-Team ID from `app/publisher.json`) and Gatekeeper says it is notarized; otherwise it says why in one line and leaves
-`~/Applications` as it was. It refuses until the publisher's Team ID is filled in. It ends with a line on setting
-`BOSUN_MENU_APP=1` in `bosun.env` if you want the watchdog to say when the app is gone. `bosun update` keeps an
-installed app current and never adds one.
+### Updating
 
-For a checkout without a publisher (developing bosun), `bosun app install --build` builds the app on this Mac
-with `app/build.sh` (Swift needed; the first build takes minutes), ad hoc signed and installed without the team or
-Gatekeeper check, and says it is a development build.
+Moved to [Updating and uninstalling](updating.md).
 
-If `bosun app install --build` fails with exit 1 and no output on the first run of a fresh copy, run it again. It
-says "app/build.sh exited 1 and said nothing: run it again (the first run of a fresh copy can fail before the script
-starts; see docs/design/menu-bar.md, the Mac VM run of the app)". macOS can stop the first direct run of a copied
-`app/build.sh` before the script starts, and only that one; the second run builds. What was seen is in
-[the design note](design/menu-bar.md#the-mac-vm-run-of-the-app-2026-11-13).
+### Uninstall
 
-### The menu
+Moved to [Updating and uninstalling](updating.md#uninstall).
 
-The first line is a coloured dot and one sentence, with grey lines of detail under it. The items follow in this
-order: "Start bosun" (only while bosun is not running: stopped, resting outside your hours, red with no window open,
-or a quit that did not finish; it reads "Start bosun now" outside your hours) and "Show What's Wrong..." (yellow and
-red only), Open Console, Check for Updates..., Settings... (⌘,), Help, "Stop bosun..." (while bosun runs) and "Quit
-bosun.app" (⌘Q), always last.
+### Configuration
 
-| Dot and sentence | Meaning | What the menu offers |
-|---|---|---|
-| Green, "bosun is running" | Windows are open, with how many wait for you and until when the Mac is kept awake | Everything but Start, with "Stop bosun..." |
-| Green, "bosun is running · outside your hours" | Windows are open outside your hours: you started it then, or a morning session runs on past `BOSUN_AWAKE_UNTIL`. Its check-ins and events run while it runs, whatever the hour; only the keep-awake ends at its time | As green |
-| Grey, "Resting: outside your hours · next start Mon 08:00" | Not running, all well, outside your hours (not one of `BOSUN_DAYS`, or outside `BOSUN_START_TIME` to `BOSUN_AWAKE_UNTIL`), with the next automatic start (the morning job's next run; no "next start" when none is scheduled) | "Start bosun now" first |
-| Green, "bosun is starting (the morning run)" | The morning run is setting bosun up and no window is open yet: at your start time, or after Start bosun now outside your hours (yellow, "..., with a warning", if something warns meanwhile) | Everything but Start and "Stop bosun...": the run is the start (opening `bosun.app` starts no second one) |
-| Yellow, "bosun is running, with a warning" | The watchdog is not running, a check warns, there were errors in the last hour, or a window could not start | "Show What's Wrong..." lists them; everything else as green |
-| Red, "bosun is not running" | It should be (inside your hours, and you did not stop it), or the morning run failed; a quit that did not finish shows as an error too | "Start bosun" first, then "Show What's Wrong..." |
-| Red, "bosun is running, with an error" | Windows are open and something is wrong at the error level: a check failed. An ERROR line in the logs is yellow, and only for the hour after it was logged, at any hour (the watchdog's own alert about it is not counted, since outside the awake hours it holds that alert until they begin). Red with "bosun's windows could not be read" is treated the same: bosun may be running | "Show What's Wrong..." first, and no Start: bosun runs (opening `bosun.app` does not start it again either) |
-| Grey, "bosun is stopped" | You stopped it: Stop bosun..., `bosun quit`, or `bosun stop` earlier today ("bosun is stopped (bosun stop at 18:40)", until your hours end) | "Start bosun" first; Open Console is greyed, and Quit bosun.app quits at once, with no dialog |
-| Red, "bosun cannot be reached" | `bosun status --json` failed, timed out with no earlier status to show, or its reply could not be read (a timeout after an earlier status shows that status with "(not current)") | Only Help, with Run bosun doctor (Show Logs and Uninstall are greyed), and "Quit bosun.app"; there is no Start |
-| Red, "bosun cannot be run" | There is something at `~/.local/bin/bosun` that cannot be run (a broken link, no permission) | Only Help (Run bosun doctor, Show Logs and Uninstall are greyed) and "Quit bosun.app" |
-| Grey, "bosun is not installed" | The app found no bosun | Only Help and "Quit bosun.app" |
-| Grey, "Checking bosun..." | The first status has not come yet | Only Help and "Quit bosun.app" |
-| Yellow, "bosun.app needs an update" | bosun speaks a newer status contract than this app reads | "Update bosun...", which runs `bosun update` (greyed, saying how the update goes, while one is under way), then Help and "Quit bosun.app"; if bosun is already up to date, `bosun app update` in a terminal brings the app it expects |
-| Yellow, with bosun's own sentence | A level this app does not know yet (from a newer bosun) | As for a warning: "Show What's Wrong...", and no Start |
-
-A status that is older than the last good one says "(not current)" after its sentence. The icon shows a small
-dot for a warning, an error or an update ready.
-
-When a window needs you (its agent is on a first-run or trust screen, its shell is at a question of your startup
-files, or it waits at a prompt), "Show What's Wrong..." names it and offers "Open <window>": that opens Terminal
-running `bosun attach <window>`, on that window, where you answer it. With several, it offers the first and names
-the others (`bosun attach <window>` opens any of them). Closing that Terminal window, or detaching with the tmux
-prefix and `d`, leaves the window running.
-
-The watchdog counts toward yellow in two ways. If its launchd job is installed but not loaded (booted out), the
-menu is yellow at once. If it is loaded but has not run, it is yellow only when the Mac has been awake for three of
-its five-minute intervals since its last run (counted from the latest of that run, the Mac's last wake and its
-boot, so neither a morning wake nor the first minutes after a restart are yellow; a time later than now, after the
-clock was moved back, is left out). A checkout with no watchdog job is no problem, and a quit is grey whatever the
-watchdog does. `bosun doctor` has the plain rule: a job that is not loaded, or whose last full run is older than
-three intervals by the clock, is a warning there, with no allowance for sleep, a restart or a run that skipped.
-
-The items:
-
-- **Check for Updates...** runs `bosun update --check`. It reads "Checking for Updates..." while it looks, and
-  "Update Available: <version>..." with a badge on the icon when there is one, which opens what is new with
-  Update Now, Remind Me Later and Skip This Version. Update Now shows what `bosun update` would do (which windows
-  restart, which ask you first) and then runs it; while it waits for a quiet moment the item reads "Updating...
-  waiting for N windows". `bosun update` stays the one updater, of bosun and of the app.
-- **Open Console** opens the web console, signed in, in your browser. It is greyed while the console is not
-  running (`console.running` in `bosun status --json`).
-- **Settings...** (⌘,) opens the bosun Settings window: [Settings](#settings).
-- **Help** has "bosun Guide" (a web page), "Run bosun doctor", "Show Logs" (greyed when bosun has logged nothing)
-  and **"Uninstall bosun..."**, which opens Terminal running `bosun uninstall` after a confirmation, so its
-  questions and the administrator password the wake needs are asked where they can be. Show Logs and Uninstall
-  need a status from bosun, Run bosun doctor only a bosun that can be run (it is what finds out why bosun cannot be
-  reached), and Uninstall waits for an update or quit in progress.
-
-### Stop, Quit and Start
-
-The app is the panel and bosun's session is the worker, and the menu keeps them apart: **Stop bosun...** ends the
-session and leaves the panel, **Quit bosun.app** closes the panel and leaves the session running unless you choose
-otherwise.
-
-**Stop bosun...** (while bosun runs) opens a dialog listing what stops, with up to two boxes: "Pause the morning
-start until I open bosun again" (on by default) and "Let this Mac sleep now" (on by default, and there only while the
-Mac is being kept awake; unchecked, the keep-awake runs to its end). The app stays, with the grey "bosun is stopped"
-status and Start. It never touches the ledger, the knowledge base or the config.
-
-**Quit bosun.app** (⌘Q, always) quits at once when bosun is not running. While it runs, it asks: **Leave bosun
-Running** (the default: bosun goes on without its icon, and opening `bosun.app` shows it again), **Stop bosun and
-Quit...** (the Stop dialogs above, then the app quits), or **Cancel**. The "Keep bosun in the menu bar" box the quit
-had before is gone: Stop is that.
-
-If bosun cannot say what stopping would end (it could not read its windows, did not answer in time, or failed
-without saying more), the dialog is "bosun cannot say what stopping would end" instead ("...what quitting would
-stop" from Quit bosun.app), with Cancel and a Stop Now that ends every window without waiting, and from Quit
-bosun.app also "Quit bosun.app", which leaves bosun as it is and only quits the app; it always shows both boxes. A
-stop that bosun refuses (an update runs) only says why.
-
-While the stop runs, a grey line under the status says what it does: "Stopping: waiting for <names> to finish..."
-while it lets agents finish, "Stopping bosun now..." otherwise ("Quitting: ..." when the app quits too). The app
-gives `bosun quit` as long as bosun says it may take (the wait, the wait for a start that is setting up the windows,
-and the steps after it), so a stop is never cut short half way.
-
-If agents are in the middle of a task, a second dialog names them: **Let Them Finish** waits (up to
-`BOSUN_QUIT_WAIT_MINUTES`, 10 by default), **Stop Them Now** stops at once, **Cancel** changes nothing. A window
-waiting for you at a question or permission prompt is not waited on; it is named and stopped with the rest. If
-agents are still busy when the wait ends, a third dialog, "Still busy", offers **Keep Waiting**, **Stop It Now**
-and **Cancel** (**Cancel Quit** from Quit bosun.app).
-
-After a stop the launchd jobs stay loaded and do nothing until you start again: the watchdog and learning skip
-their runs, and the morning job skips too if you paused it. Nothing is left running that you did not choose to
-keep: no tmux server, no console, no keep-awake. The same is `bosun quit`, in a terminal.
-
-**Start bosun** (first in the menu when bosun is not running: stopped, resting, or red with no window open, such as
-a morning run that failed, and also after a quit that did not finish, where the choice is yours; greyed on a status
-that is "(not current)"; "Start bosun now" outside your hours) does what the morning run does, at any hour: `bosun
-morning --now --background`, which has launchd start the run so that macOS's privacy prompts name bosun's own
-processes and not the app. A start you make always starts; the automatic ones (the morning job, and the start at
-login) keep to your hours. Opening `bosun.app` from Finder or Spotlight starts bosun too, but only when it is stopped
-or red with no window open: never while bosun runs, even with an error, never while it rests outside your hours, and
-not after a quit that did not finish.
-
-### Starting at login
-
-The app opens at login when Open at Login is on (Settings, General): it only shows the icon. Starting bosun at login
-is bosun's own login job (`BOSUN_START_AT_LOGIN`, which [Install](#install) describes), so it works without the app:
-when you log in on one of your days, inside your hours, you have not quit bosun with the morning start paused (on
-any day, until you start it again) or stopped it earlier the same day, and it is not running already, it starts, and the morning log says "starting bosun: you logged in during your hours"; otherwise
-the log says why not. A reload of bosun's jobs (an update, `install.sh`) never starts it.
-
-### Settings
-
-**Settings...** (⌘,) opens one window, "bosun Settings", with two panes. It shows what bosun reads, through `bosun
-settings get`, and changes a setting only through [`bosun settings set`](commands.md#changing-settings), which writes
-`bosun.env` as `bosun init` does; a value it cannot show (a `bosun.env` that cannot be read, a value bosun does not
-take) is shown as such, with the wizard as the way to fix it.
-
-- **General**: "Open bosun.app at login" (`bosun app login on|off`, a launchd job that opens the icon at login; if
-  the app could not tell whether it is on, because `bosun app status` did not answer, it says "unknown", with a line
-  saying so and Turn On and Turn Off, either of which makes it so, instead of a switch that would look off); "Start
-  bosun when you log in, during your hours" (`BOSUN_START_AT_LOGIN`); "Updates from" releases or main
-  (`BOSUN_UPDATE_CHANNEL`); and Change windows and connectors... (Terminal with `bosun init`, for the windows, the
-  connectors, the agents, models and permissions, which the window does not edit), Open Config Folder and Show Logs.
-- **Schedule**: the days (`BOSUN_DAYS`), "Start at" (`BOSUN_START_TIME`) and "Keep the Mac awake until"
-  (`BOSUN_AWAKE_UNTIL`), said back in a line ("bosun starts at 08:00 on weekdays, and lets the Mac sleep after
-  20:00"), and Save. A Save reloads bosun's jobs, so the morning job runs at the new time; a new until moves a running
-  keep-awake's end too. When the days or the start time change and bosun set the Mac's wake, moving it needs an
-  administrator (`sudo pmset`): the Save opens Terminal running `bosun settings set`, which asks for your password
-  first and writes nothing if that is cancelled; another app's repeating wake is left as it is, and said. Meanwhile
-  the window shows the schedule bosun read before, and when you come back to it, it reads `bosun.env` again and shows
-  what is there, the change or not. Coming back to the window from another app keeps an unsaved edit while
-  `bosun.env` is as it was.
-
-### Uninstalling
-
-Moving `bosun.app` to the Trash does not uninstall bosun: bosun keeps running, and with `BOSUN_MENU_APP=1` the
-watchdog says once that the app is gone (`bosun app install` brings it back). `bosun app remove` quits the app, turns
-Open at Login off and deletes it, with bosun left running. To take everything off, use "Uninstall bosun..." or
-[`bosun uninstall`](#uninstall), which removes the app and its login job too.
-
-## Updating
-
-```bash
-bosun update             # shows the plan, and asks
-bosun update --dry-run   # only shows the plan
-bosun update --yes       # goes ahead without asking
-```
-
-`bosun update --check` says whether there is a newer release and changes nothing (one line, or `--json`), and
-`bosun update --skip <version>` stops it being offered again; the menu bar app's Check for Updates... runs the same
-check, and its Settings window sets the channel. It updates bosun to the newest release, or on the `main` channel (`BOSUN_UPDATE_CHANNEL="main"`, which an install
-made with `BOSUN_BRANCH` follows) to the head of the branch the install follows, while the agents keep working. It gets the new version into a folder of its own, beside
-the one you run, and that version shows its plan: the commits, the migrations your data needs, the
-prompts that changed, what each window gets, the launchd jobs to reload, and anything that stops it. In a
-terminal it asks first; without one it stops at the plan. Running the install line again does the same,
-so it also works from a bosun that has no `bosun update` yet.
-
-Then it rehearses the migrations on a copy of your data, holds bosun's own background work (the check-in
-loop, the watchdog, learning, the morning job), and pauses writes for a moment: it backs up your ledger,
-knowledge base and settings (`backups/` in the state folder, the last 3 kept), migrates them, switches
-`~/.local/share/bosun` to the new version and checks each store. If any of that fails, it puts everything
-back as it was and says what failed. Writes that arrive meanwhile wait, and land on the new version.
-
-What it does to the windows that are running:
-
-| The window | What the update does |
-|---|---|
-| Nothing it was started with changed (most updates) | Leaves it alone: its next `bosun` command runs the new version |
-| Only the orchestrator's prompts changed (`policy.md`, the task files) | Asks the orchestrator to re-read them once it is idle |
-| Something it was started with changed (its settings, hooks, plugin) | Restarts it on the new version once it is idle, in the same conversation. If only background work runs there, it first asks the window to list that work, and passes the list back after the restart, as a restart ends it |
-| Busy, waiting for your answer, or someone typing in it | Waits, and never restarts one that waits for you |
-| One bosun did not start (a shell or a Claude you opened in its tmux session, outside `sessions.yml`) | Leaves it as it is, and says so in the plan |
-
-A window opened after the plan was shown, while you answer or during the update, is brought along too:
-once the new version runs, the update looks at the windows again. One opened after that runs the new
-version from its next `bosun` command on, and keeps what it was started with.
-
-Each window gets a prompt to check for anything it missed and carry on, and answers with its status. The
-update waits for every answer and says which windows it is waiting for; Ctrl-C stops that wait, and the
-check-in loop brings the rest along once each is idle. A window left alone, or a task already handed to a
-repo session, keeps the text it has; the summary lists the tasks, for a `bosun delegate --update`.
-
-It ends with a summary: the commits, the migrations and version bumps, the config it changed and its new
-keys (with what each one means, when it says something), anything you have to change by hand in your own files, the prompts that changed, the jobs reloaded,
-what came of each window, anything that fails now that did not before, and where the backup is. It is
-saved as `summary.md` in the backup's folder, and its last line points to [Going back](#going-back).
-`bosun doctor` lists what the last update left to you. An update cut short (Ctrl-C, a crash, a power cut)
-is put back, or finished, by the next `bosun update`. How it works: [design note](design/update.md).
-
-**Your config.** A new key needs nothing: its default applies. A key that is renamed or removed is
-changed in `bosun.env`, and so is a key whose default would change what your install did: the update
-writes it with the value that keeps that, under a comment saying why. Either way it first keeps the file
-as it was, as `bosun.env.pre-update-<time>`, and the plan shows the change before you say yes. The first
-such key is `BOSUN_ORCHESTRATOR_CONNECTORS="all"`: an install from before
-[connectors](#connectors-what-each-window-may-reach) keeps every connector for its orchestrator, and
-`bosun doctor` warns until you name the ones it needs and drop `all`. Repo windows start without
-connectors from then on, a repo's own `.mcp.json` servers included, which the plan and the summary say:
-give one back with `BOSUN_CONNECTORS`, or `connectors:` in its `sessions.yml` entry. Without a `bosun.env`
-nothing is written, and the defaults apply: the orchestrator then starts with no connectors, which the
-plan, the summary and `bosun doctor` say. A checkout of your own that you update with `git pull` gets no
-such change: set `BOSUN_ORCHESTRATOR_CONNECTORS` in `bosun.env` to the connectors the orchestrator needs,
-or to `all`, or it starts with none, which `bosun doctor` warns about until the key is set.
-
-Another such key is `BOSUN_UPDATE_CHANNEL="main"`: an install that was updating before releases goes on
-following the head of `main`, and the plan and summary say how to follow the dated releases instead
-(`BOSUN_UPDATE_CHANNEL="releases"`, which a new install has).
-
-A Claude Code window that a repo's own `.claude/settings.json` (or `settings.local.json`, or your
-`~/.claude/settings.json`) would give servers its list does not name does not start on the new version
-([Connectors](#connectors-what-each-window-may-reach)). The update restarts it, the launch refuses in its
-pane, and the summary says it was restarted and is still waited for; its pane, the day's launch log and
-`bosun doctor` say why. Name those servers in its list, or remove them from that file. Until the window
-answers, the next `bosun update` names it and how to finish it.
-
-### The first update of an older install
-
-An install from before versions side by side is a checkout in `~/.local/share/bosun`, and the bosun in it
-has no `bosun update`. Running the install line again converts it, once. The new version's `bosun update`
-shows its plan and asks, then waits for a quiet moment: every window idle with nothing running, and
-nobody typing in the session for `BOSUN_ACTIVE_CLIENT_MINUTES`. It says what it waits for, and Ctrl-C
-there changes nothing. Then it stops the watchdog, learning and the check-in loop, since an older version
-may not hold them for an update, checks again that every window is still quiet, and updates as above. If
-a window is still busy two minutes after that stop, it starts that work again and waits for a quiet
-moment with everything running, as before. The checkout is swapped for the link in one step and kept as
-`~/.local/share/bosun-versions/legacy-<its commit>`, and each of bosun's own windows (the orchestrator,
-those in `sessions.yml`) is restarted on the new version; any other is left as it is, as the old version
-recorded no launch of it. If anything fails, the old checkout is what runs again, with the jobs and the
-loop it stopped started again as they were. That old checkout has no `bosun update`, so after a crash
-run the install line again: it starts them, going by what it noted in `update/own-work.json` in the
-state folder before it stopped anything, and leaves a check-in loop that runs by then as it is.
-
-It will not convert a checkout with anything of yours in it: changes, a stash, commits not pushed,
-another worktree, a file git ignores. Take that out first. The update after it deletes the kept checkout,
-unless something of yours is in it by then, or the installer did not make it, which its summary says.
-
-## Going back
-
-There is no command for it yet: a failed update puts everything back by itself, and going back later is by
-hand. You need the version the update came from and the backup it took, both named in its summary:
-
-1. Stop what writes: `bosun quit --stop-now` (or `bosun stop`), and unload the watchdog, learning and console jobs
-   (`launchctl bootout gui/$(id -u)/com.bosun.morning.watchdog`, and `.learn` and `.console`, with your
-   `BOSUN_LAUNCHD_LABEL` if you set one; the last two only if you have them).
-2. Find the older version's folder in `~/.local/share/bosun-versions`: an update keeps the one it came
-   from until the next update. If it is gone, add it again from its commit, whole: the backup's
-   `manifest.json` names it as `from` (the summary's first line shows only 7 characters, which
-   `git --git-dir ~/.local/share/bosun-versions/bosun.git rev-parse <those 7>` turns into the whole one):
-   `git --git-dir ~/.local/share/bosun-versions/bosun.git worktree add --detach
-   ~/.local/share/bosun-versions/<its first 12 characters> <commit>`. After the first update, the version
-   before it is the checkout it kept, `legacy-<its first 12 characters>`.
-3. Put the backup back: each entry in its `state/` folder over the one in `~/.local/state/bosun`, and
-   each in its `config/` folder over the one in `~/.config/bosun`, replacing the newer one whole (its
-   `manifest.json` lists every file). Anything written since the update is not in it.
-4. Lead the link to the older version (`ln -sfn ~/.local/share/bosun-versions/<folder>
-   ~/.local/share/bosun`), run its `~/.local/share/bosun/install.sh` to load its jobs again, and
-   `bosun start`. `bosun update` would take you forward again, to the newest release, or on the `main` channel
-   to the head of the branch (from the checkout kept from before versions, which has no `bosun update`, the
-   install line does).
-
-Going back is only to the version the update came from, and never past a `kg forget`: a deletion of a
-person deletes every update backup there is, as restoring one would bring the person back, and says so in
-its line. A summary whose backup a forget deleted says that going back past it is no longer possible.
-
-## Uninstall
-
-```bash
-bosun uninstall             # says what goes and what stays, then asks
-bosun uninstall --dry-run   # only says
-```
-
-It changes nothing until you have answered everything, and Enter always takes the safe answer: at
-"Are you sure?" it means no, at "Keep your ledger?" it means keep. Ctrl-C at any question leaves everything
-as it was.
-
-| What | What happens |
-|---|---|
-| Your windows | Stopped, so any work in them stops. It says which are running first, and waits up to 15 seconds for what they started to end, so their last hooks finish first; what still runs then it names and leaves running, such as a background command a Codex window started |
-| The launchd jobs (morning, watchdog, learning, console, the job that runs `morning --now` for the menu bar app's Start, the login job, and the app's Open at Login job) | Unloaded and deleted, before the windows stop, so the watchdog cannot bring them back |
-| The menu bar app, `~/Applications/bosun.app` (with `bosun app install`) | Asked to quit if it runs, then deleted, after its job and before the windows stop. The `~/Applications` folder stays |
-| The repeating wake | Cancelled with `sudo pmset repeat cancel`, if it is the one bosun set. `pmset` can only cancel every repeating event at once, so another event, or a wake at another time, stays and it says so |
-| Folder trust | Taken back for the folders bosun marked, in Claude Code and Codex (`agy` windows pass their folder at each start and mark nothing). A folder you had accepted yourself stays trusted. It goes by bosun's record of what it changed (`agent-changes.json`), kept since `bosun uninstall` was added; trust or notes from an install before that are not on it and stay |
-| The plugin bosun installed into `agy`, if an `agy` window ever started | Uninstalled with `agy plugin uninstall`, with what that leaves behind (`plugin_data/bosun/`), by bosun's record of having installed it. Your own `agy` setup is not touched |
-| Memory notes from [`bosun learn`](learning.md#learning) | Deleted, with their line in `MEMORY.md`. Your own notes stay |
-| The worktrees folders beside your repositories (`exporter.worktrees` beside `exporter`), which a repo window's start makes for its worktrees | Removed while empty and still a folder (not a link), by bosun's record of having made them. One with a worktree in it stays, and it says where: a worktree may hold work that is not committed or pushed. A folder of that name that was there before bosun stays |
-| `~/.local/bin/bosun` and bosun's working files | Deleted |
-| What `get.sh` installed: `~/.local/share/bosun-versions` (its `bosun.git` and every version), the checkout from before versions kept there, and the link `~/.local/share/bosun` | Deleted, last. Each folder is checked as a checkout is, and anything of yours in any of them keeps them all, link included: changes, a stash, commits not pushed, a worktree elsewhere, a file git ignores. Versions you made yourself, without the installer's mark on `bosun.git`, stay |
-| A checkout of your own you run bosun from | Stays. One `get.sh` made before versions side by side is deleted, last, unless it has anything of yours in it |
-| Your ledger and learning history, your ontology | It asks, and Enter keeps them |
-| The backups `bosun update` took (`backups/` in the state folder) | Deleted when either the ledger or the ontology is, as each holds both (every person in it included). Kept only when you keep both |
-| `~/.config/bosun`: `bosun.env`, `sessions.yml`, `setup.sh`, `policy.md`, `learn.md`, `tasks/`, `workstreams.json`, the backups `bosun init` made (`*.pre-init-*`), and the copies of `bosun.env` that `bosun update` kept (`bosun.env.pre-update-*`) | Stay, and it says where. `--purge` deletes them too |
-| Anything else in those folders | Stays, and it names it. It only deletes what it knows is bosun's, and if you pointed `BOSUN_STATE_DIR` or `BOSUN_LOG_DIR` at a folder that also holds other files, it leaves that folder whole |
-
-`/bosun:chores` and bosun's hooks need no removing: bosun passes them to each window it starts, so neither
-Claude Code nor Codex has them installed. (`agy` takes plugins only by installing them: see below.) Your repos, branches and pull requests are not touched, nor are
-your conversations.
-
-Install again with the same line, and bosun picks up what you kept. `replica.json`, this Mac's id in
-both journals, goes with the ledger: deleting the ledger while keeping the ontology deletes
-it too, and the knowledge base's next write carries on under a new id. For scripts, `--yes` asks
-nothing and keeps your records; `--delete-ledger`, `--delete-knowledge` and `--purge` say otherwise. `--purge` leaves
-`forbidden-terms.txt`, which guards commits to this repo and is not part of running bosun. Run it from a
-terminal outside bosun's windows, since it stops them. If something could not be removed it says what to run,
-and running it again finishes the job.
-
-If you deleted bosun's folders by hand, the jobs and the wake are still there. Run the install line again,
-and then `bosun uninstall`.
-
-A first update of an older install that you declined, or that failed before the switch, leaves
-`~/.local/share/bosun-versions` beside the checkout, which the checkout's own `bosun uninstall` does not know
-about: it is only what `get.sh` fetched (`bosun.git` and the new version's folder). Delete it by hand once
-nothing of yours is in it: `rm -rf ~/.local/share/bosun-versions`.
-
-## Configuration
-
-All configuration lives in `~/.config/bosun/` (override with `BOSUN_CONFIG_DIR`). If you move it or
-the state folder (`BOSUN_STATE_DIR`), keep both on a disk that supports hard links, as the Mac's own
-disk does: bosun makes `replica.json` and the knowledge base's `secret.key` with one, so that a file
-is never half-made or made twice. On a disk without them (exFAT, some network shares) writes stop
-and say so.
-
-| File | Purpose |
-|---|---|
-| `bosun.env` | Schedule, session name, Claude flags, drain prompt, orchestrator and chores settings. Every `BOSUN_*` value can also be overridden from the environment. Commands read the file each time they run, so edits apply at once, also inside running sessions. A file bash cannot parse is not read at all, and commands stop and say which line; `bosun doctor` warns of a key bosun does not read (with the one you most likely meant) and of a word where a number goes. See `examples/generic/bosun.env` for all keys. |
-| `sessions.yml` | One entry per repo window: `name` (the session name) and `dir`, optionally `harness` (`claude` or `codex`), `model`, `effort` and `connectors` (see [Connectors](#connectors-what-each-window-may-reach)), and on Claude Code `autocompact`, for that window. The orchestrator is configured in `bosun.env`, not here. |
-| `setup.sh` | Defines `setup_steps()`. Helpers: `ensure_claude_login` (see Claude Code login), `ensure_aws_sso <profile>`, `run_step "<desc>" cmd...`. |
-
-State and logs go to `~/.local/state/bosun/`:
-
-- `ledger.json`, its readable view `ledger.md`, and `ledger.json.bak`, the version before the last
-  write. Copying that (or any older `ledger.json`) back does not undo a write: the journal brings it
-  forward again. A change you make to `ledger.json` by hand is adopted by the next write, into the
-  journal, with a line on stderr; one the journal cannot hold, such as removing a history entry, is
-  undone by that write, which says so (`ledger.json.bak` keeps the edited file until the next write)
-- `journal/ledger/`: every change to the ledger, which every write appends to before it saves
-  `ledger.json` (rebuilt from it when a write was cut short): `<replica>.jsonl` for this Mac's
-  changes, `local.jsonl` for what never leaves it, such as your own words, and
-  `<file>.torn-<time>` for a transaction a write left unfinished, moved aside and kept
-  ([Sync and sharing](design/sync.md))
-- `replica.json`: this Mac's id in the journals (the ledger's, and the knowledge base's in
-  `knowledge/journal/` of the config folder, see [Ontology](knowledge.md#ontology)), made once,
-  and anew when a journal starts again (moved aside, emptied or removed); moved aside itself, it
-  gives the Mac a new id too. Either way, both journals carry on under the new id
-- `logs/`: a file per command and day, `<command>-YYYY-MM-DD.log`, with what that command said on its screen:
-  `morning-…` (the morning run, all of it), `checkin-…`, `learn-…`, `impact-…`, `hook-…` (the repo
-  sessions' prompt hook, its errors), `launch-…` (each window's launch: which conversation it resumed or
-  started, connectors it started without, alerts it sent), and `start-…`, `refresh-…`, `send-…`,
-  `stop-…` and the other commands' when they said something. These are bosun's own messages, a few dozen
-  a day: a file stops at 2 MB a day with one line saying so, and everything still shows on screen. Then
-  what launchd captures from each job (`launchd.{out,err}`, `watchdog.launchd.{out,err}`,
-  `console.launchd.err`, ...). Each morning run keeps the folder in bounds: a day's file older than 30
-  days goes, and a launchd file past 1 MB is cut to its last 256 KB
-- `watchdog.json`: the watchdog's de-duplication state
-- what starting and stopping leave: `quit.json` (a `bosun quit`, and whether it paused the morning start),
-  `stopped-<session>` (a `bosun stop` today), `keep-awake-<session>.pid` and `.json` (the keep-awake and until
-  when), `login-reload` (a reload of the jobs, so the login job knows it is no login), `console/wanted` (the
-  console's job runs while it is there) and `update-skip.json` (a release `bosun update --skip` passed over)
-- `login.json`: the last Claude Code login check (see Claude Code login)
-- `codex-sessions.json`: which Codex session each window's name stands for
-- `connectors.json`: the URL or command line `claude mcp list` last showed for each name a list holds
-  that only that listing resolves (a claude.ai connector, a plugin's server the installed plugins do not
-  give), for a launch whose lookup fails (see [Connectors](#connectors-what-each-window-may-reach))
-- `agent-changes.json`: what bosun changed in the agents' own files (folder trust, memory notes, an agent's
-  one-time setup) and the worktrees folders it made beside your repositories, so that `bosun uninstall` takes
-  back only that
-- `agent-changes.lock`: held while that record is written, so windows starting together keep each other's
-  entries
-- `agent-setup.lock`: held while an agent's one-time setup is made, so two windows starting together make it once
-- `signals/`: what Claude Code's hooks reported per window ([Signals](design/signals.md))
-- `conversations/`: a repo window's current conversation, once refresh started a fresh one
-- `prompts/`: the first prompt of each window start, passed to its launch as a file
-- `launches/<session>/<window>.json`: what each window was last launched with (`bosun launch`):
-  bosun's commit, the agent and the model and effort it ran with, its directory and any `--model` /
-  `--effort` it was given, and a fingerprint of the agent's arguments and the files they name, so an
-  update can tell which windows need a restart and start them again the same way
-- `console/token`: the console's access token; `console/running.lock`, held while a console runs, so
-  that `bosun update` can say to restart it
-- `update.json` and `update.lock`: the last `bosun update`'s record (what it did, step by step) and the
-  lock it holds while it runs; `update/`: the windows' notes (`update/notes/`), what a first update
-  stopped of bosun's own work (`update/own-work.json`) and, while one runs, its rehearsal's copy
-- `backups/<time>-<from>-<to>/`: what `bosun update` backed up before it changed anything, with its
-  `manifest.json` and the update's `summary.md`, the last 3 kept (see [Updating](#updating) and
-  [Going back](#going-back))
-- `impact/`: the Impact snapshot (`bosun impact collect`)
-- `alerts/`: the last Slack alert's result, with Slack alerts on
-- `events/`: the event queue (`queue.jsonl`) and what was delivered (`state.json`), with events on
-- `slack-watch/state.json`: the Slack watcher's last runs, with it on
-- `learn/`: the learning runs (`state.json`, and per run its digest and report, kept 14 days)
-- `dry-runs/<timestamp>/` for chores rehearsals
-
-### Model and effort
-
-Every Claude Code session bosun starts gets an explicit model and effort, so cost does not depend on
-whatever you last picked by hand (Claude Code's `/model` and `/effort` save your choice as the
-default for all future sessions, which is how sessions drift to Opus on high effort).
-
-- Repo sessions: `BOSUN_MODEL` / `BOSUN_EFFORT` (default `opus` / `medium`), overridable
-  per window in `sessions.yml` (`model:`, `effort:`). On Codex: `BOSUN_CODEX_MODEL` (empty: Codex's own
-  default) and `BOSUN_EFFORT`, passed as `-c model_reasoning_effort`.
-- Orchestrator: `BOSUN_ORCHESTRATOR_MODEL` / `BOSUN_ORCHESTRATOR_EFFORT` (`opus` /
-  `medium`).
-- Delegated tasks: each task type sets an effort (reviews and investigations: `medium`; fixes on
-  your PRs and new work: the session's own). A window opened for the task starts at it; a session
-  that is already running runs the task in a subagent at it, so its own setting is untouched (on Codex,
-  which has no such instruction yet, it runs at the session's own settings). The
-  orchestrator passes `--effort high` only when you ask for more depth.
-
-On Claude Code the model goes in as `--model`; the effort as a session-level setting (`--settings
-'{"effortLevel":...}'`) rather than `--effort`, so `/effort` inside a session can still change
-it. Empty values leave Claude Code's own default. `bosun send --list` shows what each window
-was launched with, `refresh` restarts idle sessions whose launch settings no longer match the
-config, and `bosun doctor` shows the configured values and your saved default.
-
-### Connectors: what each window may reach
-
-A window bosun starts reaches only the MCP servers and connectors its list names; the rest are off for it.
-On Claude Code, Chrome is not one of them: it stays on through `--chrome`, as before. On Codex, see below.
-
-| Key | Whose list | Default |
-|---|---|---|
-| `BOSUN_CONNECTORS` | every repo window | empty: none |
-| `connectors:` in a `sessions.yml` entry | that window, instead of `BOSUN_CONNECTORS` | (the key's) |
-| `BOSUN_ORCHESTRATOR_CONNECTORS` | the orchestrator, and `bosun chores --dry-run` | empty: none; `bosun init` writes what you tick |
-
-A list is comma-separated, or a YAML list in `sessions.yml` (`[]` is none). Each entry is a server's name
-as `claude mcp list` (and `/mcp`) shows it, or a URL pattern; `all` means every one, as before this
-setting, and stands alone:
-
-```sh
-BOSUN_ORCHESTRATOR_CONNECTORS="claude.ai Slack, plugin:acme-tracker:tracker"
-BOSUN_CONNECTORS="acme-local, https://mcp.example.com/*"
-```
-
-```yaml
-sessions:
-  - name: api
-    dir: ~/Development/api
-    connectors: [acme-local]
-```
-
-At launch bosun turns the list into Claude Code's `allowedMcpServers`, in the window's `--settings`, in
-place of any a site settings file names (with `all`, the site file's applies). A server you added yourself
-goes by its name, a plugin's by its URL or command, and a claude.ai connector by the URL `claude mcp list`
-shows for it. bosun runs that listing (a few seconds) only when the list names a claude.ai connector, or a
-plugin's server the installed plugins do not list (a plugin synced from your account, say), once per
-launch, and keeps what it found in `connectors.json` (a name it no longer shows is dropped there); if the
-listing fails (at a morning wake, before the network is up), the launch uses what was kept. A name it
-cannot find is left out, never let in as more: the launch logs a line, on the window's screen and in
-`launch-YYYY-MM-DD.log`, and for the orchestrator it also alerts you (`bosun alert`, whose output goes to
-that log too). A name you added yourself is matched exactly, and checked only when that listing runs
-anyway: it cannot let in more than a server of that name, so a typo allows nothing, and a launch that runs
-the listing logs such a name it does not show. The list is read at launch, so a change applies once the
-window starts again.
-
-Claude Code adds the `allowedMcpServers` of your own `~/.claude/settings.json` and of the window folder's
-`.claude/settings.json` and `.claude/settings.local.json` to the window's list. So a window with a list
-(anything but `all`) does not start while one of those files allows a server its list does not name, entry
-for entry: the launch says which file and which entries, and what to do: name them in the window's list,
-use `all`, or remove them from that file.
-
-On Codex, a window's list names servers as `codex mcp list` shows them. bosun switches off the servers it
-does not name: those in a `config.toml` (yours, or a trusted repo's) one by one, and a plugin's only by
-switching off every plugin, since Codex can switch a plugin's server off only by its plugin and says
-nowhere which plugin a server comes from. So to keep any plugin's server, the list must name every
-plugin's server; one that names some but not all of them loses all of them, and every plugin's skills
-too. A name Codex has no server by is logged at launch. Servers that `BOSUN_CODEX_FLAGS` adds (a
-`--profile`, a `-c mcp_servers...`) are not switched off, as bosun lists the servers without the window's
-flags: add servers in `config.toml`, not through flags. Unless the list is `all`, bosun also passes
-`--disable apps`, which is documented to switch off ChatGPT's connectors (`codex_apps`; the test VM had no
-ChatGPT login to see that with). Codex's other built-in servers
-(`codex_worktrees`) stay on, as Chrome does on Claude Code: they are local, and `codex mcp list` does not
-show them, so a list cannot name them. bosun also starts Codex without its update screen, which would stop
-an unattended start.
-
-`bosun doctor` has a line for each window: what it reaches (a name resolved to a server it knows), what
-it only allows by name or by pattern, and each name it cannot find. It looks nothing up (`claude mcp list`
-connects to every server), so a claude.ai connector no start has looked up yet shows as not found until
-the window's next start does. For a Codex window it asks `codex mcp list --json` for the servers' names,
-and says which names mean nothing to Codex (a URL pattern, a claude.ai connector). It warns while the
-orchestrator's list is `all`, while `bosun.env` does not set it at all, and for a Claude Code window that
-another settings file would widen, which does not start; and it says what an `allowedMcpServers` in the
-orchestrator's site settings file comes to.
-
-### How sessions are resumed
-
-`claude --resume <name>` opens a picker when several sessions share a name or prefix. That would
-block an unattended start. `bosun launch` instead reads the session transcripts in
-`~/.claude/projects/`, picks the **most recently active session whose name is exactly `<name>`**,
-and resumes it by UUID. If none exists it starts a new session with that name. If the session is
-already open in another terminal (per `~/.claude/sessions/<pid>.json`), it refuses rather than
-running two copies on one transcript.
-
-Every repo window on Claude Code gets `--name <name> --remote-control <name>` plus `BOSUN_CLAUDE_FLAGS`.
-Codex has no session names, so a [Codex window](#running-repo-sessions-on-codex) resumes from bosun's own
-table, `codex-sessions.json`.
-
-### Steady state: the session already exists
-
-After the first day the tmux session normally survives the night, because the Mac only sleeps.
-Re-attach any time with `bosun attach`. The morning run never duplicates the session.
-It runs `bosun refresh`, which handles each window on its own:
-
-| Window | Action |
-|---|---|
-| its folder gone (moved or deleted) | skip it, as `bosun start` does, and say so in the log, which the watchdog alerts on: never open it in another folder |
-| missing | create it and launch its agent |
-| agent not running | relaunch in the manifest directory (resume by UUID, drain prompt) |
-| agent `busy` (mid-turn) | leave alone |
-| agent `waiting` (a permission prompt or a question to you) | leave alone: a pasted Enter could answer it |
-| window split into several panes | leave alone and report it (relaunching could kill the other pane's process) |
-| agent `idle` at least `BOSUN_RESTART_MIN_IDLE_SECONDS`, and on a different version than that agent's installed one (usually older), or launched by bosun with a model or effort other than the configured one; for the orchestrator also when it is still on yesterday's conversation | restart: SIGTERM (Claude exits cleanly in about 2s), then relaunch on the installed version with the configured model and effort. Same session UUID, so the conversation is intact (the orchestrator's new-day restart starts today's conversation instead), plus, on Claude Code, a fresh Remote Control connection. |
-| anything else (idle and current, idle too briefly, or `shell`: turn over but a background shell still running) | send the drain prompt |
-
-The drain prompt, also the one a relaunch or restart sends, goes only to a window with something in
-flight: the orchestrator, a Claude in `shell`, or a window holding a handed-over item whose work is
-not done (`bosun ledger in-flight <window>` lists them: awaiting a report, or being worked on).
-Any other window is resumed or left idle without a prompt (`left idle: nothing in flight`), since
-every prompt re-reads the whole conversation; it costs nothing until it gets work.
-
-With `BOSUN_FRESH_CONVERSATIONS=1` (off by default), refresh, and so the morning run, also
-starts a fresh conversation for a repo window that is idle for `BOSUN_RESTART_MIN_IDLE_SECONDS`,
-holds nothing in flight, and whose conversation grew past `BOSUN_FRESH_CONTEXT_TOKENS` (200000;
-the size its latest turn read, `agent_state.py context <pid>`). The new conversation is named
-`<window>-<date>-<n>` (kept in the state dir's `conversations/<window>`, which `launch` resumes from
-then on) and starts with a short prompt pointing at its memory notes and `bosun ledger list
---open`. `refresh --dry-run` names the windows that would get one, also with the flag off.
-
-Fresh conversations only start at a refresh. In between, every Claude Code window is launched with
-`claude --autocompact BOSUN_AUTOCOMPACT_TOKENS` (300000; the orchestrator:
-`BOSUN_ORCHESTRATOR_AUTOCOMPACT_TOKENS`; a sessions.yml entry can set its own `autocompact`;
-empty or 0 leaves Claude Code's default, `auto` is accepted): once a conversation passes that size,
-Claude Code compacts it by itself, mid-task, into a summary, so no window re-reads 300k-900k tokens
-a turn for the rest of the day. On Codex bosun sets no compaction: `BOSUN_AUTOCOMPACT_TOKENS`, `autocompact:`
-and `BOSUN_COMPACT_CONTEXT` do nothing there. Claude Code's own idle compaction (200k+ tokens idle about an hour)
-still applies. A summary can drop which ledger items the window holds, so with
-`BOSUN_COMPACT_CONTEXT=1` launch also installs a SessionStart hook (matcher `compact`,
-`bosun hook compact-context`) that adds them back, in at most
-`BOSUN_COMPACT_CONTEXT_MAX_CHARS` (1500) characters, from `bosun ledger compact-context`:
-for a repo window its items (in flight first) and how to report; for the orchestrator the proposals
-waiting for my approval and the open items per window. Both are read at launch, so a running window
-picks them up at its next restart. The fresh conversation stays as the backstop: a window still over
-`BOSUN_FRESH_CONTEXT_TOKENS` at the morning refresh starts a new one.
-
-Status and version come from Claude Code's own `~/.claude/sessions/<pid>.json`, and on Codex from its
-session files. The status is
-re-read just before a restart. With `BOSUN_HOOK_SIGNALS=1` (the default) launch also installs
-async hooks (`bosun hook signal`) on Notification, PermissionRequest, Stop, StopFailure,
-SessionStart and SessionEnd that record Claude Code's own signals per window in
-`$BOSUN_STATE_DIR/signals/<window>.jsonl` (`BOSUN_SIGNALS_MAX_KB`, 256): the watchdog's
-`waiting` alert and the events' waiting line then say what the window was asked (`Bash: make
-deploy`), `long-shell` names what is still running, and `spend-limit` also sees a stop only the
-StopFailure hook reported. They add to the session records and transcripts, never replace them;
-design: [design/signals.md](design/signals.md). Claude Code installs updates automatically but keeps running the old
-version until restarted. `refresh` is how sessions pick up updates without losing work.
-
-The morning run passes `--unless-active`: if someone typed in an attached tmux client within the
-last `BOSUN_ACTIVE_CLIENT_MINUTES`, it leaves the windows alone instead of pasting into your
-draft. Run `bosun refresh` by hand any time; add `--dry-run` to preview it.
-
-`BOSUN_ON_EXISTING` picks the behaviour: `refresh` (default), `drain` (never restart) or
-`restart` (kill the whole session and start fresh).
-
-## Running repo sessions on Codex
-
-[Codex](https://developers.openai.com/codex/cli) can run the repo sessions. The orchestrator stays on Claude
-Code, so you need both, and it hands tasks to a Codex window the way it does to any other: the same tasks,
-the same reports to the ledger.
-
-```bash
-brew install codex
-codex login
-```
-
-Then choose it: in `bosun init`, which asks once Codex is installed and logged in (and recommends it if you
-use it more than Claude Code), or in `bosun.env`:
-
-```bash
-BOSUN_HARNESS="codex"                # every repo window
-BOSUN_CODEX_MODEL="gpt-6.1-sol"      # optional. Empty: Codex's own default
-```
-
-Or one window at a time, in `sessions.yml`:
-
-```yaml
-sessions:
-  - name: my-service
-    dir: ~/Development/my-service
-    harness: codex
-    model: gpt-6.1-sol               # optional
-```
-
-Then run `bosun trust <dir>` for any folder Codex has not seen, and `bosun doctor`.
-
-**What it may do.** Windows start with `BOSUN_CODEX_FLAGS`, by default `--no-daemon --approve-for-me`: Codex's
-sandbox, and an automatic reviewer that decides when a command may go past it, with no prompts. bosun also
-gives the sandbox the repo's `.git`, its own state folder and the network, or nothing could be committed,
-reported or pushed, and the folder beside the repo its worktrees go in (`<repo>.worktrees`,
-[Permissions](permissions.md#what-each-window-can-reach)). Keep `--no-daemon`: bosun needs each session in its own process. Each window reaches
-only the MCP servers its list names ([Connectors](#connectors-what-each-window-may-reach)), but servers
-these flags add (a `--profile`, a `-c mcp_servers...`) stay on: add servers in `config.toml` instead.
-
-**What differs from a Claude Code window**, among them no Remote Control from your phone, a revoked login
-that is not reported, and no Impact stats or learning yet:
-[what windows do not have yet](design/harnesses.md#what-windows-do-not-have-yet).
-
-## Running repo sessions on Antigravity (a preview)
-
-Google's Antigravity CLI (`agy`) can run repo sessions, as Codex can. The orchestrator stays on Claude Code.
-This is a preview. The windows are built and tested against a stand-in, in the smoke suite and in the Docker
-sandbox, but the live run on the real `agy` (`tests/sandbox.sh mac live agy`, which needs a person to sign in
-to `agy` inside the throwaway VM) has not passed yet. Expect rough edges, and read the risk below first.
-
-Set it up once:
-
-1. Install `agy` with Google's installer, `curl -fsSL https://antigravity.google/cli/install.sh | bash`. It
-   puts `agy` in `~/.local/bin` and does not add that folder to your PATH, so do that yourself.
-2. Sign in in the desktop session, not over ssh: `agy` reads its login from the Keychain only there.
-3. Run `agy` once and go through its first-run screens, then leave it.
-4. Choose it for the windows you want: `harness: agy` on a window in `sessions.yml`, or `BOSUN_HARNESS=agy`
-   for all of them (or `BOSUN_HARNESS=agy` after the pipe of the install line, as for Codex).
-   `bosun preflight` and `bosun doctor` check the version, the login and the first-run screens.
-
-What an `agy` window does:
-
-- It runs in `agy`'s `auto` mode, set for that session only, with the repo folder passed as trusted at each
-  start. bosun never saves a setting in `agy`. `BOSUN_AGY_FLAGS`, `BOSUN_AGY_MODEL` and `BOSUN_AGY_BIN` are the
-  keys, like Codex's.
-- When the first `agy` window starts, bosun installs a small plugin of its own into `agy`. It is recorded, and
-  `bosun uninstall` takes it back. In a bosun window the plugin lets exactly allow-listed `git`, `gh` and
-  `bosun` commands run past `agy`'s sandbox, so that pushes and `gh` work; every other command is left to
-  `agy`. In your own `agy` sessions the plugin does nothing.
-- Repo git hooks do not run in an `agy` window: an approved commit would otherwise run the repo's own hook
-  code outside the sandbox. Pre-commit-style checks therefore run in CI only.
-- Its status comes from `agy`'s hooks and, while a window is busy, from its screen (Esc, and `agy`'s dialogs).
-- A window is refused, saying so, when `agy` would start an MCP server that its connectors list does not
-  name ([Connectors](#connectors-what-each-window-may-reach)). A repo window with no connectors starts only
-  if `agy` has no MCP servers set up at all, the Antigravity app's included. `bosun doctor` names the servers
-  that block a window.
-- `bosun morning` updates `agy` once before the windows start, and `bosun refresh` restarts an idle window
-  that runs an older version.
-
-**What it goes without:** transcript features (Impact stats and learning), autocompact, per-task subagents,
-and a hook when a window exits; see [what windows go without](design/harnesses.md#what-windows-do-not-have-yet).
-
-**The risk.** Google has said nothing about another program driving `agy` unattended, and a forum thread
-appeals an `agy` account suspended under its terms. Use an account you can afford to lose access to.
-
-## Claude Code login
-
-A Claude Code login can expire or be revoked at any time. Every session then answers every prompt
-with an error reply ("Please run /login") and nothing else, so a check-in loop that only pastes
-prompts would keep reporting them delivered. bosun reads, best signal first
-(`lib/login.py`; the Claude Code formats in `lib/claude_state.py`):
-
-1. **The transcript's error fields.** A failed request is written as a synthetic reply flagged
-   `isApiErrorMessage`, with `error` (`authentication_failed`, `rate_limit`, `server_error`, ...),
-   often the HTTP status (`apiErrorStatus`: 401, 429, 529) and a finer `apiError` (`no_response`,
-   `usage_limit_reached`). These map to auth, rate-limit, overloaded, network or other; only auth
-   counts. Exact and free, but known only once a prompt has failed.
-2. **`claude auth status --json`** (`loggedIn`, `authMethod`): free, but it reads the stored
-   credentials only and makes no request (it answers the same with the network cut off), so a token
-   the server revoked still shows `loggedIn: true`. It does catch a missing login (`loggedIn:
-   false`, exit 1).
-3. **A login check request:** one tiny headless request (`claude -p`, a small model, no tools,
-   settings, MCP servers or transcript, but the API key helper below if you use one; about $0.002). `ensure_claude_login` makes one each
-   morning; the check-in loop makes one while the orchestrator needs a login or the last check
-   failed, at most every 30 minutes, to learn when the login works again (a `/login` itself is not
-   written to any transcript). A failure before any request (for example settings that could not
-   load without network) gives no structured answer and counts as unknown, never as a login error.
-4. **Fallback:** a loose reading of the error text (phrases like "please run /login", "token
-   revoked", "401 Unauthorized"), only for an error reply without structured fields, or, when a
-   window has no transcript yet, its last lines. Verdicts from it say "pattern fallback".
-
-What happens then:
-
-- **Morning:** add `ensure_claude_login` to `setup_steps()` in your `setup.sh` (first, as in
-  `examples/generic/setup.sh`). It cannot log in by itself (`/login` is interactive): it posts a
-  notification and fails the step, so the watchdog's `morning-failed` alert names it. Without an
-  answer either way (no network) it only warns.
-- **Check-ins and events:** when the orchestrator's latest replies are all login errors, the
-  check-in loop logs `<window> needs /login: ...` once and sends it no more check-ins or events
-  (events stay pending) until it works again: a normal reply (run `/login` in any Claude window,
-  then talk to it) or a login check that succeeds. After each delivery it waits up to 15 seconds
-  for the reply, so a check-in that just failed is logged as such.
-- **Watchdog:** `login-expired` alerts once per outage, for the login and for every Claude window
-  (repo sessions too), and alerts again if it comes back after recovering. Like every check it
-  alerts only inside the awake window: an outage overnight or on a weekend alerts when the window
-  opens, together with the morning run's own failure (see ROADMAP, urgent alerts).
-- **`bosun status`** shows the login and each window's state; **`bosun doctor`** fails when
-  Claude Code is logged out, the last check failed, or a running window gets only login errors.
-
-### With an API key instead of a login
-
-Claude Code can sign in with an Anthropic API key, billed per request on your Console account, instead of a
-claude.ai login. For bosun, give it the key through the `apiKeyHelper` setting in `~/.claude/settings.json`: a
-command that prints the key, which every Claude bosun starts reads, in a window, under launchd or headless. From
-the Keychain, so the key is in no file, the command is `security find-generic-password -s anthropic-api-key -w`,
-after storing the key once with `security add-generic-password -U -a "$USER" -s anthropic-api-key -w` (it asks
-for it).
-`claude auth status` then says `api_key_helper`, and bosun's login check and the Slack watcher, which load no
-settings files of yours, still get that one setting. Not `ANTHROPIC_API_KEY`: an interactive Claude asks once
-whether to use a key from the environment, which a window bosun starts would wait at, and launchd's jobs do not
-have your shell's environment. With a key, Claude Code has no Remote Control (it needs a claude.ai login), and the
-models bosun uses (`BOSUN_MODEL`, `BOSUN_ORCHESTRATOR_MODEL`, `BOSUN_LEARN_MODEL`) cost per request: smaller ones
-cost less.
-
-The key's organization needs purchased credit. The API credits a subscription adds to the Console (the
-"Promotional credits" of a Max, Ultra or Team plan) cover the Claude API and the Agent SDK but not Claude
-Code, so the windows reply "Credit balance too low · Add funds" while `claude -p` and the API still work. Add
-funds to the organization, or sign in with a login instead
-([which credits cover what](https://platform.claude.com/docs/en/about-claude/api-credits-for-subscribers)).
-
-## AWS SSO
-
-`ensure_aws_sso <profile>` skips the login when `aws sts get-caller-identity` already works.
-
-The CLI caches each profile's role credentials (in `~/.aws/cli/cache`, typically for 12 hours), and
-that cache can outlive the Identity Center session: a check that reuses it passes in the morning,
-and the credentials then run out a few hours later. So when a profile's `[sso-session]` access
-token has expired, `ensure_aws_sso` first drops the cached SSO role credentials. The check then
-passes only if the session can still issue new ones (the CLI refreshes the token on the way), and
-otherwise the login happens at the morning run rather than mid-morning. Profiles without an
-`sso_session` are checked as before. How long the Identity Center session lasts is set by your
-organization; if it does not survive the night, expect a browser approval most mornings.
-
-Profiles that reference a shared `[sso-session <name>]` block get a refresh token. The CLI then
-renews them silently for as long as the Identity Center session lasts, and one browser login covers
-every profile in that session. Profiles using the legacy per-profile `sso_start_url` /
-`sso_region` keys get no refresh token, so they need the browser every time. If a profile keeps
-prompting, point it at the shared session:
-
-```ini
-[profile my-prod-profile]
-sso_session = my-sso        # instead of sso_start_url / sso_region
-sso_account_id = ...
-sso_role_name = admin
-region = us-east-1
-```
+Moved to [Configuration](configuration.md).

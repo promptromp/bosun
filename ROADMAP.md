@@ -17,7 +17,7 @@ of tmux. One table of checks, each with a de-duplication key: morning run missin
 window waiting at a prompt, new ERROR lines in the logs, session or check-in loop missing during
 awake hours, items stuck in `delegated`, and (with `BOSUN_LEARN_ENABLED=1`) a daily learning
 run that is missing, failed, crashed or stalled. Alerts only during scheduled awake hours, once per key,
-through `bosun alert`. Checks added since, 17 in all now (`docs/watchdog.md`): among them `events` and
+through `bosun alert`. Checks added since, 20 in all now (`docs/watchdog.md`): among them `events` and
 `slack-watch` (with those features on), `login-expired` (below), `long-shell` (2026-10-21: a background
 command keeping a window in shell) and `stalled-start` (2026-10-30: an agent stopped at a screen); `bosun orphans` finds the helpers a pane's launch shell leaves behind, and `launch`,
 `stop` and the check-in loop stop them. Follow-ups: see "Watchdog follow-ups" and "Urgent watchdog alerts
@@ -29,7 +29,9 @@ check-in loop logged them as delivered and nothing alerted. Now the transcript's
 fields (backed by `claude auth status` and a tiny login check request) drive a morning setup step
 (`ensure_claude_login`), a check-in gate that stops sending to a session that only gets login
 errors, the watchdog's `login-expired` check, and `bosun status` / `doctor` (`docs/setup.md`,
-"Claude Code login").
+"Claude Code login"). Since 2026-11-16 a window whose every reply is "Credit balance too low" (an API key
+whose organization has no credit that covers Claude Code) is the watchdog's `no-credit` check and `no-credit`
+in `bosun status` / `doctor`.
 
 **Done (2026-10-30): Claude Code's own signals.** Async hooks (`bosun hook signal`,
 `BOSUN_HOOK_SIGNALS=1`) record each Claude Code window's Notification, PermissionRequest, Stop,
@@ -209,9 +211,8 @@ bounded `kg` output
 
 **Next:** measurement through a knowledge pass in the learning run (rediscovery and rework episodes, and whether
 packs stay the default); Codex's and Antigravity's transcripts, so capture works there; fewer lookups per routing
-question (the VM saw 3 lookups and 2 searches for one question, and a wording nudge regressed a case); bosun
-flagging an API key's "Credit balance too low" replies (the watchdog's spend-limit check covers subscription limits
-only); a team-shared variant after a privacy review.
+question (the VM saw 3 lookups and 2 searches for one question, and a wording nudge regressed a case); a
+team-shared variant after a privacy review.
 
 ### 4a. Ontology: Metro map treatment
 
@@ -401,8 +402,8 @@ and init, update and the watchdog bringing the app along. Run on a real Mac in t
 
 **Done (2026-11-13), part 2, the app itself** ([plan](docs/plans/menu-bar-app.md)): the Swift menu bar app (`app/`), its
 build, CI's `app` job, the release workflow and the VM suite (`tests/sandbox.sh mac app`); the guide is
-[The menu bar app](docs/setup.md#the-menu-bar-app). Not yet released: `bosun app install` refuses until
-`app/publisher.json` has a Team ID and the publisher's secrets exist, so no install offers the app yet.
+[The menu bar app](docs/menu-bar-app.md). Released: the publisher's Team ID is in `app/publisher.json`, the
+release workflow signs and notarizes each `app-v<version>` tag, and `bosun init` installs the app.
 
 **Done (2026-11-14), the control panel** ([design](docs/design/control-panel.md), [plan](docs/plans/control-panel.md)):
 bosun.app 0.1.3 is there from login whatever the hour, with Stop bosun… and Quit bosun.app apart, a Settings window

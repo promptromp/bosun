@@ -4,7 +4,13 @@
 # Permission guard for the orchestrator, run as a PreToolUse hook (added at launch, and to
 # `bosun chores --dry-run`): asks before any MCP tool with a write verb in its name and before
 # Chrome's clicks and typing, and denies force pushes and `gh pr merge --admin` anywhere in a Bash
-# command. See lib/guard.py.
+# command: by the command's name (/usr/bin/git too), past redirections, wrappers and git's and gh's own
+# options (git -C <dir> push), in $(...) and backticks, and in what bash|sh|zsh -c, eval and env -S run,
+# read again. It asks before a gated outward command (git push, gh pr merge, ...) in a form the
+# settings' ask rules do not see, and whenever it cannot read a command for certain (quotes or a
+# heredoc that never close, a command named by a substitution or a pattern), and when the call's text
+# names an outward command, a force push or an admin merge that its parse does not explain (the taint
+# check). See lib/guard.py and docs/permissions.md.
 # With BOSUN_APPROVALS_ENABLED=1, `bosun launch` also runs it as `--approvals` (PreToolUse:
 # deny unapproved outward calls), `--permission-request` (PermissionRequest: allow approved
 # ones) and `--post-tool-use` (PostToolUse, PostToolUseFailure: close the proposal an approved
@@ -13,7 +19,8 @@
 set -uo pipefail
 case "${1:-}" in
   -h | --help)
-    sed -n '2,11p' "$0"
+    source "$(dirname "$0")/../lib/common.sh"
+    usage
     exit 0
     ;;
   "") exec python3 "$(dirname "$0")/../lib/guard.py" ;;

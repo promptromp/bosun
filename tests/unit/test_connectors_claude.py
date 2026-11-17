@@ -286,6 +286,34 @@ class CommandTest(ClaudeCase):
         kept_only = self.claude(f"{MAIL}, {gone}", printing(self.root, MCP_LIST), "--kept-only")
         self.assertEqual(kept_only[:2], (code, out))
 
+    def test_a_listing_without_claude_ai_s_connectors_keeps_and_uses_what_was_kept_for_them(self) -> None:
+        """At the morning wake the listing may show the local servers but not reach claude.ai: that says
+        nothing of a claude.ai connector, so it is a failed lookup for those names, not their removal."""
+        gone = "claude.ai Acme Gone"
+        connectors_claude.save_kept(self.state, [MAIL, SYNCED], {MAIL: MAIL_URL, SYNCED: "/old/pdf"})
+        local_only = MCP_LIST.replace(f"{MAIL}: {MAIL_URL} - ✔ Connected\n", "")
+        local_only += f"{SYNCED}: /Users/me/bin/acme-pdf --stdio  - ✔ Connected\n"
+        self.installed.write_text(json.dumps({"plugins": {}}))
+        code, out, err = self.claude(f"{MAIL}, {gone}, {SYNCED}, acme-local", printing(self.root, local_only))
+        self.assertEqual(code, 1)  # claude.ai Acme Gone: nothing kept, so not found
+        self.assertEqual(
+            self.settings(out),
+            [
+                {"serverUrl": MAIL_URL},
+                {"serverCommand": ["/Users/me/bin/acme-pdf", "--stdio"]},
+                {"serverName": "acme-local"},
+            ],
+        )
+        self.assertIn(
+            "connectors: claude mcp list shows none of claude.ai's connectors (it may not have reached "
+            f"claude.ai); using the ones kept from the last launch for {MAIL}, {gone}\n",
+            err,
+        )
+        self.assertIn(f"connectors: {gone} not found, so this window starts without it\n", err)
+        # what it did answer is kept as before; the claude.ai name stays for the next launch and fingerprint
+        kept = {MAIL: MAIL_URL, SYNCED: "/Users/me/bin/acme-pdf --stdio"}
+        self.assertEqual(connectors_claude.load_kept(self.state), kept)
+
     def test_missing_to_holds_the_names_left_out(self) -> None:
         missing = self.root / "missing.json"
         code, _, _ = self.claude(

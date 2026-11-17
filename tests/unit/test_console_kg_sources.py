@@ -62,6 +62,14 @@ class SourcesTest(unittest.TestCase):
         self.assertEqual(source["detail"], "Every release deploys to staging first")
         self.assertIn(source["library"], {e.key for e in self.catalog(listed=True)})
 
+    def test_a_memory_note_s_summary_is_redacted_as_the_library_shows_it(self) -> None:
+        (self.memory / "deploys.md").write_text(
+            "---\nname: deploys\ndescription: reach dana@example.com, password: hunter2hunter2\n---\n"
+        )
+        shown = sources.label_sources(model(("memory", "deploys.md")), self.catalog(listed=True))
+        [source] = list(sources.sources_in(shown))
+        self.assertEqual(source["detail"], "reach <email>, password: <redacted>")
+
     def test_an_unlisted_memory_note_keeps_its_file_name(self) -> None:
         shown = sources.label_sources(model(("memory", "deploys.md")), self.catalog(listed=False))
         [source] = list(sources.sources_in(shown))

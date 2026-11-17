@@ -514,6 +514,8 @@ class OtherQuestionsTest(unittest.TestCase):
         self.assertIn("sudo pmset repeat wakeorpoweron MTWRF 08:01:00", ui.screens[5])
         self.assertIn("password once", ui.screens[5])
         self.assertIn("charger", ui.screens[5])
+        # what bosun doctor checks: on power, and the lid open or an external display (never the lid alone)
+        self.assertIn("the lid open or an external display connected", " ".join(ui.screens[5].split()))
 
     def test_someone_elses_wake_is_kept_unless_you_say_otherwise(self) -> None:
         the_facts = facts(repeating_wake="wake at 6:00AM")
@@ -524,6 +526,17 @@ class OtherQuestionsTest(unittest.TestCase):
         answers, _ = run([*[ENTER] * 5, "y", ENTER, "y"], the_facts)
         assert answers is not None
         self.assertTrue(answers.wake)
+
+    def test_a_no_says_it_cancels_bosun_s_own_wake(self) -> None:
+        ours = "wakepoweron at 8:01AM weekdays only"
+        rerun = facts(
+            env={"BOSUN_DAYS": "MTWRF", "BOSUN_START_TIME": "08:00"}, repeating_wake=ours, repeating=(ours,)
+        )
+        options = init_wizard.wake_options(rerun, init_plan.recommend(rerun))
+        no = next(option for option in options if option.key == "n")
+        self.assertIn("bosun's repeating wake is cancelled: sudo pmset repeat cancel", " ".join(no.preview))
+        first = next(o for o in init_wizard.wake_options(facts(), Answers()) if o.key == "n")
+        self.assertNotIn("cancelled", " ".join(first.preview))
 
     def test_the_menu_bar_app_is_asked_after_the_wake_and_recommended(self) -> None:
         answers, ui = run(ALL_RECOMMENDED)

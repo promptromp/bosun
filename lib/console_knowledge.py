@@ -309,9 +309,11 @@ def card_model(
 
 
 def matching_entities(kb: KB, search: Search) -> list[tuple[str, str]]:
-    """(entity id, why) for the search: by name, alias, related term or fact text, best first."""
+    """(entity id, why) for the search: by name, alias, related term or fact text, best first. By the
+    whole text only, as matching_facts finds facts, so that the two lists of one search agree."""
     if search.q:
-        hits = [(entity_id, why) for _, entity_id, why in kq.search(kb, search.q, SEARCH_LIMIT * 2)]
+        ranked = kq.search(kb, search.q, SEARCH_LIMIT * 2, words=False)
+        hits = [(entity_id, why) for _, entity_id, why in ranked]
     else:
         hits = [(e["id"], "type") for e in by_name(kb.entities.values())]
     found = [(i, why) for i, why in hits if i in kb.entities]
@@ -740,12 +742,13 @@ def already_known(kb: KB, subject: str, shown: set[str]) -> list[dict[str, Any]]
 
 
 def block_head(kb: KB, subject: str) -> dict[str, Any]:
-    """A block's heading: the entity, its type in words and its summary."""
+    """A block's heading: the entity, its type in words and its summary (never a person's, as on
+    the entity's page)."""
     entity = kb.entities.get(subject) or {}
     return {
         **(ref(kb, subject) or {}),
         "type_label": ks.entity_type(subject).replace("_", " "),
-        "summary": str(entity.get("summary") or ""),
+        "summary": "" if ks.is_person(subject) else str(entity.get("summary") or ""),
     }
 
 

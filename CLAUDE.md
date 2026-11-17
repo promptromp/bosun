@@ -390,8 +390,8 @@ of truth, so don't copy rules into this file.
   opens one), the `bosun` command it runs in `BosunCLI.swift` (a new command is a command first: `libexec/`, its
   `# Usage:` header, `docs/commands.md`, and a `--json` output if the app reads it, with its `CONTRACT` grown, never
   changed), the contract fixture (`uv run python tools/contract_samples.py`, which `tests/unit/test_contract_samples.py`
-  checks), the VM suite's step (`tests/app_e2e.sh`, run with `tests/sandbox.sh mac app`) and the guide (`docs/setup.md`,
-  "The menu bar app").
+  checks), the VM suite's step (`tests/app_e2e.sh`, run with `tests/sandbox.sh mac app`) and the guide
+  (`docs/menu-bar-app.md`).
 - **A command:** `libexec/bosun-<cmd>` with a `# Usage:` header that holds all of its help
   (`bin/bosun` prints it for `--help`, with no flag handling of the command's own for exactly that;
   `die_usage` reports usage errors with exit 2), a line in `bin/bosun`'s usage, the

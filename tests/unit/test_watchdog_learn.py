@@ -77,6 +77,17 @@ class LearnCheckTest(unittest.TestCase):
         self.assertTrue(finding.confirm)
         self.assertEqual(self.keys(at("19:05", MONDAY + timedelta(days=5))), [])  # Saturday
 
+    def test_not_owed_when_bosun_was_set_up_after_it_was_due(self) -> None:
+        """Its job loaded after BOSUN_LEARN_AT (reload_job's stamp): launchd runs no time that passed."""
+        self.learn_state()
+        (self.state_dir / watchdog.LOADED.format(role="learn")).write_text(f"{MONDAY} 18:20:00\n")
+        result = self.check(at("19:05"))
+        self.assertEqual(result.findings, [])
+        self.assertIn("loaded at 18:20", result.note)
+        self.assertEqual(self.keys(at("19:05", MONDAY + timedelta(days=1))), ["learn:missing:2026-01-06"])
+        (self.state_dir / watchdog.LOADED.format(role="learn")).write_text(f"{MONDAY} 17:59:00\n")  # owed
+        self.assertEqual(self.keys(at("19:05")), ["learn:missing:2026-01-05"])
+
     def test_a_run_today_is_not_missing(self) -> None:
         self.learn_state(runs=[{"started": utc(at("18:01")), "outcome": "ok"}])
         self.assertEqual(self.keys(at("19:05")), [])

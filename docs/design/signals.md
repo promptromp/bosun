@@ -4,8 +4,10 @@
 sessions through `repo_session_settings`, the orchestrator through `orchestrator_extra_settings`).
 Each runs `bosun hook signal --window <window>`, which appends one compact line to
 `$BOSUN_STATE_DIR/signals/<window>.jsonl` (`lib/signals.py`). The hooks are `async`, so they
-never delay the session; the recorder always exits 0 and reports problems to the hook log. Each
-file keeps its newest half once it passes `BOSUN_SIGNALS_MAX_KB` (256).
+never delay the session; the recorder always exits 0 and reports problems to the hook log, as stamped
+`ERROR` lines that the watchdog's `log-errors` check alerts. Each file keeps its newest half once it passes
+`BOSUN_SIGNALS_MAX_KB` (256). The hooks may run at once (a PermissionRequest, then its Notification), so an
+append and a trim hold the window's lock (`<window>.lock` beside its file), and neither loses the other's line.
 
 ## What is recorded
 
@@ -36,6 +38,12 @@ the transcript's structured error fields. The signals add what those cannot say:
   names a spend or usage limit counts as a stop when the transcript shows none, until a later Stop
   (a turn finished). The transcript's `apiError: usage_limit_reached` stays the primary signal: a
   StopFailure only has the error type and the text, and `rate_limit` also covers short throttling.
+  In a transcript, `billing_error` alone is no credit, not a usage limit (`lib/claude_state.py`'s
+  credit category, the watchdog's `no-credit`): a spend limit has been measured as `rate_limit`/429
+  with `apiError: usage_limit_reached`, which wins when both are there, and an API key without
+  credit as `billing_error`/400 with the text "Credit balance is too low". So the StopFailure
+  fallback keeps `billing_error` among its error types but counts it as a stop only when the text
+  names a spend or usage limit, which a credit error's does not.
 
 ## What was measured before choosing (2.1.312, a lab session on its own tmux socket)
 

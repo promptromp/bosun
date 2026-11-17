@@ -16,20 +16,34 @@ best first (everything Claude Code-specific is read through lib/claude_state.py)
 4. Fallback: a loose reading of the reply's text (or, without a transcript, of the window's last
    lines), only where no structured field exists. Verdicts from it say "pattern fallback".
 
+The login is this Mac's, not one window's: a login check that worked, or a reply the API gave in
+any window, after every window's last login error clears them all (see Worked). `status`, the
+watchdog and the console read every window; `window` its own and those --also names.
+
+A window can also get nothing but "Credit balance too low" (billing_error: an API key whose
+organization has no credit that covers Claude Code): no-credit. Its login works, so it is not
+gated: as with a usage limit, the check-in loop keeps sending to it, and the watchdog's no-credit
+check alerts. The login check request cannot tell when credit was added (`claude -p` works
+without it), so only a normal reply ends it, in that window or (credit being the organization's)
+in another one after every window's last credit error.
+
 Usage: login.py window <name> <claude pid> [--after <epoch>] [--wait <seconds>] [--probe] [--pane -]
-                         [--dry-run]
+                         [--dry-run] [--also <name>=<claude pid>]...
        login.py global [--probe]
        login.py status          (lines "<window>\\t<claude pid>" on stdin, as window_agent_pids)
 
-`window` prints "<state> <change> <detail>": state ok, needs-login or unknown; change new (it has
-just started needing a login), same, recovered or -. It records the windows that need a login,
-and the last login check, in $BOSUN_STATE_DIR/login.json. --after/--wait: first wait up to
-<seconds> for a reply newer than <epoch> (after a delivery). --probe: if the window needs a login,
-or the last login check failed, make the login check request when one is due. --pane -: the
-window's visible text on stdin, read only when there is no transcript. --dry-run: record nothing.
+`window` prints "<state> <change> <detail>": state ok, needs-login, no-credit or unknown; change
+new (it has just started needing a login), same, recovered (it no longer does) or -. It records
+the windows that need a login, and the last login check, in $BOSUN_STATE_DIR/login.json.
+--after/--wait: first wait up to <seconds> for a reply newer than <epoch> (after a delivery).
+--probe: if the window needs a login, or the last login check failed, make the login check
+request when one is due. --pane -: the window's visible text on stdin, read only when there is no
+transcript. --dry-run: record nothing. --also: another Claude window, whose replies count too (the
+check-in loop passes them while the window is held back, so it is let go on the same signs as the
+watchdog's).
 `global` prints the state of the login itself; --probe makes the login check request.
 `status` prints both for `bosun status`, changing nothing.
-Exit codes: 0 ok, 1 needs a login, 3 unknown, 2 usage. Settings: BOSUN_STATE_DIR,
+Exit codes: 0 ok, 1 needs a login, 3 unknown, 4 no credit, 2 usage. Settings: BOSUN_STATE_DIR,
 BOSUN_CLAUDE_BIN.
 """
 
@@ -42,7 +56,7 @@ import json
 import os
 import sys
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -56,8 +70,10 @@ from claude_state import ApiError, AuthStatus, ProbeResult
 
 OK = "ok"
 NEEDS_LOGIN = "needs-login"
+NO_CREDIT = "no-credit"  # every reply is "Credit balance too low"; never gated
 UNKNOWN = "unknown"
-EXIT_CODES = {OK: 0, NEEDS_LOGIN: 1, UNKNOWN: 3}
+EXIT_CODES = {OK: 0, NEEDS_LOGIN: 1, UNKNOWN: 3, NO_CREDIT: 4}
+LOGIN_WORKS = frozenset({OK, NO_CREDIT})  # the window's replies show that its login works
 NEW, SAME, RECOVERED, UNCHANGED = "new", "same", "recovered", "-"
 STATE_FILE = "login.json"
 LOCK_FILE = "login.lock"
@@ -156,9 +172,9 @@ def locked_state(state_dir: Path) -> Iterator[State]:
 
 @dataclass(frozen=True)
 class Verdict:
-    state: str  # ok, needs-login or unknown
+    state: str  # ok, needs-login, no-credit or unknown
     detail: str
-    since: datetime | None = None  # needs-login: since when
+    since: datetime | None = None  # needs-login, no-credit: since when
 
 
 def error_detail(error: ApiError) -> str:
@@ -166,26 +182,156 @@ def error_detail(error: ApiError) -> str:
     return f"every reply since {shown(error.since)} is a login error ({how})"
 
 
-def transcript_verdict(error: ApiError | None, probe: Probe | None) -> Verdict:
+def credit_detail(error: ApiError) -> str:
+    return f"every reply since {shown(error.since)} is 'credit balance too low' ({error.code})"
+
+
+# The login and the credit are this Mac's, not one window's: a sign that one works, later than the
+# last error of its kind in every window read, clears those windows: for the login, a login check
+# that worked or a reply the API gave in any window; for the credit, only such a reply (`claude -p`,
+# the login check, works without credit). This assumes that every window bosun starts uses the same
+# credentials (one ~/.claude, one apiKeyHelper, one environment); a repo's own .claude/settings.json
+# can set `env` or `apiKeyHelper`, and then its replies say nothing of the others. A window cleared
+# wrongly shows again with its next prompt, which fails the same way, as a new row (restarted).
+
+
+@dataclass(frozen=True)
+class Worked:
+    """A sign that the login works, or that credit covers Claude Code: when, and what it was."""
+
+    at: datetime
+    how: str  # "a login check at Mon 09:10 worked", "alpha got a reply at Mon 09:12"
+
+
+def probe_worked(probe: Probe | None) -> Worked | None:
+    if probe is None or probe.outcome != claude_state.PROBE_OK:
+        return None
+    return Worked(probe.at, f"a login check at {shown(probe.at)} worked")
+
+
+@dataclass(frozen=True)
+class Reading:
+    """What a window's transcript shows: its latest error (None: a normal reply, or none yet) and
+    when the API last answered it."""
+
+    path: Path
+    error: ApiError | None
+    answered: datetime | None
+
+
+UNREADABLE = Verdict(UNKNOWN, "its transcript could not be read (gone, or no permission)")
+
+
+def read_transcript(path: Path) -> Reading | None:
+    """<path> read, or None if it cannot be (gone since it was found, or no permission)."""
+    try:
+        return Reading(path, claude_state.last_api_error(path), claude_state.last_answer_at(path))
+    except OSError:
+        return None
+
+
+def latest_answer(answered: Mapping[str, datetime | None]) -> Worked | None:
+    """The latest reply the API gave in any of these windows (name -> when it last answered)."""
+    answers = [(at, name) for name, at in answered.items() if at]
+    if not answers:
+        return None
+    at, name = max(answers, key=lambda answer: answer[0])
+    return Worked(at, f"{name} got a reply at {shown(at)}")
+
+
+def later_than_all(sign: Worked, category: str, errors: Iterable[ApiError | None]) -> bool:
+    """Whether <sign> came after every error of <category> (an error with no time: never)."""
+    times = [error.at for error in errors if error and error.category == category]
+    return all(at is not None and sign.at > at for at in times)
+
+
+def signs_of(probe: Probe | None, answer: Worked | None) -> dict[str, Worked | None]:
+    """The latest sign, per category, that it works: the login, from a login check that worked or a
+    reply; the credit, from a reply only."""
+    return {claude_state.AUTH: latest(probe_worked(probe), answer), claude_state.CREDIT: answer}
+
+
+def cleared_by(signs: Mapping[str, Worked | None], errors: Iterable[ApiError | None]) -> dict[str, Worked]:
+    """Per category, the sign that clears the windows' errors of it, if any."""
+    found = list(errors)
+    return {kind: sign for kind, sign in signs.items() if sign and later_than_all(sign, kind, found)}
+
+
+def restarted(
+    transcript: Path, error: ApiError | None, signs: Mapping[str, Worked | None]
+) -> ApiError | None:
+    """<error>, its row starting again after the latest sign of its kind when that came within the row:
+    it worked then, so only the errors after it count (for `since`, and so the watchdog's key)."""
+    sign = signs.get(error.category) if error else None
+    if error is None or sign is None or not (error.since and error.at and error.since <= sign.at < error.at):
+        return error
+    try:
+        return claude_state.last_api_error(transcript, after=sign.at)
+    except OSError:
+        return error  # gone or unreadable since it was read: its row as it was
+
+
+def latest(*signs: Worked | None) -> Worked | None:
+    found = [sign for sign in signs if sign]
+    return max(found, key=lambda sign: sign.at) if found else None
+
+
+def transcript_verdict(error: ApiError | None, cleared: Mapping[str, Worked] | None = None) -> Verdict:
+    """A window's verdict from its latest error; <cleared>: what clears an error of each category."""
     if error is None:
         return Verdict(OK, "its latest reply is a normal one")
+    sign = (cleared or {}).get(error.category)
+    if error.category == claude_state.CREDIT:
+        if sign:
+            return Verdict(OK, f"{sign.how}, after its last 'credit balance too low'")
+        return Verdict(NO_CREDIT, credit_detail(error), error.since)
     if error.category != claude_state.AUTH:
         return Verdict(OK, f"its latest reply is a {error.category} error ({error.code}), not a login error")
-    if probe and probe.outcome == claude_state.PROBE_OK and error.at and probe.at > error.at:
-        return Verdict(OK, f"a login check at {shown(probe.at)} worked, after its last login error")
+    if sign:
+        return Verdict(OK, f"{sign.how}, after its last login error")
     return Verdict(NEEDS_LOGIN, error_detail(error), error.since)
 
 
-def window_verdict(transcript: Path | None, probe: Probe | None, pane: str = "") -> Verdict:
-    """Whether the session in a window gets real replies, from its transcript; without one, from the
-    window's last lines (the pattern fallback)."""
-    if transcript is not None:
-        return transcript_verdict(claude_state.last_api_error(transcript), probe)
+def pane_verdict(pane: str) -> Verdict:
+    """A window with no transcript: its last lines, if given (the pattern fallback)."""
     if pane and claude_state.pane_auth_error(pane):
         return Verdict(
             NEEDS_LOGIN, "no transcript; its last lines read like a login error (pattern fallback)"
         )
     return Verdict(UNKNOWN, "no transcript to read yet")
+
+
+def window_verdicts(
+    transcripts: Mapping[str, Path | None], probe: Probe | None, panes: Mapping[str, str] | None = None
+) -> dict[str, Verdict]:
+    """Whether the session in each window gets real replies, from its transcript, the last login check
+    and what the other windows show (see Worked); a window without a transcript, from its last lines in
+    <panes>, if given (the pattern fallback). A transcript that cannot be read counts for nothing, and
+    its window's verdict is unknown."""
+    readings = {name: read_transcript(path) for name, path in transcripts.items() if path is not None}
+    read = {name: reading for name, reading in readings.items() if reading is not None}
+    signs = signs_of(probe, latest_answer({name: reading.answered for name, reading in read.items()}))
+    errors = {name: restarted(reading.path, reading.error, signs) for name, reading in read.items()}
+    cleared = cleared_by(signs, errors.values())
+    return {
+        name: verdict_in(name, readings, errors, cleared, (panes or {}).get(name, "")) for name in transcripts
+    }
+
+
+def verdict_in(
+    name: str,
+    readings: Mapping[str, Reading | None],
+    errors: Mapping[str, ApiError | None],
+    cleared: Mapping[str, Worked],
+    pane: str,
+) -> Verdict:
+    """<name>'s verdict: from its transcript's latest error, unknown if it could not be read, from
+    <pane> if it has none."""
+    if name not in readings:
+        return pane_verdict(pane)
+    if name not in errors:
+        return UNREADABLE
+    return transcript_verdict(errors[name], cleared)
 
 
 def login_failure(status: AuthStatus, probe: Probe | None) -> Verdict | None:
@@ -215,12 +361,13 @@ def global_verdict(status: AuthStatus, probe: Probe | None, fresh: bool = False)
 
 
 def update_gate(state: State, window: str, verdict: Verdict) -> str:
-    """Record whether <window> needs a login; how that changed."""
+    """Record whether <window> needs a login; how that changed. A window with no credit is not
+    gated (nor is one on a usage limit): its replies come from the API, so its login works."""
     before = state.gated.get(window)
     if verdict.state == NEEDS_LOGIN:
         state.gated[window] = stamp(verdict.since) or "?"
         return SAME if before == state.gated[window] else NEW
-    if verdict.state == OK and before is not None:
+    if verdict.state in LOGIN_WORKS and before is not None:
         del state.gated[window]
         return RECOVERED
     return UNCHANGED
@@ -267,26 +414,40 @@ def wait_for_reply(env: Env, transcript: Path, after: float, seconds: float) -> 
     """Wait up to <seconds> for a reply written after <after> (epoch seconds)."""
     deadline = time.monotonic() + seconds
     while True:
-        latest = claude_state.last_reply_at(transcript)
+        try:
+            latest = claude_state.last_reply_at(transcript)
+        except OSError:
+            return  # gone or unreadable: the verdict says so
         if (latest and latest.timestamp() > after) or time.monotonic() >= deadline:
             return
         env.sleep(REPLY_POLL_SECONDS)
+
+
+def verdict_of(name: str, windows: Mapping[str, Path | None], probe: Probe | None, pane: str) -> Verdict:
+    """<name>'s verdict among <windows> (name -> transcript); <pane>: its last lines."""
+    return window_verdicts(windows, probe, {name: pane})[name]
+
+
+def other_transcripts(env: Env, others: list[tuple[str, str]]) -> dict[str, Path | None]:
+    """The transcripts of the windows --also names (name, pid)."""
+    return {name: window_transcript(env, pid) for name, pid in others}
 
 
 def check_window(env: Env, args: argparse.Namespace, pane: str) -> tuple[Verdict, str]:
     transcript = window_transcript(env, args.pid)
     if transcript is not None and args.after is not None:
         wait_for_reply(env, transcript, args.after, args.wait)
+    windows = {**other_transcripts(env, args.also), args.name: transcript}
     if args.dry_run:
         state = State.load(env.state_dir)
-        verdict = window_verdict(transcript, state.last_probe, pane)
+        verdict = verdict_of(args.name, windows, state.last_probe, pane)
         return verdict, update_gate(state, args.name, verdict)  # not saved
     with locked_state(env.state_dir) as state:
-        verdict = window_verdict(transcript, state.last_probe, pane)
+        verdict = verdict_of(args.name, windows, state.last_probe, pane)
         last = state.last_probe
         failing = verdict.state == NEEDS_LOGIN or (last is not None and last.outcome == claude_state.AUTH)
         if args.probe and failing and probe_due(last, env.now()):
-            verdict = window_verdict(transcript, check_login(env, state) or last, pane)
+            verdict = verdict_of(args.name, windows, check_login(env, state) or last, pane)
         return verdict, update_gate(state, args.name, verdict)
 
 
@@ -307,13 +468,21 @@ def render_status(env: Env, windows: list[tuple[str, str]]) -> str:
     overall = global_verdict(env.auth_status(env.claude_bin), state.last_probe)
     width = max([STATUS_NAME_WIDTH, *(len(name) for name, _ in windows)])
     lines = [f"{'login':<{width}} {overall.state:<12} {overall.detail}"]
-    for name, pid in windows:
-        verdict = window_verdict(window_transcript(env, pid), state.last_probe)
+    verdicts = window_verdicts({name: window_transcript(env, pid) for name, pid in windows}, state.last_probe)
+    for name, verdict in verdicts.items():
         lines.append(f"{name:<{width}} {verdict.state:<12} {verdict.detail}")
     return "\n".join(lines)
 
 
 # ---- command line ------------------------------------------------------------------------------
+
+
+def other_window(value: str) -> tuple[str, str]:
+    """--also's value: another window and the pid of the Claude in it."""
+    name, _, pid = value.rpartition("=")
+    if not name or not pid:
+        raise argparse.ArgumentTypeError(f"expected NAME=PID, not {value!r}")
+    return name, pid
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -327,6 +496,7 @@ def build_parser() -> argparse.ArgumentParser:
     window.add_argument("--probe", action="store_true")
     window.add_argument("--pane", choices=["-"])
     window.add_argument("--dry-run", action="store_true")
+    window.add_argument("--also", action="append", default=[], type=other_window, metavar="NAME=PID")
     overall = commands.add_parser("global")
     overall.add_argument("--probe", action="store_true")
     commands.add_parser("status")

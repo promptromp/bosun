@@ -940,7 +940,7 @@ class RunTest(World):
         self.assertRegex(
             out, re.compile(r"^Agents\n  api +restarted; resumed: waiting on CI for PR 12$", re.MULTILINE)
         )
-        self.assertIn("Going back: docs/setup.md#going-back\nbosun is up to date (bbbbbbb).\n", out)
+        self.assertIn("Going back: docs/updating.md#going-back\nbosun is up to date (bbbbbbb).\n", out)
 
     def test_json_carries_the_summary_of_an_update_that_ended(self) -> None:
         windows = {"api": ("repo", "restart", "restarted", "answered")}

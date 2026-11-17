@@ -69,6 +69,12 @@ class KnowledgeWorld(unittest.TestCase):
         result = args.func(args)
         return str(result[0] if isinstance(result, tuple) else result)
 
+    def correct(self, old: str, value: str, source: str) -> None:
+        """Correct <old> on a source alone, then replace it by the correction from this terminal (my
+        review): a correction on its sources waits for one (knowledge_model.replacement_fact)."""
+        out = self.kg("supersede", old, "--value", value, "--source", source)
+        self.kg("supersede", old, "--by", out.removeprefix("ok: ").split()[0])
+
     def kb(self) -> km.KB:
         return console_kb.read_kb(self.root, self.now)
 
@@ -125,6 +131,11 @@ class OverviewTest(KnowledgeWorld):
         people = self.overview(type="person")["search"]
         self.assertEqual({e["id"] for e in people["entities"]}, {"person/dana", "person/lee"})
         self.assertIsNone(self.overview()["search"])
+
+    def test_search_matches_the_whole_text_for_entities_as_for_facts(self) -> None:
+        # kg search would find the pdf renderer by these words; the console's two lists agree on none
+        search = self.overview(q="pdf renderer review")["search"]
+        self.assertEqual((search["entities"], search["facts"]), ([], []))
 
     def test_a_query_it_cannot_use_is_refused(self) -> None:
         with self.assertRaises(QueryError):
@@ -187,7 +198,7 @@ class EntityPageTest(KnowledgeWorld):
         old = self.fact_id("environment/staging-2", "status")
         self.kg("confirm", old)
         self.now += timedelta(days=1)
-        self.kg("supersede", old, "--value", "running", "--source", "ledger:task:2026-10-20/veembc")
+        self.correct(old, "running", "ledger:task:2026-10-20/veembc")
         caveat = self.fact_id("repo/invoice-exporter", "caveat")
         self.kg("reject", caveat)
         env = self.page("environment/staging-2")
@@ -395,14 +406,7 @@ class ReviewTest(KnowledgeWorld):
         self.assertEqual(
             dated, [{"text": "was decided on Oct 15, 2026: "}, {"value": "one sequence per year"}]
         )
-        self.kg(
-            "supersede",
-            self.fact_id("decision/numbering", "decided"),
-            "--value",
-            "one sequence per country",
-            "--source",
-            "memory:b.md",
-        )
+        self.correct(self.fact_id("decision/numbering", "decided"), "one sequence per country", "memory:b.md")
         kb = self.kb()
         undated = ck.fact_view(kb, kb.facts[self.fact_id("decision/numbering", "decided")], LEDGER)[
             "sentence"
@@ -419,6 +423,15 @@ class ReviewTest(KnowledgeWorld):
         shown = {f["id"] for f in group["facts"]}
         self.assertTrue(all(k["id"] not in shown for b in blocks for k in b["known"]))
         self.assertLessEqual(max(len(b["known"]) for b in blocks), ck.CONTEXT_FACTS)
+
+    def test_a_block_heading_never_shows_a_person_s_summary(self) -> None:
+        kb = self.kb()
+        kb.entities["person/dana"] = {**kb.entities["person/dana"], "summary": "a free-text note by hand"}
+        self.assertEqual(ck.block_head(kb, "person/dana")["summary"], "")
+        self.assertEqual(ck.block_head(kb, "person/dana")["type_label"], "person")
+        repo = "repo/invoice-exporter"
+        kb.entities[repo] = {**kb.entities[repo], "summary": "the exporter"}
+        self.assertEqual(ck.block_head(kb, repo)["summary"], "the exporter")
 
     def test_facts_that_place_an_entity_are_its_subtitle(self) -> None:
         kb = self.kb()

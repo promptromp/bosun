@@ -24,6 +24,7 @@ import codex_state
 import events
 import hook
 import ledger
+import login
 import update_gate
 import watchdog
 from agent_files import AgentHooks
@@ -389,11 +390,36 @@ class WatchdogEventsCheckTest(unittest.TestCase):
         self.facts = Facts(session_exists=True, checkin_loop=False)
         self.assertEqual(self.check().findings, [])  # checkin-missing covers that
 
+    def test_not_stalled_while_the_orchestrator_needs_a_login(self) -> None:
+        # The check-in loop runs no dispatcher while login.json gates the orchestrator.
+        self.save(last_tick=self.utc(NOON - timedelta(minutes=40)))
+        login.State(gated={"orch": self.utc(NOON - timedelta(minutes=45))}).save(self.state_dir)
+        result = self.check()
+        self.assertEqual(result.findings, [])
+        self.assertIn("holds events back while orch needs /login (since ", result.note)
+        login.State(gated={"alpha": self.utc(NOON)}).save(self.state_dir)  # not the orchestrator
+        [finding] = self.check().findings
+        self.assertTrue(finding.key.startswith("events:stalled:"))
+
+    def test_a_gate_with_no_time_says_so(self) -> None:
+        self.save(last_tick=self.utc(NOON - timedelta(minutes=40)))
+        login.State(gated={"orch": "?"}).save(self.state_dir)
+        result = self.check()
+        self.assertEqual(result.findings, [])
+        self.assertIn("needs /login (since an unknown time; see login-expired)", result.note)
+
     def test_a_failed_delivery_alerts_once_a_day(self) -> None:
         self.save(last_tick=self.utc(NOON), last_error={"at": self.utc(NOON), "error": "window is waiting"})
         [finding] = self.check().findings
         self.assertEqual(finding.key, "events:failed:2026-01-05")
         self.assertIn("window is waiting", finding.message)
+        self.assertIn("orchestrator at 12:00: window is waiting", finding.message)
+
+    def test_a_failure_from_an_earlier_day_gives_its_date(self) -> None:
+        earlier = self.utc(NOON - timedelta(days=2, hours=1))
+        self.save(last_tick=self.utc(NOON), last_error={"at": earlier, "error": "window is waiting"})
+        [finding] = self.check().findings
+        self.assertIn("orchestrator at 2026-01-03 11:00: window is waiting", finding.message)
 
 
 if __name__ == "__main__":

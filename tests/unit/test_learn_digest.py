@@ -220,6 +220,37 @@ class HelpersTest(unittest.TestCase):
             with self.subTest(raw=raw):
                 self.assertEqual(learn_digest.redact(raw), redacted)
 
+    # A private key, built from pieces so that the private-key hook does not take this file for one.
+    MARK = "RSA PRIVATE" + " KEY-----"
+    KEY = f"-----BEGIN {MARK}\n" + "MIIEowIBAAKCAQEA\n" * 60 + f"-----END {MARK}"
+
+    def test_a_text_is_redacted_before_it_is_clipped(self) -> None:
+        token = "gh" + "p_" + "a1B2" * 9
+        self.assertEqual(learn_digest.clip("x" * 280 + " " + token), "x" * 280 + " <token>")
+        event = Event(datetime(2026, 1, 5, 8, tzinfo=UTC), "prompt", f"here is the deploy key: {self.KEY}")
+        line = learn_digest.clip(learn_digest.describe(event, "drain"))
+        self.assertEqual(line, "you: here is the deploy key: <key>")
+
+    def test_a_ledger_note_is_redacted_before_it_is_clipped(self) -> None:
+        entry = {"at": "2026-01-05T08:00:00+00:00", "event": "said", "note": f"the key {self.KEY}"}
+        self.assertEqual(learn_digest.history_text(entry), "said: the key <key>")
+
+    def test_a_log_line_is_redacted_before_it_is_clipped(self) -> None:
+        since = datetime(2026, 1, 5, tzinfo=UTC)
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "checkin.log"
+            stamp = learn_digest.local(since + timedelta(hours=1))
+            log.write_text(f"{stamp:%Y-%m-%d %H:%M:%S} sent {self.KEY.replace(chr(10), ' ')}\n")
+            settings = learn_digest.Settings(
+                since=since,
+                until=since + timedelta(days=1),
+                state_dir=Path(tmp),
+                log_dir=Path(tmp),
+                config_dir=Path(tmp),
+                root=ROOT,
+            )
+            self.assertEqual(learn_digest.log_lines(log, settings), [f"{stamp:%Y-%m-%d %H:%M:%S} sent <key>"])
+
     def test_slack_permalinks_and_shas_survive(self) -> None:
         text = (
             "https://acme.slack.com/archives/C00000000AA/p1767600000000100?thread_ts=1767600000.000100 sha "

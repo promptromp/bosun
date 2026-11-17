@@ -7,7 +7,7 @@
 # through the journals, then a mid-afternoon update to the next version (this checkout and
 # tests/sandbox/update_patch.sh) on a year of data, with windows idle, busy and waiting on a background
 # sleep, writes and hooks arriving all along and Slack messages during the hold; going back by hand,
-# as docs/setup.md says, and forward again. Then writers at once, the clock going back, writes cut short
+# as docs/updating.md says, and forward again. Then writers at once, the clock going back, writes cut short
 # like a power cut, the knowledge files changed outside their journal (by hand, by git, by the release),
 # launchd, the console, uninstall, and a year on. At each step the ledger, the knowledge base and their
 # journals must hold up (`ledger validate --journal`, `kg validate`), and nothing of a person deleted on
@@ -327,7 +327,7 @@ summary_says() { # <output> <from commit> <to commit>: it ends with the summary,
   sed -n '/^bosun updated: /,$p' "$1" >"$1.summary"
   grep -qE "^bosun updated: ${2:0:7} -> ${3:0:7} \([0-9]+ commits?\) in " "$1.summary" &&
     grep -qE "^Backup: ~/.local/state/bosun/backups/[^ ]+ \([0-9.]+ (bytes|KB|MB|GB)\)$" "$1.summary" &&
-    [ "$(tail -1 "$1.summary")" = "Going back: docs/setup.md#going-back" ] || {
+    [ "$(tail -1 "$1.summary")" = "Going back: docs/updating.md#going-back" ] || {
     cat "$1.summary"
     return 1
   }
@@ -468,7 +468,7 @@ one_replica() { # both stores write this Mac's changes under the one id in repli
   return 1
 }
 key_made() { [ -s "$KNOWLEDGE/secret.key" ] && [ "$(stat -f %Lp "$KNOWLEDGE/secret.key")" = 600 ]; }
-not_in_history() { ! git -C "$KNOWLEDGE" ls-files | grep -E 'secret\.key|torn'; }
+not_in_history() { ! git -C "$KNOWLEDGE" ls-files | grep -E 'secret\.key|torn|identifiers\.jsonl|local\.jsonl'; }
 lists_fact() { bosun kg facts "$1" --status all --closed --json | jq -e --arg id "$2" 'any(.[]; .id == $id)'; }
 
 the_first_knowledge_write() {
@@ -484,7 +484,7 @@ the_first_knowledge_write() {
   kg_says "... and an old proposal is confirmed by its id" "confirmed" confirm "$(fact_of environment/staging-2 status)"
   kg_made K_FIRST "$NEW_FACT_ID" "a new fact gets a minted id" propose feature/csv-export caveat \
     --value "The CSV header row stays in English" --source "ledger:$T_FIRST" --source "report:$T_FIRST"
-  check "the key is not in the knowledge history, nor any torn file" not_in_history
+  check "the key is not in the knowledge history, nor any torn file, nor the ids the release's history tracked" not_in_history
   kg_valid
 }
 
@@ -995,7 +995,7 @@ added_again() { # <commit>: its folder added again, whole, as the guide says whe
 }
 
 going_back() {
-  echo "going back to the version before, by hand, as docs/setup.md#going-back says"
+  echo "going back to the version before, by hand, as docs/updating.md#going-back says"
   local backup from
   backup="$(jq -r .backup "$STATE/update.json")"
   from="$(jq -r .from "$backup/manifest.json")"

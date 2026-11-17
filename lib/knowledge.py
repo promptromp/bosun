@@ -57,9 +57,10 @@ from validation import Finding
 
 MAX_QUOTE_LENGTH = 500
 QUOTE_MAX_AGE = timedelta(hours=24)  # a quote of my words counts from a prompt this recent
-# The fewest characters (whitespace-normalized) of my words a decision from an agent's session quotes:
-# "ok", "yes" or "k" is in nearly every prompt, so it says nothing about which fact.
-MIN_DECISION_QUOTE = 8
+# The fewest characters (whitespace-normalized) of my words a quote from an agent's session holds, for a
+# decision and for a fact in my words alike: "ok", "yes" or "k" is in nearly every prompt, so it says
+# nothing about which fact. The same floor as an approval's partial quote.
+MIN_DECISION_QUOTE = approvals.MIN_QUOTE_CHARS
 # The journal every write goes through (lib/journal.py, docs/design/sync.md), next to the files:
 # the knowledge base's stream; the version of the rules its changes are checked against when
 # rebuilt (knowledge_changes.APPLIED, SKIPPED and CHECKED), bumped by hand when a change to them
@@ -926,16 +927,14 @@ def opened(write: bool, message: str = "", dry_run: bool = False) -> Iterator[KB
 
 
 def speaker() -> approvals.Speaker:
-    pasted: set[str] = set()
-    if SETTINGS.state_dir and SETTINGS.caller_window:
-        pasted = events.pasted_hashes(Path(SETTINGS.state_dir), SETTINGS.caller_window, CLOCK())
-    return approvals.Speaker(frozenset(pasted), SETTINGS.drain_prompt)
+    return events.speaker(SETTINGS.state_dir, SETTINGS.caller_window, SETTINGS.drain_prompt, CLOCK())
 
 
 def quote_verified(quote: str, transcript: Path, after: datetime | None = None) -> bool:
-    """Whether <quote> is in a prompt I typed (or sent from my phone) in that session in the last
-    QUOTE_MAX_AGE, and after <after> when given (when what it decides on was proposed): the same
-    check as an approval's quote. Pasted and injected text and tool results never count."""
+    """Whether <quote> is a run of whole words (approvals.words_in) of a prompt I typed (or sent from my
+    phone) in that session in the last QUOTE_MAX_AGE, and after <after> when given (when what it decides
+    on was proposed): an approval's genuine-prompt test. Pasted and injected text and tool results never
+    count."""
     who = speaker()
     since = CLOCK() - QUOTE_MAX_AGE
     prompts = claude_state.delivered_prompts(transcript)
@@ -944,7 +943,7 @@ def quote_verified(quote: str, transcript: Path, after: datetime | None = None) 
         for p in prompts
         if p.at >= since and (after is None or p.at > after) and approvals.is_genuine(p.text, who)
     ]
-    return approvals.quote_in(quote, texts)
+    return approvals.words_in(quote, texts)
 
 
 def calling_session(args: argparse.Namespace) -> agent_state.CallingSession | None:
@@ -952,16 +951,12 @@ def calling_session(args: argparse.Namespace) -> agent_state.CallingSession | No
     return agent_state.calling_session() if getattr(args, "from_user", False) else None
 
 
-def agent_name(session: agent_state.CallingSession) -> str:
-    return agent_state.AGENTS[session.agent].PROFILE.display_name
-
-
 def unverified_reason(session: agent_state.CallingSession | None, after: datetime | None = None) -> str:
     """Why a quote of my words does not count (<after>: what it decides on was proposed then)."""
     if session is not None and not session.verifies_quotes:
-        return f"bosun cannot check your words in {agent_name(session)}"
+        return f"bosun cannot check your words in {session.agent_name}"
     hours = int(QUOTE_MAX_AGE.total_seconds() // 3600)
-    reason = f"the quote is not in anything you typed in that session in the last {hours} hours"
+    reason = f"the quote is not whole words of anything you typed in that session in the last {hours} hours"
     if after is not None and after > CLOCK() - QUOTE_MAX_AGE:
         reason += f" since what it decides on was proposed ({km.iso(after)})"
     return reason
@@ -1009,10 +1004,18 @@ def session_or_refuse(args: argparse.Namespace, session: agent_state.CallingSess
 def user_source(
     args: argparse.Namespace, session: agent_state.CallingSession | None, after: datetime | None = None
 ) -> Record:
+    """My words (--quote) as a source, verified when they are whole words of a genuine prompt of the
+    transcript they are checked in (session_or_refuse): from an agent's session, at least
+    MIN_DECISION_QUOTE characters of them, as a decision's."""
     quote = approvals.normalize(args.quote or "")
     if not quote or len(quote) > MAX_QUOTE_LENGTH:
         raise KnowledgeError(
             f"--from-user needs --quote with my exact words (1 to {MAX_QUOTE_LENGTH} characters)"
+        )
+    if session is not None and len(quote) < MIN_DECISION_QUOTE:
+        raise KnowledgeError(
+            f"from a session, --from-user needs at least {MIN_DECISION_QUOTE} characters of your exact "
+            "words in --quote: a word or two of a prompt says nothing about which fact"
         )
     transcript = session_or_refuse(args, session)
     # the session's id; in an agent whose transcripts bosun cannot check (there is a session), its name
@@ -1133,8 +1136,10 @@ def decision_note(note: str, words: Record | None) -> str:
 
 
 def batch_quote_names(quote: str, refs: list[str]) -> bool:
-    """Whether <quote> holds every group number of <refs>, or the word all when they say all."""
+    """Whether <quote> holds every group number of <refs> (a range in it, 1-3, holds each), or the
+    word all when they say all."""
     words = set(re.findall(r"[a-z]+|\d+", quote.casefold()))
+    words |= {n for word in kr.RANGE_WORDS.findall(quote) for n in kr.range_numbers(word) or []}
     if kr.ALL in refs and kr.ALL in words:
         return True
     numbers = {match.group(1) for ref in refs if (match := kr.REF.match(ref))}
@@ -1227,15 +1232,16 @@ def needs_words(args: argparse.Namespace) -> bool:
 
 
 def supersede_words(
-    kb: KB, args: argparse.Namespace, session: agent_state.CallingSession | None
+    kb: KB, args: argparse.Namespace, session: agent_state.CallingSession | None, existing: str | None = None
 ) -> Record | None:
-    """The words a supersede stands on (needs_words). From an agent's session (<session>), checked as a
-    review's are (decision_words). From a terminal, words given are checked as a proposal's are
-    (--transcript)."""
+    """The words a supersede stands on (needs_words), typed after the facts it decides on were proposed:
+    the fact it closes, and the one that replaces it (--by, or <existing>, the recorded fact a correction
+    names). From an agent's session (<session>), checked as a review's are (decision_words). From a
+    terminal, words given are checked as a proposal's are (--transcript)."""
     if not needs_words(args):
         return None
-    facts = [km.get_fact(kb, args.id), *([km.get_fact(kb, args.by)] if args.by else [])]
-    words = decision_words(args, session, facts)
+    replacing = [km.get_fact(kb, fact_id) for fact_id in (args.by, existing) if fact_id]
+    words = decision_words(args, session, [km.get_fact(kb, args.id), *replacing])
     if words is None and args.from_user:
         words = user_source(args, None)
         if not words["verified"]:
@@ -1256,24 +1262,32 @@ def replacement_of(kb: KB, args: argparse.Namespace, words: Record | None) -> Pr
 
 
 def cmd_supersede(args: argparse.Namespace) -> str:
+    """Close a fact (km.supersede). A correction in my words to a value already recorded is a replacement by
+    that fact (--by); one on its sources alone, from a terminal too, re-observes it as `kg propose` would."""
     chosen = [args.value is not None, args.object is not None, args.by is not None, args.close]
     if sum(chosen) != 1:
         raise KnowledgeError("supersede takes exactly one of --value, --object, --by or --close")
     session = deciding_session(args) if needs_words(args) else None
     with opened(True, f"supersede {args.id}") as kb:
-        words = supersede_words(kb, args, session)
-        replacement = replacement_of(kb, args, words)
+        correcting = args.value is not None or args.object is not None
+        existing = km.recorded_correction(kb, args.id, args.object, args.value) if correcting else None
+        words = supersede_words(kb, args, session, existing)
+        by = existing if existing is not None and words is not None else args.by
+        replacement = None if by is not None else replacement_of(kb, args, words)
         note = decision_note(args.note or "", words)
-        messages = km.supersede(kb, args.id, replacement, args.by, note, reviewer=reviewer(words))
+        messages = km.supersede(kb, args.id, replacement, by, note, reviewer=reviewer(words))
     return "\n".join(messages)
 
 
 def cmd_forget(args: argparse.Namespace) -> str:
     with opened(True, "forget: a person deleted on request", dry_run=args.dry_run) as kb:
-        counts = km.forget(kb, args.entity)
+        gone = km.forget(kb, args.entity)
     done = "would delete" if args.dry_run else "deleted"
     history = "" if args.dry_run or not SETTINGS.git else "; the knowledge history was restarted without it"
-    return f"ok: {done} the person, {counts['facts']} facts and {counts['identifiers']} identifiers{history}"
+    said = f"ok: {done} the person, {gone.facts} facts and {gone.identifiers} identifiers{history}"
+    if gone.still_named:
+        said += "\nstill named in:" + "".join(f"\n  {place}" for place in gone.still_named)
+    return said
 
 
 def cmd_expire(args: argparse.Namespace) -> str:
@@ -1399,6 +1413,7 @@ def import_source(value: Any, now: datetime) -> Record:
 
 
 def import_entity(kb: KB, record: Record, report: ImportReport) -> None:
+    check_entity_fields(record)
     aliases = record.get("aliases") or []
     strong = aliases.get("strong", []) if isinstance(aliases, dict) else list(aliases)
     weak = (aliases.get("weak", []) if isinstance(aliases, dict) else []) + list(
@@ -1415,7 +1430,61 @@ def import_entity(kb: KB, record: Record, report: ImportReport) -> None:
         report.entities_added += 1
 
 
+def is_whole(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def is_string(value: object) -> bool:
+    return isinstance(value, str)
+
+
+def is_string_list(value: object) -> bool:
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+FieldCheck = tuple[str, Callable[[Any], bool], str]  # field, its test, what it must be
+# The types `kg propose` and `kg add-entity` take, for an import record's fields.
+FACT_FIELDS: tuple[FieldCheck, ...] = (
+    ("order", is_whole, "a whole number"),
+    ("observations", lambda value: is_whole(value) and value >= 1, "a whole number of at least 1"),
+    ("value", is_string, "a string"),
+    ("object", is_string, "a string"),
+    ("valid_from", is_string, "a string"),
+    ("rework", lambda value: isinstance(value, bool), "true or false"),
+)
+ENTITY_FIELDS: tuple[FieldCheck, ...] = (
+    ("name", is_string, "a string"),
+    ("summary", is_string, "a string"),
+    ("aliases", is_string_list, "a list of strings"),
+    ("aliases.strong", is_string_list, "a list of strings"),
+    ("aliases.weak", is_string_list, "a list of strings"),
+    ("weak_aliases", is_string_list, "a list of strings"),
+)
+
+
+def check_fields(fields: Mapping[str, Any], checks: tuple[FieldCheck, ...]) -> None:
+    """Refuse the first field present that is not of its type, naming it and its value."""
+    for name, test, what in checks:
+        value = fields.get(name)
+        if value is not None and not test(value):
+            raise KnowledgeError(f"{name} must be {what}, not {value!r}")
+
+
+def check_entity_fields(record: Record) -> None:
+    """An entity record's fields, its aliases a list or {strong, weak} lists."""
+    aliases = record.get("aliases")
+    if isinstance(aliases, dict):
+        record = {
+            **record,
+            "aliases": None,
+            "aliases.strong": aliases.get("strong"),
+            "aliases.weak": aliases.get("weak"),
+        }
+    check_fields(record, ENTITY_FIELDS)
+
+
 def import_fact(kb: KB, record: Record, report: ImportReport) -> None:
+    check_fields(record, FACT_FIELDS)
     sources = [import_source(s, kb.now) for s in record.get("sources") or [record.get("source")] if s]
     proposal = Proposal(
         str(record.get("subject", "")),
@@ -1428,7 +1497,7 @@ def import_fact(kb: KB, record: Record, report: ImportReport) -> None:
         record.get("order"),
         bool(record.get("rework")),
         str(record.get("note") or ""),
-        int(record.get("observations") or 1),
+        record.get("observations") or 1,
     )
     outcome = km.propose(kb, proposal)
     if outcome.action == "added":

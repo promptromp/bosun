@@ -10,7 +10,8 @@
 # By default the test skips setup steps and windows only print the claude command they would
 # run. --full runs setup and really launches Claude (it resumes your real named sessions).
 # Scheduling the wake needs admin rights: sudo in a terminal, otherwise (e.g. Claude Code's `!`)
-# the macOS administrator password dialog. Leave the lid open and the charger connected.
+# the macOS administrator password dialog. Keep the charger connected, and the lid open or an external display
+# connected (what bosun doctor checks).
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
 load_config

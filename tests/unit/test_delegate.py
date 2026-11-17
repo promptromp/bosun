@@ -21,6 +21,7 @@ import agent_state
 import delegate
 import knowledge
 import knowledge_query
+import ledger
 import workstreams
 from knowledge_model import KnowledgeError
 
@@ -810,10 +811,12 @@ MOVABLE = {**DELEGATION, "task": "investigate", "ask": "why?", "link": "https://
 class MoveTest(unittest.TestCase):
     """`delegate --update <id> --window <new>` moves the item."""
 
-    def move(self, argv: list[str], sends: list[int]) -> tuple[mock.Mock, mock.Mock, str, str]:
+    def move(
+        self, argv: list[str], sends: list[int], delegation: dict[str, Any] = MOVABLE
+    ) -> tuple[mock.Mock, mock.Mock, str, str]:
         record = mock.Mock(
             side_effect=lambda *a: (
-                completed(stdout=json.dumps(MOVABLE))
+                completed(stdout=json.dumps(delegation))
                 if a[0] == "delegation"
                 else completed(stdout="ok: moved")
             )
@@ -853,6 +856,21 @@ class MoveTest(unittest.TestCase):
             ),
         )
         self.assertEqual(err, "")
+
+    def test_an_item_a_window_took_on_itself_moves_with_the_shared_rules_only(self) -> None:
+        direct = {"window": "exports", "task": delegate.DIRECT_TASK, "at": "T0", "updates": 0}
+        send, record, _, err = self.move(["--window", "fresh"], sends=[0, 0], delegation=direct)
+        text = send.call_args_list[0].args[1]
+        self.assertTrue(text.startswith("Ledger item slack:C1/1 moves to this window from window exports"))
+        self.assertIn("where it was taken on at T0", text)
+        self.assertIn("Ledger id: slack:C1/1\nAsk: (not recorded; see bosun ledger show slack:C1/1)", text)
+        self.assertTrue(text.endswith(delegate.common_rules()))
+        self.assertNotIn("Investigate (no code change)", text)
+        self.assertEqual(record.call_args.args[0], "record-move")
+        self.assertEqual(err, "")
+
+    def test_the_direct_task_is_the_ledger_s(self) -> None:
+        self.assertEqual(delegate.DIRECT_TASK, ledger.DIRECT_TASK)
 
     def test_a_moved_task_does_not_get_the_pack_again(self) -> None:
         with (

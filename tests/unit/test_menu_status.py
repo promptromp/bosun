@@ -925,6 +925,51 @@ class GatherTestCase(unittest.TestCase):
         found = menu_status_live.gather(self.env, evening, run, kernel_time=lambda _name: None)
         self.assertEqual(found.gate, SessionGate(menu_status.RESTING))
 
+    def test_not_now_after_an_install_inside_the_hours_is_no_error_and_no_start(self) -> None:
+        """Installed at 09:40 on a scheduled day (after the 08:00 start, so no morning run today), and "Not
+        now" to starting the windows: before install.sh's stamp, morning-missing made this a red "bosun is not
+        running"; with it, all well, not starting (Start shown), and no problem."""
+        facts_json = {**WATCHDOG_FACTS, "session_exists": False, "windows": []}
+        run = FakeCommands({"sessions --json": json.dumps(GONE), "watchdog --facts": json.dumps(facts_json)})
+
+        def status(moment: datetime = NOW) -> dict[str, Any]:
+            found = menu_status_live.gather(self.env, moment, run, kernel_time=lambda _name: None)
+            return menu_status.snapshot(found, moment)
+
+        before = status()
+        self.assertEqual((before["level"], before["sentence"]), ("error", "bosun is not running"))
+        self.assertIn("No morning run today", " ".join(before["problems"]))
+        (self.state / watchdog.LOADED.format(role="morning")).write_text("2026-11-11 09:40:00\n")
+        after = status()
+        self.assertEqual(
+            (after["level"], after["sentence"], after["problems"]), ("ok", "bosun is not running", [])
+        )
+        self.assertIs(after["starting"], False)
+        # installed at 08:03, between the start and when the run is due (08:16): no run is coming, so not
+        # "starting", which would hide Start
+        (self.state / watchdog.LOADED.format(role="morning")).write_text("2026-11-11 08:03:00\n")
+        early = status(NOW.replace(hour=8, minute=5))
+        self.assertEqual(
+            (early["level"], early["sentence"], early["starting"]), ("ok", "bosun is not running", False)
+        )
+
+    def test_past_midnight_in_a_window_that_runs_past_it_the_day_is_the_one_it_began(self) -> None:
+        """08:00 to 01:00: at 00:30 the session missing since the evening is still expected (an error, with
+        Start shown), never "starting (the morning run)" of the new day."""
+        self.env["BOSUN_AWAKE_UNTIL"] = "01:00"
+        (self.state / "logs" / "morning-2026-11-11.log").write_text(
+            "2026-11-11 08:00:30 [morning] === morning run (trigger=launchd, session=acme, dry_run=0) ===\n"
+            "2026-11-11 08:03:00 [morning] morning run complete\n"
+        )
+        facts_json = {**WATCHDOG_FACTS, "session_exists": False, "windows": []}
+        run = FakeCommands({"sessions --json": json.dumps(GONE), "watchdog --facts": json.dumps(facts_json)})
+        night = datetime(2026, 11, 12, 0, 30)
+        found = menu_status_live.gather(self.env, night, run, kernel_time=lambda _name: None)
+        self.assertEqual(found.gate, SessionGate(menu_status.EXPECTED))
+        out = menu_status.snapshot(found, night)
+        self.assertEqual((out["level"], out["starting"]), ("error", False))
+        self.assertIn("tmux session 'acme' is not running", " ".join(out["problems"]))
+
     def test_a_morning_that_crashed_is_not_called_starting(self) -> None:
         # No end line, the launchd job not running with exit 1: outcome stays "running"
         header = (
@@ -1140,6 +1185,22 @@ class WatchdogJobTestCase(unittest.TestCase):
     def test_a_loaded_job_that_never_ran_is_a_new_one(self) -> None:
         self.assertEqual(snap(watchdog_job=WatchdogJob(True, True, None))["level"], "ok")
 
+    def test_a_job_that_never_ran_three_intervals_after_its_load_is_a_warning(self) -> None:
+        """A job that never ran is counted from its load stamp (reload_job's), not taken as new at any age."""
+        never = WatchdogJob(True, True, None, loaded_at=NOW - timedelta(minutes=20))
+        out = snap(watchdog_job=never)
+        self.assertEqual(out["level"], "warning")
+        self.assertIn("has not run since its job was loaded at 09:40", out["problems"][0])
+        self.assertIn("every 5 minutes", out["problems"][0])
+        fresh = WatchdogJob(True, True, None, loaded_at=NOW - timedelta(minutes=10))
+        self.assertEqual(snap(watchdog_job=fresh)["level"], "ok")
+        woke = WatchdogJob(
+            True, True, None, woke_at=NOW - timedelta(minutes=3), loaded_at=NOW - timedelta(days=1)
+        )
+        self.assertEqual(snap(watchdog_job=woke)["level"], "ok")  # the Mac just woke: its next run is near
+        reloaded = WatchdogJob(True, True, NOW - timedelta(hours=2), loaded_at=NOW - timedelta(minutes=4))
+        self.assertEqual(snap(watchdog_job=reloaded)["level"], "ok")  # loaded again since its last run
+
     def test_no_job_installed_is_no_problem_as_in_a_checkout(self) -> None:
         for job in (WatchdogJob(False, False), WatchdogJob(False, False, NOW - timedelta(days=9)), None):
             with self.subTest(job=job):
@@ -1264,6 +1325,73 @@ class WatchdogJobFactsTestCase(unittest.TestCase):
                 environment(Path(tmp)), NOW, good_commands(), kernel_time=lambda _name: None
             )
         self.assertIsNone(found.watchdog_job)
+
+
+class DoctorWatchdogTestCase(unittest.TestCase):
+    """`bosun doctor`'s watchdog line: the status's own judgement, never the last full run alone."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.state = Path(tmp.name)
+        self.logs = self.state / "logs"
+        self.logs.mkdir()
+        (self.state / "watchdog.json").write_text(json.dumps({"last_run": "2026-11-11 05:00:00"}))
+
+    def said(self, woke: datetime | None = None) -> tuple[str, str]:
+        times = {menu_status_live.WAKETIME: woke}
+        return menu_status_live.doctor_watchdog(self.state, self.logs, NOW, times.get)
+
+    def ran(self, minutes_ago: int) -> None:
+        out = self.logs / "watchdog.launchd.out"
+        out.write_text("update in progress: skipping this watchdog run\n")
+        stamp = (NOW - timedelta(minutes=minutes_ago)).timestamp()
+        os.utime(out, (stamp, stamp))
+
+    def test_a_watchdog_whose_runs_stopped_warns_as_the_status_does(self) -> None:
+        level, text = self.said()
+        self.assertEqual(level, "warn")
+        self.assertIn("bosun's watchdog last ran at 05:00", text)
+        self.assertIn(str(self.logs), text)
+
+    def test_runs_it_skipped_for_an_update_or_a_quit_count(self) -> None:
+        self.ran(2)
+        self.assertEqual(self.said(), ("ok", "last ran at 09:58"))
+
+    def test_a_mac_that_just_woke_is_no_stale_watchdog(self) -> None:
+        self.assertEqual(self.said(woke=NOW - timedelta(minutes=3))[0], "ok")
+
+    def test_while_bosun_is_quit_it_says_the_runs_are_skipped(self) -> None:
+        quit_state.write(self.state, True, now=GONE_AT)
+        level, text = self.said()
+        self.assertEqual(level, "ok")
+        self.assertIn("skips its runs while bosun is quit", text)
+
+    def test_while_an_update_runs_it_says_so(self) -> None:
+        with mock.patch.object(update_state, "running", return_value=True):
+            self.assertEqual(self.said()[1], "an update runs, and it skips its runs until the update ends")
+
+    def test_a_job_that_never_ran_is_a_new_one(self) -> None:
+        (self.state / "watchdog.json").unlink()
+        self.assertEqual(self.said(), ("ok", "it has not run yet"))
+
+    def test_a_job_that_never_ran_long_after_its_load_warns(self) -> None:
+        (self.state / "watchdog.json").unlink()
+        stamp = self.state / watchdog.LOADED.format(role="watchdog")
+        stamp.write_text("2026-11-11 09:52:00\n")
+        self.assertEqual(self.said(), ("ok", "it has not run yet (its job was loaded at 09:52)"))
+        stamp.write_text("2026-11-11 09:00:00\n")
+        level, text = self.said()
+        self.assertEqual(level, "warn")
+        self.assertIn("has not run since its job was loaded at 09:00", text)
+
+    def test_the_command_prints_the_line(self) -> None:
+        self.ran(1)
+        out = io.StringIO()
+        argv = ["--doctor-watchdog", "--state-dir", str(self.state), "--log-dir", str(self.logs)]
+        with contextlib.redirect_stdout(out):
+            status = menu_status_live.main(argv, now=NOW, kernel_time=lambda _name: None)
+        self.assertEqual((status, out.getvalue()), (0, "ok\tlast ran at 09:59\n"))
 
 
 class WatchdogWakeTestCase(unittest.TestCase):

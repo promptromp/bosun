@@ -13,9 +13,11 @@ import tempfile
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
+import agent_state
 import console_files
 import console_kb
 import console_kg_views as kg_views
@@ -127,8 +129,11 @@ def library_models(config: Path) -> dict[str, Any]:
 
 
 def kg(*argv: str) -> str:
+    """A kg command, from a terminal: the check itself may run inside an agent's session, which must not
+    count (a decision from a session needs my words)."""
     args = knowledge.build_parser().parse_args(list(argv))
-    result = args.func(args)
+    with mock.patch.object(agent_state, "calling_session", return_value=None):
+        result = args.func(args)
     return str(result[0] if isinstance(result, tuple) else result)
 
 
@@ -157,7 +162,9 @@ def knowledge_base(root: Path) -> None:
     status = next(
         f["id"] for f in knowledge.load(knowledge.paths()).facts.values() if f["predicate"] == "status"
     )
-    kg("supersede", status, "--value", "running", "--source", "ledger:task:2026-10-20/veembc")
+    out = kg("supersede", status, "--value", "running", "--source", "ledger:task:2026-10-20/veembc")
+    # A correction on a source waits for review: I replace the status by it, from a terminal.
+    kg("supersede", status, "--by", out.removeprefix("ok: ").split()[0])
     kg("batch")
 
 

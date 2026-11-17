@@ -33,6 +33,7 @@ from typing import Any
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import awake
 import claude_state
 import event_model
 import events
@@ -174,17 +175,25 @@ def watchdog_status(settings: Settings, facts: dict[str, Any], now: datetime | N
 
 
 def window_logins(windows: list[dict[str, Any]], state: login.State) -> dict[str, login.Verdict]:
-    """Each Claude window's login verdict from its transcript (none without one: no pane is read)."""
-    found = {}
+    """Each Claude window's login verdict from its transcript, the last login check and the other
+    windows (lib/login.py's window_verdicts; none without a transcript: no pane is read)."""
+    transcripts: dict[str, Path | None] = {}
     for window in windows:
         transcript = (window.get("agent") or {}).get("transcript")
         if transcript:
-            found[str(window["name"])] = login.window_verdict(Path(transcript), state.last_probe)
-    return found
+            transcripts[str(window["name"])] = Path(transcript)
+    return login.window_verdicts(transcripts, state.last_probe)
 
 
-def morning_log(settings: Settings) -> Path:
-    return settings.log_dir / f"morning-{datetime.now():%Y-%m-%d}.log"
+def morning_log(settings: Settings, now: datetime | None = None) -> Path:
+    """The morning run's log for now: the workday's (awake.workday), as the watchdog reads it and `bosun
+    morning` writes it; today's when the schedule does not load."""
+    moment = now or datetime.now()
+    try:
+        day = awake.workday(watchdog_config(settings).awake, moment)
+    except LiveError:
+        day = moment.date()
+    return settings.log_dir / awake.morning_log_name(day)
 
 
 @dataclass

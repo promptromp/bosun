@@ -269,7 +269,9 @@ def local(moment: datetime) -> datetime:
 
 
 def clip(text: str, limit: int = LINE_LIMIT) -> str:
-    text = " ".join(text.split())
+    """<text> redacted, on one line, cut at <limit>: redacted whole first, since the cut could drop a
+    private key's END marker or shorten a token below its rule's length."""
+    text = " ".join(redact(text).split())
     return text if len(text) <= limit else text[: limit - 3] + "..."
 
 

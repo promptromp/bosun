@@ -43,9 +43,9 @@ starting run as it does inside the hours (no grey dot, no second Start).
 
 `attention` lists the windows that need you, each as `{"window", "problem"}`, so the app can offer to open one
 (`bosun attach <window>`): first the problems about one window (a watchdog finding that names its window:
-stalled-start, waiting, long-shell, spend-limit, context-size), in the order of `problems`, then each window
-waiting at a prompt that the waiting check has not named yet (`waiting`, which no level counts), with a line
-of its own. A window can be listed more than once, one entry per problem.
+stalled-start, waiting, long-shell, spend-limit, context-size, no-credit), in the order of `problems`, then
+each window waiting at a prompt that the waiting check has not named yet (`waiting`, which no level counts),
+with a line of its own. A window can be listed more than once, one entry per problem.
 """
 
 from __future__ import annotations
@@ -114,6 +114,9 @@ class WatchdogJob:
     last_run: datetime | None = None
     woke_at: datetime | None = None  # the Mac's last wake (local and naive); None when it could not be read
     booted_at: datetime | None = None  # the Mac's boot (local and naive); None when it could not be read
+    loaded_at: datetime | None = (
+        None  # when the job was last loaded (reload_job's stamp); None: it does not say
+    )
 
 
 @dataclass(frozen=True)
@@ -254,12 +257,14 @@ def watchdog_stale(job: WatchdogJob, now: datetime) -> bool:
     """A loaded job whose last run is older than three of its intervals of the Mac being awake. A Mac that
     slept does not run it, and wakes to a last run that is hours old with the job's next run a few minutes
     away, so the wake counts as a run; a Mac that was off starts its jobs at login, the watchdog's first run
-    five minutes after, so the boot counts as one too. A time later than <now> (the clock moved back since) is
-    left out, never taken as now: each look would count from its own now and never be stale; with none left
-    there is nothing to count from. A job that never ran is a new one."""
-    if job.last_run is None:
+    five minutes after, so the boot counts as one too, and so does the job's load (its first run comes five
+    minutes after that). A time later than <now> (the clock moved back since) is left out, never taken as
+    now: each look would count from its own now and never be stale; with none left there is nothing to count
+    from. A job that never ran is counted from its load; with neither known it is a new one."""
+    if job.last_run is None and job.loaded_at is None:
         return False
-    times = [t for t in (job.last_run, job.woke_at, job.booted_at) if t is not None and t <= now]
+    known = (job.last_run, job.loaded_at, job.woke_at, job.booted_at)
+    times = [t for t in known if t is not None and t <= now]
     if not times:
         return False
     return now - max(times) > timedelta(seconds=WATCHDOG_STALE_RUNS * WATCHDOG_INTERVAL_SECONDS)
@@ -277,13 +282,16 @@ def watchdog_problem(facts: StatusFacts, now: datetime) -> str | None:
             "bosun's watchdog job is not loaded, so nothing is checking on bosun or alerting you. "
             "`bosun doctor` says so too; install.sh loads it again"
         )
-    if job.last_run is not None and watchdog_stale(job, now):
-        return (
-            f"bosun's watchdog last ran at {when(job.last_run, now)}, though its job runs every "
-            f"{WATCHDOG_INTERVAL_SECONDS // 60} minutes: it is loaded and not working "
-            f"(see watchdog.launchd.err in {facts.log_dir or 'the log folder'})"
-        )
-    return None
+    if not watchdog_stale(job, now):
+        return None
+    if job.last_run is not None:
+        ran = f"bosun's watchdog last ran at {when(job.last_run, now)}"
+    else:  # watchdog_stale counts a job that never ran from its load
+        ran = f"bosun's watchdog has not run since its job was loaded at {when(job.loaded_at or now, now)}"
+    return (
+        f"{ran}, though its job runs every {WATCHDOG_INTERVAL_SECONDS // 60} minutes: it is loaded and not "
+        f"working (see watchdog.launchd.err in {facts.log_dir or 'the log folder'})"
+    )
 
 
 def problems_of(facts: StatusFacts, missing: bool, now: datetime) -> list[tuple[str, str]]:

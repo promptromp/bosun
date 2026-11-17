@@ -18,15 +18,17 @@
 #   propose ... --from-user --quote '<my exact words>' [--transcript <session.jsonl>]
 #                                      record a fact (an object entity or a --value). Proposing the
 #                                      same fact again re-observes it (adds the source). It is
-#                                      confirmed at once only when: the quote is in a prompt I typed
-#                                      in the last 24 hours in the session; or two trusted sources of
-#                                      different kinds back a low-risk fact naming no person; or a
-#                                      profile source gives a person's title or timezone. Slack, PR,
-#                                      ticket and doc text never confirms anything. Otherwise it
-#                                      waits for kg batch. The session is the agent's session that
-#                                      ran kg (a --transcript of another is refused; in an agent
-#                                      whose words bosun cannot check, the fact stays proposed);
-#                                      from a terminal, the one --transcript names, which it needs
+#                                      confirmed at once only when: the quote is whole words of a
+#                                      prompt I typed in the last 24 hours in the session (from an
+#                                      agent's session, at least 8 characters of them); or two
+#                                      trusted sources of different kinds back a low-risk fact
+#                                      naming no person; or a profile source gives a person's title
+#                                      or timezone. Slack, PR, ticket and doc text never confirms
+#                                      anything. Otherwise it waits for kg batch. The session is
+#                                      the agent's session that ran kg (a --transcript of another is
+#                                      refused; in an agent whose words bosun cannot check, the fact
+#                                      stays proposed); from a terminal, the one --transcript names,
+#                                      which it needs
 #   confirm <fact-id|group-key> ... [--from-user --quote Q] [--note N]
 #   reject <fact-id|group-key> ... [--from-user --quote Q] [--note N]
 #                                      confirm or reject facts after review (a group key: an entity
@@ -40,7 +42,11 @@
 #                                      close a fact (valid_to, superseded_by), never delete it; a
 #                                      correction in my words needs a quote that counts. From an
 #                                      agent's session, --by and --close need one too, as confirm
-#                                      (a correction with a --source needs none)
+#                                      (a correction with a --source needs none). A correction with
+#                                      only --source is confirmed only as propose would confirm it;
+#                                      otherwise it waits for kg batch and the fact stays open. To a
+#                                      value already recorded, it re-observes that fact (in my words:
+#                                      --by that fact); to the fact's own value, it is refused
 #   batch [--cap N] [--max-facts N] [--json]
 #                                      the review batch: proposals grouped by entity and axis, one
 #                                      numbered list, rework-preventing groups first; at most --cap
@@ -50,11 +56,13 @@
 #   batch apply '<decision>' | --confirm 1,3 --reject 2b [--skip 4]  [--from-user --quote Q]
 #               [--dry-run]
 #                                      answer the last batch in one line: 'confirm all except 2b'
-#                                      (2b stays proposed), 'confirm 1,3 reject 2b', 'skip 4';
-#                                      unanswered facts stay proposed for a later batch. From an
-#                                      agent's session, only with a quote of my words, as confirm,
-#                                      that holds each group number the decision names (or all,
-#                                      when it says all)
+#                                      (2b stays proposed), 'confirm 1,3 reject 2b', 'confirm 1-3',
+#                                      'skip 4' (anything but words, commas, spaces and semicolons
+#                                      is refused); unanswered facts stay proposed for a later
+#                                      batch. From an agent's session, only with a quote of my
+#                                      words, as confirm, that holds each group number the decision
+#                                      names (a range such as 1-3 holds each in it; or all, when it
+#                                      says all)
 #   import <file> [--dry-run | --apply] [--auto-confirm]
 #                                      entities and facts from a JSON or JSON-lines file, all as
 #                                      proposals (--auto-confirm: apply the rules above); a dry run
@@ -63,24 +71,35 @@
 #                                      a restricted identifier for mentions (never in context packs)
 #   forget person/<slug> [--dry-run]   delete a person on request: entity, facts, identifiers, their
 #                                      changes in the journal (placeholders) and the git history
-#                                      (restarted); only a hash and counts are kept
+#                                      (restarted); of those only a hash and counts are kept. Their
+#                                      name as free text elsewhere (another entity's summary or
+#                                      aliases, a fact's value or note, a quote) it does not reach,
+#                                      and lists as "still named in": the shared journal and the
+#                                      history keep those texts even if you edit them, and a fact's
+#                                      text can only be superseded, which keeps the old one
 #   expire [--dry-run]                 record expired proposals (unreviewed for 30 days) and delete
 #                                      person facts not re-observed for 12 months
 #
 # Reading:
 #   lookup <entity> [--max-tokens N] [--json]
-#                                      current confirmed facts with sources, links to it, what waits
+#                                      current confirmed facts with sources, links to it (a person or
+#                                      team that reviews, owns or approves it, with where they prefer
+#                                      to be asked: their own confirmed prefers_channel), what waits
 #                                      (at most N tokens, default 800, and 5 waiting facts, then
 #                                      counts; --json is complete)
 #   facts <entity> [--predicate P] [--as-of T] [--status confirmed|proposed|rejected|expired|all]
 #         [--closed] [--json]          facts about an entity, now or as they held at --as-of
 #   search <text> [--limit N]          entities (10 by default) by name, alias, related term, summary or
-#                                      fact text
+#                                      fact text: the whole text first, then its words (of 3 or more
+#                                      characters, no "who", "the"...), each at the start of a word,
+#                                      one in a name or alias counting most, more with the name's words
+#                                      in a row; never an id's type (person/)
 #   neighbors <entity> [--hops N]      linked entities within N hops (default 1, at most 3)
 #   context --for <entity|repo|topic> [--for ...] [--max-tokens N]
 #                                      a small pack of confirmed, cited facts (about 1.5k tokens,
 #                                      shared by the targets; a person's own profile facts are left
-#                                      out unless the person is the target; owner/repo finds repo/repo)
+#                                      out unless the person is the target, which only naming them
+#                                      makes them, never a topic; owner/repo finds repo/repo)
 #   lint [--stale-days N] [--json] [--strict]
 #                                      contradictions, expired proposals, retention, stale facts, alias
 #                                      collisions, merge suggestions, orphans (--strict: exit 1 if any)

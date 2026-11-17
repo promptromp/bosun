@@ -48,6 +48,7 @@ const SORT_CHOICES = [
   ["kind", "Kind"],
 ];
 const CLAUDE_STATUSES = ["idle", "busy", "shell", "waiting"];
+const LOGIN_PROBLEMS = ["needs-login", "no-credit"]; // lib/login.py's window states that need you
 const SECONDS = { d: 86400, h: 3600, m: 60 };
 const STATS_PERIODS = [7, 30, 90]; // /api/stats takes these and nothing else
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -915,7 +916,7 @@ function windowCard(w) {
       ["model", model],
       ["agent", agent ? [agent.harness || "", agent.version ? ` v${agent.version}` : "", agent.name ? ` ${agent.name}` : ""].join("") : ""],
       ["folder", w.dir ? el("span", { className: "dir mono" }, w.dir) : ""],
-      ["login", w.login ? el("span", { className: w.login.state === "needs-login" ? "problem" : "" }, `${w.login.state}: ${w.login.detail}`) : ""],
+      ["login", w.login ? el("span", { className: LOGIN_PROBLEMS.includes(w.login.state) ? "problem" : "" }, `${w.login.state}: ${w.login.detail}`) : ""],
     ]),
     heldList(w),
     w.last_report
@@ -1001,7 +1002,7 @@ function loginCard(l) {
       ["state", [badge(l.state, level), " ", l.detail]],
       ["last check", l.last_check ? `${when(l.last_check.at)}: ${l.last_check.outcome}` : "none yet"],
       ["paused", l.gated.length ? l.gated.map((g) => el("div", {}, `@${g.window} since ${when(g.since)}`)) : ""],
-      ["windows", l.windows.length ? l.windows.map((w) => el("div", { className: "small" }, `@${w.name}: ${w.state}`)) : ""],
+      ["windows", l.windows.length ? l.windows.map((w) => el("div", { className: LOGIN_PROBLEMS.includes(w.state) ? "small problem" : "small" }, `@${w.name}: ${w.state}`)) : ""],
     ]),
   );
 }
@@ -3909,6 +3910,13 @@ async function poll() {
   else updateNeedsBadge();
 }
 
+// "Skip to content" focuses the main region and leaves the hash alone: the hash is the route, so
+// following its #main would show the default view and send a decision still waiting for Z.
+function skipToContent(event) {
+  event.preventDefault();
+  document.getElementById("main").focus();
+}
+
 window.addEventListener("pagehide", () => commitPending());
 window.addEventListener("hashchange", () => {
   render();
@@ -3918,6 +3926,8 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden) poll();
 });
 document.addEventListener("DOMContentLoaded", () => {
+  const skip = document.querySelector(".skip-link");
+  if (skip) skip.addEventListener("click", skipToContent);
   render();
   poll();
   pollTimer = setInterval(poll, POLL_MS);

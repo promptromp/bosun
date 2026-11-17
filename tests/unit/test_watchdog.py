@@ -19,7 +19,9 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import app_release
+import awake
 import claude_state
+import events
 import login
 import quit_state
 import signals
@@ -247,6 +249,54 @@ class MorningMissingTest(WatchdogCase):
         self.morning_run(MONDAY, dry_run="1")
         self.assertEqual(len(self.runs(at(MONDAY, "08:20"), 2)), 1)
 
+    def installed(self, moment: datetime) -> None:
+        (self.state_dir / watchdog.LOADED.format(role="morning")).write_text(f"{moment:%Y-%m-%d %H:%M:%S}\n")
+
+    def test_set_up_after_the_start_time_owes_no_run_today(self) -> None:
+        """Installed on a scheduled day after the start time: the morning job was not loaded at 08:00, so
+        no alert today, and the gate says why; tomorrow's run is owed as usual."""
+        self.installed(at(MONDAY, "14:00:30"))
+        self.assertEqual(self.runs(at(MONDAY, "14:05"), 6), [])
+        ctx = self.inputs(at(MONDAY, "14:10")).context(watchdog.State())
+        self.assertIn("loaded at 14:00", watchdog.check_morning_missing(ctx).note)
+        self.assertEqual(
+            watchdog.session_gate_kind(ctx),
+            (
+                watchdog.GATE_NO_MORNING,
+                "no morning run today: its launchd job was loaded at 14:00, after its time",
+            ),
+        )
+        self.assertEqual(len(self.runs(at(TUESDAY, "08:20"), 2)), 1)
+
+    def test_on_install_day_a_session_started_after_the_load_is_watched(self) -> None:
+        """No run is owed today, but the wizard's Start (`bosun start`) made the session after the job was
+        loaded: the session, check-in and orchestrator checks expect it from then on, and a crash alerts."""
+        self.installed(at(MONDAY, "14:00"))
+        (self.state_dir / "started-main").write_text(f"{MONDAY} 14:01:00\n")
+        ctx = self.inputs(at(MONDAY, "14:10")).context(watchdog.State())
+        self.assertIsNone(watchdog.session_gate_kind(ctx))
+        self.assertEqual(watchdog.check_morning_missing(ctx).findings, [])  # still no run owed
+        gone = Facts(morning_job_state="not running", morning_job_exit="0")
+        sent = self.runs(at(MONDAY, "15:00"), 2, facts=gone)
+        self.assertEqual(len(sent), 1)
+        self.assertIn("tmux session 'main' is not running", sent[0])
+        (self.state_dir / "started-main").write_text(f"{MONDAY} 13:59:00\n")  # before the load: not today's
+        ctx = self.inputs(at(MONDAY, "14:10")).context(watchdog.State())
+        self.assertEqual(watchdog.session_gate_kind(ctx)[0], watchdog.GATE_NO_MORNING)  # type: ignore[index]
+
+    def test_set_up_after_the_start_time_but_before_the_run_is_due_is_not_starting(self) -> None:
+        """At 08:05, between the start time and when the run is due: no run is coming today, so the gate is
+        not "not due yet", which the menu would show as a run starting."""
+        self.installed(at(MONDAY, "08:03"))
+        ctx = self.inputs(at(MONDAY, "08:05")).context(watchdog.State())
+        self.assertEqual(watchdog.session_gate_kind(ctx)[0], watchdog.GATE_NO_MORNING)  # type: ignore[index]
+
+    def test_set_up_before_the_start_time_still_owes_the_run(self) -> None:
+        self.installed(at(MONDAY, "07:59"))
+        self.assertEqual(len(self.runs(at(MONDAY, "08:20"), 2)), 1)
+        self.installed(at(TUESDAY, "23:00"))  # a stamp later than now (the clock moved back) owes it too
+        self.assertEqual(len(self.runs(at(TUESDAY, "08:20"), 2)), 1)
+
 
 class MorningFailedTest(WatchdogCase):
     def test_problems_alert_once_with_the_failing_step(self) -> None:
@@ -291,6 +341,27 @@ class MorningFailedTest(WatchdogCase):
         sent = self.runs(at(MONDAY, "08:50"), 3)
         self.assertEqual(len(sent), 1)
         self.assertIn("is still not done", sent[0])
+
+    def test_a_run_that_skipped_for_a_quit_is_an_outcome(self) -> None:
+        """The morning start paused (or a quit during the run): its end line says it was skipped, so after
+        `bosun start` it is neither a run still going nor a failed one, and the session is expected again."""
+        for line in (
+            "morning run skipped: the morning start is paused (bosun quit at 17:02); start bosun to resume",
+            "morning run skipped: bosun quit during the run, so it did not start bosun",
+        ):
+            with self.subTest(line=line):
+                (self.log_dir / f"morning-{MONDAY}.log").unlink(missing_ok=True)
+                self.morning_run(MONDAY, [f"{MONDAY} 08:01:06 [morning] {line}"])
+                run = watchdog.last_real_run(self.log_dir / f"morning-{MONDAY}.log")
+                self.assertEqual(run.outcome if run else None, "skipped")
+                ctx = self.inputs(at(MONDAY, "10:10")).context(watchdog.State())
+                self.assertEqual(
+                    watchdog.check_morning_failed(ctx).note, "the 08:01 run was skipped: bosun was quit"
+                )
+                self.assertIsNone(watchdog.session_gate_kind(ctx))
+        self.assertEqual(self.runs(at(MONDAY, "10:10"), 3), [])
+        gone = Facts(morning_job_state="not running", morning_job_exit="0")
+        self.assertEqual(len(self.runs(at(MONDAY, "11:00"), 3, facts=gone)), 1)  # session-missing alerts
 
     def test_a_launchd_run_that_crashed_alerts(self) -> None:
         self.morning_run(MONDAY, [f"{MONDAY} 08:01:06 [morning] network is up"])
@@ -437,6 +508,30 @@ class LogErrorsTest(WatchdogCase):
         self.morning_run(TUESDAY)
         self.assertIn("at night", self.watch(at(TUESDAY, "08:00"))[0])
 
+    def test_lines_held_for_a_finding_being_confirmed_go_out_with_it(self) -> None:
+        # The session dies as the ERROR line is written: the run that sees both holds the log error until
+        # session-missing is confirmed, and the next run reads the same lines again and sends both at once.
+        gone = Facts(morning_job_state="not running", morning_job_exit="0")
+        self.assertEqual(self.watch(at(MONDAY, "10:00")), [])
+        self.append(self.checkin, self.error("something broke"))
+        self.assertEqual(self.watch(at(MONDAY, "10:05"), facts=gone), [])
+        sent = self.watch(at(MONDAY, "10:10"), facts=gone)
+        self.assertEqual(len(sent), 1)
+        self.assertIn("tmux session 'main' is not running", sent[0])
+        self.assertIn("ERROR: something broke", sent[0])
+        self.assertEqual(self.runs(at(MONDAY, "10:15"), 3, facts=gone), [])  # each once
+
+    def test_a_new_line_while_held_goes_out_with_the_held_ones(self) -> None:
+        gone = Facts(morning_job_state="not running", morning_job_exit="0")
+        self.watch(at(MONDAY, "10:00"))
+        self.append(self.checkin, self.error("first"))
+        self.assertEqual(self.watch(at(MONDAY, "10:05"), facts=gone), [])
+        self.append(self.checkin, self.error("second"))
+        sent = self.runs(at(MONDAY, "10:10"), 4, facts=gone)
+        self.assertEqual(len(sent), 1)
+        self.assertIn("tmux session 'main' is not running", sent[0])
+        self.assertIn("2 new ERROR line(s)", sent[0])
+
 
 class SessionTest(WatchdogCase):
     def setUp(self) -> None:
@@ -478,6 +573,70 @@ class SessionTest(WatchdogCase):
     def test_no_session_alert_after_the_awake_window(self) -> None:
         self.morning_run(MONDAY)
         self.assertEqual(self.runs(at(MONDAY, "20:00"), 3, facts=self.gone), [])
+
+
+class PastMidnightTest(WatchdogCase):
+    """An awake window that runs past midnight (BOSUN_AWAKE_UNTIL at or before the start): from 00:00 to its
+    end the day is still the one the window began on: for the gate, the morning's due time, log and keys."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.config = replace(self.config, awake_until=time(1, 0))
+        self.gone = Facts(morning_job_state="not running", morning_job_exit="0")
+
+    def gate(self, now: datetime) -> tuple[str, str] | None:
+        return watchdog.session_gate_kind(self.inputs(now, self.gone).context(watchdog.State()))
+
+    def test_the_workday_is_the_day_the_window_began(self) -> None:
+        def workday(now: datetime) -> date:
+            return self.inputs(now).context(watchdog.State()).workday
+
+        self.assertEqual(workday(at(TUESDAY, "00:30")), MONDAY)
+        self.assertEqual(workday(at(TUESDAY, "01:00")), TUESDAY)  # the window is over
+        self.assertEqual(workday(at(MONDAY, "23:30")), MONDAY)
+        self.assertEqual(workday(at(SATURDAY, "00:30")), FRIDAY)
+
+    def test_after_midnight_the_session_is_still_expected(self) -> None:
+        self.morning_run(MONDAY)
+        self.assertIsNone(self.gate(at(TUESDAY, "00:30")))  # not "not expected before 08:16" of Tuesday
+        ctx = self.inputs(at(TUESDAY, "00:30")).context(watchdog.State())
+        self.assertEqual(ctx.morning_log.name, f"morning-{MONDAY}.log")
+        self.assertEqual(watchdog.check_morning_missing(ctx).note, "ran at 08:01 (launchd)")
+
+    def test_a_crash_before_midnight_is_confirmed_after_it(self) -> None:
+        self.morning_run(MONDAY)
+        self.assertEqual(self.watch(at(MONDAY, "23:57"), facts=self.gone), [])  # seen once: confirming
+        sent = self.watch(at(TUESDAY, "00:02"), facts=self.gone)
+        self.assertEqual(len(sent), 1)
+        self.assertIn("tmux session 'main' is not running", sent[0])
+        self.assertIn(f"session-missing:{MONDAY}", self.state()["alerted"])
+
+    def test_a_late_run_past_midnight_is_the_workday_s(self) -> None:
+        """The Mac asleep all day, opened at 00:30 Tuesday: launchd runs the missed 08:00 job then, and `bosun
+        morning` writes it in the workday's log (awake.py morning-log), which the watchdog reads: no false
+        "No morning run today", and the session is expected."""
+        name = awake.morning_log_name(awake.workday(self.config.awake, at(TUESDAY, "00:30")))
+        self.assertEqual(name, f"morning-{MONDAY}.log")
+        (self.log_dir / name).write_text(
+            f"{TUESDAY} 00:30:00 [morning] === morning run (trigger=launchd, session=main, dry_run=0) ===\n"
+            f"{TUESDAY} 00:32:00 [morning] morning run complete\n"
+        )
+        ctx = self.inputs(at(TUESDAY, "00:40")).context(watchdog.State())
+        self.assertEqual(watchdog.check_morning_missing(ctx).findings, [])
+        self.assertIsNone(watchdog.session_gate_kind(ctx))
+        self.assertEqual(self.runs(at(TUESDAY, "00:40"), 2), [])
+
+    def test_a_stop_before_or_after_midnight_counts_until_the_window_ends(self) -> None:
+        self.morning_run(MONDAY)
+        for stopped in (f"{MONDAY} 23:50:00", f"{TUESDAY} 00:10:00"):
+            with self.subTest(stopped=stopped):
+                (self.state_dir / "stopped-main").write_text(f"{stopped}\n")
+                self.assertEqual(self.gate(at(TUESDAY, "00:30"))[0], watchdog.GATE_STOPPED)  # type: ignore[index]
+        self.morning_run(TUESDAY)
+        (self.state_dir / "stopped-main").write_text(f"{MONDAY} 23:50:00\n")
+        self.assertIsNone(self.gate(at(TUESDAY, "10:00")))  # Monday's stop is over by Tuesday's window
+        (self.state_dir / "stopped-main").write_text(f"{TUESDAY} 00:10:00\n")
+        self.assertEqual(self.gate(at(TUESDAY, "10:00"))[0], watchdog.GATE_STOPPED)  # type: ignore[index]
 
 
 class CheckinTest(WatchdogCase):
@@ -1016,8 +1175,8 @@ class InputsTest(unittest.TestCase):
         self.assertIn("unknown check", err.getvalue())
 
 
-class LoginExpiredTest(WatchdogCase):
-    """An expired or revoked Claude Code login (fictional transcripts)."""
+class TranscriptCase(WatchdogCase):
+    """Windows whose Claude has a transcript (fictional ones), each with a normal reply first."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -1047,6 +1206,16 @@ class LoginExpiredTest(WatchdogCase):
         message = {"model": "<synthetic>", "content": [{"type": "text", "text": "Login expired"}]}
         entry = {"type": "assistant", "timestamp": iso(moment), "isApiErrorMessage": True, "message": message}
         self.add(pid, {**entry, "error": "authentication_failed"})
+
+    def credit_error(self, pid: int, moment: datetime) -> None:
+        """Claude Code 2.1.308's reply to every prompt while its API key's organization has no credit."""
+        message = {"model": "<synthetic>", "content": [{"type": "text", "text": "Credit balance is too low"}]}
+        entry = {"type": "assistant", "timestamp": iso(moment), "isApiErrorMessage": True, "message": message}
+        self.add(pid, {**entry, "error": "billing_error", "apiErrorStatus": 400})
+
+
+class LoginExpiredTest(TranscriptCase):
+    """An expired or revoked Claude Code login."""
 
     def test_healthy_windows_do_not_alert(self) -> None:
         self.assertEqual(self.runs(at(MONDAY, "10:00"), 3, only="login-expired"), [])
@@ -1103,6 +1272,129 @@ class LoginExpiredTest(WatchdogCase):
             self.inputs(at(MONDAY, "09:05")), watchdog.select_checks("login-expired")
         )
         self.assertIn("FAIL  login-expired", text)
+
+    def test_a_login_check_that_worked_clears_an_idle_window_and_the_next_outage_alerts(self) -> None:
+        # Overnight both windows got a login error; in the morning a check-in's login check works and
+        # the orchestrator replies, while alpha gets no prompt.
+        self.login_error(ORCH_PID, at(MONDAY, "21:00"))
+        self.login_error(REPO_PID, at(MONDAY, "21:05"))
+        self.assertEqual(len(self.watch(at(TUESDAY, "08:05"), only="login-expired")), 1)
+        worked = login.Probe(at(TUESDAY, "08:10").astimezone(UTC), claude_state.PROBE_OK)
+        login.State(probe=worked.to_json()).save(self.state_dir)
+        self.assertEqual(self.watch(at(TUESDAY, "08:15"), only="login-expired"), [])
+        self.assertNotIn("login-expired:outage", self.state()["alerted"])
+        self.login_error(ORCH_PID, at(TUESDAY, "11:00"))
+        self.assertEqual(len(self.watch(at(TUESDAY, "11:05"), only="login-expired")), 1)
+
+    def test_a_reply_in_another_window_clears_it(self) -> None:
+        self.login_error(REPO_PID, at(MONDAY, "09:00"))
+        self.reply(ORCH_PID, at(MONDAY, "09:30"))
+        self.assertEqual(self.watch(at(MONDAY, "09:35"), only="login-expired"), [])
+
+    def test_credit_errors_are_no_login_error(self) -> None:
+        self.credit_error(ORCH_PID, at(MONDAY, "09:00"))
+        self.assertEqual(self.watch(at(MONDAY, "09:05"), only="login-expired"), [])
+
+
+class NoCreditTest(TranscriptCase):
+    """A window whose every reply is "Credit balance too low"."""
+
+    def test_healthy_windows_do_not_alert(self) -> None:
+        self.assertEqual(self.runs(at(MONDAY, "10:00"), 3, only="no-credit"), [])
+
+    def test_it_alerts_once_per_row_naming_the_window_and_what_to_do(self) -> None:
+        self.credit_error(ORCH_PID, at(MONDAY, "09:00"))
+        sent = self.watch(at(MONDAY, "09:05"), only="no-credit")
+        self.assertEqual(len(sent), 1)
+        since = login.shown(at(MONDAY, "09:00"))
+        self.assertIn(f"orch: every prompt gets 'Credit balance too low' since {since}", sent[0])
+        self.assertIn(
+            "Add credit in the Console's billing, then tell the window to carry on (bosun send orch ...); or "
+            "use your subscription: remove the API key (ANTHROPIC_API_KEY in your shell profile, or "
+            "apiKeyHelper in ~/.claude/settings.json), restart the window (bosun refresh orch), then /login "
+            "in it.",
+            sent[0],
+        )
+        self.assertIn("bosun send orch", sent[0])
+        self.credit_error(ORCH_PID, at(MONDAY, "10:00"))
+        self.assertEqual(self.runs(at(MONDAY, "10:05"), 6, only="no-credit"), [])
+
+    def test_the_finding_names_its_window(self) -> None:
+        self.credit_error(REPO_PID, at(MONDAY, "09:00"))
+        result = watchdog.check_no_credit(self.inputs(at(MONDAY, "09:05")).context(watchdog.State()))
+        self.assertEqual([f.window for f in result.findings], ["alpha"])
+        self.assertTrue(result.findings[0].key.startswith("no-credit:alpha:"))
+
+    def test_a_normal_reply_ends_it_and_a_new_row_alerts_again(self) -> None:
+        self.credit_error(ORCH_PID, at(MONDAY, "09:00"))
+        self.watch(at(MONDAY, "09:05"), only="no-credit")
+        self.reply(ORCH_PID, at(MONDAY, "09:30"))
+        self.assertEqual(self.watch(at(MONDAY, "09:35"), only="no-credit"), [])
+        self.credit_error(ORCH_PID, at(MONDAY, "11:00"))
+        sent = self.watch(at(MONDAY, "11:05"), only="no-credit")
+        self.assertEqual(len(sent), 1)
+        self.assertIn(f"since {login.shown(at(MONDAY, '11:00'))}", sent[0])
+
+    def test_a_reply_in_another_window_shows_that_credit_is_back(self) -> None:
+        self.credit_error(REPO_PID, at(MONDAY, "09:00"))
+        self.reply(ORCH_PID, at(MONDAY, "09:30"))
+        self.assertEqual(self.watch(at(MONDAY, "09:35"), only="no-credit"), [])
+
+    def test_a_login_check_that_worked_does_not(self) -> None:
+        self.credit_error(REPO_PID, at(MONDAY, "09:00"))
+        worked = login.Probe(at(MONDAY, "09:30").astimezone(UTC), claude_state.PROBE_OK)
+        login.State(probe=worked.to_json()).save(self.state_dir)
+        self.assertEqual(len(self.watch(at(MONDAY, "09:35"), only="no-credit")), 1)
+
+    def test_credit_back_then_gone_again_alerts_again_from_its_new_first_error(self) -> None:
+        self.credit_error(REPO_PID, at(MONDAY, "09:00"))
+        self.assertEqual(len(self.watch(at(MONDAY, "09:05"), only="no-credit")), 1)
+        self.reply(ORCH_PID, at(MONDAY, "09:30"))  # credit was added: another window works
+        self.assertEqual(self.watch(at(MONDAY, "09:35"), only="no-credit"), [])
+        self.credit_error(REPO_PID, at(MONDAY, "11:00"))  # and it ran out again
+        sent = self.watch(at(MONDAY, "11:05"), only="no-credit")
+        self.assertEqual(len(sent), 1)
+        self.assertIn(
+            f"alpha: every prompt gets 'Credit balance too low' since {login.shown(at(MONDAY, '11:00'))}",
+            sent[0],
+        )
+
+    def test_login_errors_are_not_it(self) -> None:
+        self.login_error(ORCH_PID, at(MONDAY, "09:00"))
+        self.assertEqual(self.watch(at(MONDAY, "09:05"), only="no-credit"), [])
+
+    def test_status_shows_it(self) -> None:
+        self.credit_error(ORCH_PID, at(MONDAY, "09:00"))
+        text = watchdog.render_status(self.inputs(at(MONDAY, "09:05")), watchdog.select_checks("no-credit"))
+        self.assertIn("FAIL  no-credit        orch: every prompt gets 'Credit balance too low'", text)
+
+
+class EventsHeldTest(TranscriptCase):
+    """The events check while the check-in loop holds events back for the orchestrator's login."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.config = replace(self.config, events_enabled=True, events_interval_seconds=30)
+        directory = events.events_dir(self.state_dir)
+        directory.mkdir(parents=True)
+        events.State(last_tick=iso(at(MONDAY, "09:00"))).save(directory)
+        self.login_error(ORCH_PID, at(MONDAY, "09:01"))
+        login.State(gated={"orch": iso(at(MONDAY, "09:01"))}).save(self.state_dir)
+
+    def check(self, now: datetime) -> watchdog.Result:
+        return watchdog.check_events(self.inputs(now).context(watchdog.State()))
+
+    def test_no_stall_while_the_orchestrator_needs_a_login(self) -> None:
+        result = self.check(at(MONDAY, "09:40"))
+        self.assertEqual(result.findings, [])
+        self.assertIn("holds events back while orch needs /login (since Mon 09:01", result.note)
+
+    def test_a_gate_held_past_a_reply_in_another_window_is_a_stall(self) -> None:
+        # The loop lets the gate go on the same signs; one that has not runs older code.
+        self.reply(REPO_PID, at(MONDAY, "09:10"))
+        [finding] = self.check(at(MONDAY, "09:40")).findings
+        self.assertTrue(finding.key.startswith("events:stalled:"))
+        self.assertIn("bosun refresh checkin", finding.message)
 
 
 if __name__ == "__main__":

@@ -101,5 +101,31 @@ class RemainingTest(unittest.TestCase):
         self.assertTrue(0 < int(out.getvalue()) <= 86400)
 
 
+class MorningLogTest(unittest.TestCase):
+    """The morning run's log is the workday's: the one name `bosun morning` writes and the watchdog reads."""
+
+    def name(
+        self, until: str, now: datetime, days: str = "MTWRF", start: str = "08:00"
+    ) -> tuple[int, str, str]:
+        return run_cli("morning-log", "--days", days, "--start", start, "--until", until, now=now)
+
+    def test_inside_a_window_it_is_the_day_the_window_began(self) -> None:
+        self.assertEqual(self.name("20:00", THURSDAY_NOON), (0, "morning-2026-11-12.log\n", ""))
+        past_midnight = datetime(2026, 11, 13, 0, 30)  # Friday 00:30, in Thursday's 08:00-01:00 window
+        self.assertEqual(self.name("01:00", past_midnight), (0, "morning-2026-11-12.log\n", ""))
+        self.assertEqual(
+            awake.workday(awake.AwakeWindow("R", time(8), time(1)), past_midnight).isoformat(), "2026-11-12"
+        )
+
+    def test_outside_every_window_it_is_today(self) -> None:
+        self.assertEqual(self.name("01:00", datetime(2026, 11, 13, 1, 0))[1], "morning-2026-11-13.log\n")
+        self.assertEqual(
+            self.name("20:00", datetime(2026, 11, 14, 9, 0))[1], "morning-2026-11-14.log\n"
+        )  # Saturday
+
+    def test_settings_that_do_not_parse_give_today_s_so_the_run_still_has_a_log(self) -> None:
+        self.assertEqual(self.name("25:00", THURSDAY_NOON), (0, "morning-2026-11-12.log\n", ""))
+
+
 if __name__ == "__main__":
     unittest.main()

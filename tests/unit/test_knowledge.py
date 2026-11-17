@@ -4,7 +4,9 @@ the auto-confirm rules (my quote verified in a transcript, never from a tool res
 text; two trusted sources; profile sources), re-observation and expiry, contradictions and the
 other lint findings, retention and delete on request, the review batch (grouping, cap, priority,
 one-line decisions), import (dry run first, refusals), context packs (size, citations, nothing
-unconfirmed or restricted), locking across processes and the git history.
+unconfirmed or restricted), search (by phrase, and by word for several words), lookups (their budget,
+where the people who answer for an entity prefer to be asked), locking across processes and the git
+history.
 Fictional data: acme's invoice exporter (tests/fixtures/knowledge/acme-import.jsonl)."""
 
 from __future__ import annotations
@@ -48,6 +50,7 @@ ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = ROOT / "tests" / "fixtures" / "knowledge" / "acme-import.jsonl"
 START = datetime(2026, 10, 21, 9, 0, tzinfo=UTC)
 QUOTE = "smoke tests gate every release"
+SLACK = "slack:https://acme.slack.com/archives/C0/p1"
 
 
 def stamp(moment: datetime) -> str:
@@ -254,7 +257,7 @@ class AutoConfirmTest(KnowledgeTestCase):
                     transcript,
                 )
                 self.assertIn("proposed", out)
-                self.assertIn("not in anything you typed", out)
+                self.assertIn("not whole words of anything you typed", out)
 
     def test_two_trusted_sources_confirm_a_low_risk_fact(self) -> None:
         self.seed()
@@ -381,13 +384,29 @@ class SessionQuoteTest(KnowledgeTestCase):
         own = self.session(typed(QUOTE, START))
         self.assertIn("confirmed (your own words", self.propose_mine("--transcript", str(own)))
 
+    def test_from_a_session_a_fact_in_my_words_needs_eight_characters_of_whole_words(self) -> None:
+        """A one-word answer ("yes" to "should I record that ...?") says nothing about which fact, and a
+        verified quote confirms over a contradiction and revives a rejected fact; nor do letters picked
+        out of a prompt count."""
+        self.seed()
+        self.session(typed(f"yes, and {QUOTE}", START - timedelta(hours=1)))
+        argv = ["propose", "process/release", "gated_by", "gate/smoke-tests", "--from-user", "--quote"]
+        for quote in ("yes", "e", "  ok   th  "):
+            with self.subTest(quote=quote), self.assertRaisesRegex(KnowledgeError, "at least 8 characters"):
+                self.run_kg(*argv, quote)
+        self.assertEqual(self.kb().facts, {})
+        out = self.run_kg(*argv, "oke tests gate")  # cuts "smoke"
+        self.assertEqual(self.fact(self.f(1))["status"], km.PROPOSED)
+        self.assertIn("note: the quote is not whole words of anything you typed", out)
+
     def test_a_quote_older_than_a_day_stays_proposed(self) -> None:
         self.seed()
         self.session(typed(QUOTE, START - timedelta(hours=25)))
         out = self.propose_mine()
         self.assertEqual(self.fact(self.f(1))["status"], km.PROPOSED)
         self.assertIn(
-            "note: the quote is not in anything you typed in that session in the last 24 hours", out
+            "note: the quote is not whole words of anything you typed in that session in the last 24 hours",
+            out,
         )
 
     def test_text_bosun_pasted_into_the_window_is_not_my_words(self) -> None:
@@ -448,20 +467,190 @@ class SessionQuoteTest(KnowledgeTestCase):
         self.assertEqual(self.fact(self.f(2))["sources"][0]["quote"], "it is retired now")
         self.later(2)
         with self.assertRaisesRegex(
-            KnowledgeError, "not in anything you typed in that session in the last 24"
+            KnowledgeError, "not whole words of anything you typed in that session in the last 24"
         ):
             self.run_kg(
                 "supersede", self.f(2), "--value", "back", "--from-user", "--quote", "it is retired now"
             )
 
     def test_a_correction_from_a_source_needs_no_words_in_a_session(self) -> None:
+        """It is confirmed as a proposal on those sources would be (a profile source gives a person's
+        timezone; two trusted kinds, a low-risk fact), the fact it corrects counting as no contradiction."""
+        self.seed()
+        self.run_kg("propose", "person/dana", "timezone", "--value", "Europe/Berlin", "--source", "profile:a")
+        berlin = self.f(1)
+        self.assertEqual(self.fact(berlin)["status"], km.CONFIRMED)
+        self.session(typed("something else", START))
+        out = self.run_kg("supersede", berlin, "--value", "America/New_York", "--source", "profile:b")
+        self.assertIn(f"{berlin} superseded by {self.f(2)}", out)
+        self.assertEqual(self.fact(self.f(2))["status"], km.CONFIRMED)
+        self.assertEqual(self.fact(berlin)["superseded_by"], self.f(2))
+        caveat = self.proposed("runs nightly")
+        out = self.run_kg(
+            "supersede", caveat, "--value", "runs hourly", "--source", "memory:ci.md", "--source", "ledger:x"
+        )
+        self.assertIn(f"{caveat} closed, superseded by {self.f(4)}", out)
+        self.assertEqual(self.fact(self.f(4))["status"], km.CONFIRMED)
+
+    def test_a_correction_on_untrusted_text_alone_waits_and_leaves_the_fact_open(self) -> None:
+        """Slack, PR, ticket and doc text never confirms a fact, nor a correction's (review-stores I1): the
+        replacement waits for review and the confirmed fact holds until it is confirmed (a single-valued
+        one closes then; another says how to close it)."""
+        self.seed()
+        self.run_kg("propose", "person/dana", "timezone", "--value", "Europe/Berlin", "--source", "profile:a")
+        berlin = self.f(1)
+        self.session(typed("something else", START))
+        for n, source in enumerate(
+            [
+                "slack:https://acme.slack.com/archives/C0/p1",
+                "pr:acme/exporter#7",
+                "ticket:EXP-1",
+                "doc:wiki/tz",
+            ]
+        ):
+            with self.subTest(source=source):
+                out = self.run_kg("supersede", berlin, "--value", f"America/Zone_{n}", "--source", source)
+                fact = list(self.kb().facts)[-1]
+                self.assertIn(f"{fact} proposed as the correction of {berlin}; it waits for review", out)
+                self.assertIn(f"{berlin} stays open until then (confirming {fact} closes it)", out)
+                self.assertEqual(self.fact(fact)["status"], km.PROPOSED)
+                self.assertIsNone(self.fact(berlin)["valid_to"])
+                self.assertEqual(self.fact(berlin)["status"], km.CONFIRMED)
+        caveat = self.proposed("runs nightly")
+        out = self.run_kg("supersede", caveat, "--value", "runs hourly", "--source", "pr:acme/exporter#7")
+        hourly = list(self.kb().facts)[-1]
+        self.assertIn(f"once {hourly} is confirmed, close it: kg supersede {caveat} --by {hourly}", out)
+        self.assertIsNone(self.fact(caveat)["valid_to"])
+        self.in_session(None)  # my review, from a terminal, closes the single-valued fact it replaces
+        self.assertIn(f"{berlin} superseded by", self.run_kg("confirm", self.f(2)))
+        self.assertEqual(self.fact(berlin)["superseded_by"], self.f(2))
+
+    def test_a_correction_to_the_facts_own_value_is_refused(self) -> None:
+        """review round 1: it closed the fact "superseded by" itself, on any source."""
+        self.seed()
+        self.run_kg("propose", "person/dana", "timezone", "--value", "Europe/Berlin", "--source", "profile:a")
+        berlin = self.f(1)
+        caveat = self.proposed("runs nightly")
+        self.session(typed("something else", START))
+        for fact, value, source in [
+            (berlin, "Europe/Berlin", "slack:https://acme.slack.com/archives/C0/p2"),
+            (caveat, "runs nightly", "ledger:x"),
+        ]:
+            with self.subTest(fact=fact), self.assertRaisesRegex(KnowledgeError, f"{fact} already says that"):
+                self.run_kg("supersede", fact, "--value", value, "--source", source)
+            self.assertIsNone(self.fact(fact)["valid_to"])
+            self.assertIsNone(self.fact(fact).get("superseded_by"))
+
+    def test_a_correction_on_sources_to_a_recorded_fact_re_observes_it(self) -> None:
+        """review rounds 1 and 2: on its sources alone, a correction to a value already recorded neither
+        replaces the fact by it (that is --by, a decision) nor confirms or revives it on untrusted text: it
+        re-observes it as `kg propose` would, from a terminal too, and the fact it corrects stays open."""
+        self.seed()
+        nightly, hourly = self.proposed("runs nightly"), self.proposed("runs hourly")
+        weekly = self.proposed("runs weekly")
+        self.run_kg("confirm", nightly)
+        self.run_kg("confirm", hourly)
+        self.run_kg("reject", weekly)
+        for session in (typed("something else", START), None):
+            with self.subTest(session=session):
+                if session:
+                    self.session(session)
+                else:
+                    self.in_session(None)
+                out = self.run_kg("supersede", nightly, "--value", "runs hourly", "--source", SLACK)
+                self.assertIn(f"{hourly} says that and is confirmed already, so {nightly} stays open", out)
+                out = self.run_kg(
+                    "supersede",
+                    nightly,
+                    "--value",
+                    "runs weekly",
+                    "--source",
+                    "memory:z.md",
+                    "--source",
+                    "ledger:q",
+                )
+                self.assertIn(f"{weekly} says that and is rejected, so {nightly} stays open", out)
+                self.assertEqual(self.fact(weekly)["status"], km.REJECTED)
+                self.assertIsNone(self.fact(nightly)["valid_to"])
+
+    def test_a_correction_to_a_proposed_copy_settles_it(self) -> None:
+        """review round 2 (test_corr3): an earlier correction on Slack text left a proposed copy of the value;
+        a later one on two trusted kinds re-observes that copy and confirms it, closing the fact, from a
+        session as from a terminal; on Slack text alone it stays proposed."""
+        self.seed()
+        nightly = self.proposed("runs nightly")
+        self.run_kg("confirm", nightly)
+        self.session(typed("something else", START))
+        out = self.run_kg("supersede", nightly, "--value", "runs hourly", "--source", SLACK)
+        hourly = list(self.kb().facts)[-1]
+        self.assertIn(f"{hourly} proposed as the correction of {nightly}", out)
+        out = self.run_kg("supersede", nightly, "--value", "runs hourly", "--source", SLACK)
+        self.assertEqual(self.fact(hourly)["status"], km.PROPOSED)
+        self.assertIsNone(self.fact(nightly)["valid_to"])
+        out = self.run_kg(
+            "supersede", nightly, "--value", "runs hourly", "--source", "memory:b.md", "--source", "ledger:y"
+        )
+        self.assertIn(f"{nightly} closed, superseded by {hourly}", out)
+        self.assertEqual(self.fact(hourly)["status"], km.CONFIRMED)
+        # Single-valued: the fact it corrects is no contradiction when the copy is re-observed either
+        # (settle's ignoring, through observe), so a profile source confirms the copy and closes it.
+        self.run_kg("propose", "person/dana", "timezone", "--value", "Europe/Berlin", "--source", "profile:a")
+        berlin = list(self.kb().facts)[-1]
+        self.run_kg("supersede", berlin, "--value", "America/New_York", "--source", SLACK)
+        new_york = list(self.kb().facts)[-1]
+        self.assertEqual(self.fact(new_york)["status"], km.PROPOSED)
+        out = self.run_kg("supersede", berlin, "--value", "America/New_York", "--source", "profile:b")
+        self.assertIn(f"{berlin} superseded by {new_york}", out)
+        self.assertEqual(self.fact(new_york)["status"], km.CONFIRMED)
+
+    def test_a_correction_in_my_words_to_a_recorded_fact_is_a_replacement_by_it(self) -> None:
+        """With my words it is --by that fact, and the words must come after that fact was proposed too."""
+        self.seed()
+        nightly = self.proposed("runs nightly")
+        self.run_kg("confirm", nightly)
+        self.later(1 / 24)
+        self.session(typed("note that the exporter runs hourly now", self.now))
+        self.later(1 / 24)
+        hourly = self.proposed("runs hourly")
+        self.later(1 / 24)
+        with self.assertRaisesRegex(KnowledgeError, "since what it decides on was proposed"):
+            self.run_kg(
+                "supersede",
+                nightly,
+                "--value",
+                "runs hourly",
+                "--from-user",
+                "--quote",
+                "the exporter runs hourly now",
+            )
+        self.session(typed("note that the exporter runs hourly now", self.now))
+        self.later(1 / 24)
+        out = self.run_kg(
+            "supersede",
+            nightly,
+            "--value",
+            "runs hourly",
+            "--from-user",
+            "--quote",
+            "the exporter runs hourly now",
+        )
+        self.assertIn(f"{nightly} closed, superseded by {hourly}", out)
+        self.assertEqual(self.fact(hourly)["status"], km.CONFIRMED)
+        self.assertEqual(self.fact(hourly)["reviewed_by"]["quote"], "the exporter runs hourly now")
+
+    def test_a_correction_on_untrusted_text_from_a_terminal_waits_too(self) -> None:
+        """review round 2 (test_corr3): from a terminal, a Slack-only correction neither confirms a proposed
+        copy nor closes the fact."""
         self.seed()
         self.run_kg("propose", "environment/staging-2", "status", "--value", "active", "--source", "memory:a")
-        self.session(typed("something else", START))
-        out = self.run_kg(
-            "supersede", self.f(1), "--value", "retired", "--source", "ledger:task:2026-10-21/1"
-        )
-        self.assertIn(f"{self.f(1)} closed, superseded by {self.f(2)}", out)
+        active = self.f(1)
+        self.run_kg("confirm", active)
+        self.run_kg("propose", "environment/staging-2", "status", "--value", "retired", "--source", SLACK)
+        retired = self.f(2)
+        out = self.run_kg("supersede", active, "--value", "retired", "--source", SLACK)
+        self.assertIn(f"{active} stays open", out)
+        self.assertEqual(self.fact(retired)["status"], km.PROPOSED)
+        self.assertIsNone(self.fact(active)["valid_to"])
 
     def test_closing_or_replacing_by_another_fact_from_a_session_needs_my_words(self) -> None:
         self.seed()
@@ -475,7 +664,7 @@ class SessionQuoteTest(KnowledgeTestCase):
                     KnowledgeError, "from a session, supersede with --from-user --quote"
                 ):
                     self.run_kg("supersede", old, *form)
-                with self.assertRaisesRegex(KnowledgeError, "not in anything you typed"):
+                with self.assertRaisesRegex(KnowledgeError, "not whole words of anything you typed"):
                     self.run_kg("supersede", old, *form, "--from-user", "--quote", "it runs hourly instead")
                 self.assertIsNone(self.fact(old)["valid_to"])
         out = self.run_kg("supersede", old, "--close", "--from-user", "--quote", "no longer runs nightly")
@@ -488,7 +677,7 @@ class SessionQuoteTest(KnowledgeTestCase):
         self.seed()
         first, second = self.proposed("runs nightly"), self.proposed("runs weekly")
         transcript = self.transcript(typed("it does not run nightly", START))
-        with self.assertRaisesRegex(KnowledgeError, "not in anything you typed"):
+        with self.assertRaisesRegex(KnowledgeError, "not whole words of anything you typed"):
             self.run_kg(
                 "supersede",
                 first,
@@ -521,7 +710,7 @@ class SessionQuoteTest(KnowledgeTestCase):
         self.later(1 / 12)
         with self.assertRaisesRegex(KnowledgeError, "from a session, confirm with --from-user --quote"):
             self.run_kg("confirm", first)
-        with self.assertRaisesRegex(KnowledgeError, "not in anything you typed in that session"):
+        with self.assertRaisesRegex(KnowledgeError, "not whole words of anything you typed in that session"):
             self.run_kg("confirm", first, "--from-user", "--quote", "words I never typed")
         self.assertEqual(self.fact(first)["status"], km.PROPOSED)
         self.assertIn(
@@ -691,6 +880,10 @@ class TimelineTest(KnowledgeTestCase):
         out = self.run_kg(
             "supersede", self.f(1), "--value", "retired", "--source", "ledger:task:2026-10-02/3"
         )
+        # One trusted source confirms no high-risk fact, a correction's neither: it waits for my review.
+        self.assertIn(f"{self.f(2)} proposed as the correction of {self.f(1)}", out)
+        self.assertIsNone(self.fact(self.f(1))["valid_to"])
+        out = self.run_kg("confirm", self.f(2))
         self.assertIn(f"{self.f(1)} superseded by {self.f(2)}", out)
         old, new = self.fact(self.f(1)), self.fact(self.f(2))
         self.assertEqual(old["superseded_by"], self.f(2))
@@ -719,7 +912,7 @@ class TimelineTest(KnowledgeTestCase):
         self.seed()
         self.run_kg("propose", "environment/staging-2", "status", "--value", "active", "--source", "memory:a")
         transcript = self.transcript(typed("other words", START))
-        with self.assertRaisesRegex(KnowledgeError, "not in anything you typed"):
+        with self.assertRaisesRegex(KnowledgeError, "not whole words of anything you typed"):
             self.run_kg(
                 "supersede",
                 self.f(1),
@@ -816,6 +1009,31 @@ class RetentionAndForgetTest(KnowledgeTestCase):
         with self.assertRaisesRegex(KnowledgeError, "deleted on request"):
             self.run_kg("add-entity", "person/dana")
         self.run_kg("add-entity", "person/dana", "--allow-forgotten")
+
+    def test_forget_lists_where_the_name_still_occurs_and_edits_none_of_it(self) -> None:
+        self.seed()
+        self.run_kg("add-entity", "team/billing", "--name", "Billing", "--summary", "ask Dana Example first")
+        self.run_kg(
+            "propose",
+            "repo/invoice-exporter",
+            "caveat",
+            "--value",
+            "dana reviews every change",
+            "--source",
+            "memory:a",
+        )
+        caveat = self.f(1)
+        self.run_kg("propose", "process/release", "has_step", "step/merge", "--source", "ledger:a")
+        expected = [
+            "still named in:",
+            "  entity team/billing (summary)",
+            f"  fact {caveat} (value)",
+        ]
+        for argv in (("--dry-run",), ()):
+            with self.subTest(argv=argv):
+                said = self.run_kg("forget", "person/dana", *argv).splitlines()
+                self.assertEqual(said[1:], expected)
+        self.assertIn("ask Dana Example first", (self.root / "entities.jsonl").read_text())
 
     def backups(self, count: int) -> list[Path]:
         """<count> update backups in the state folder, as an update leaves them."""
@@ -1066,6 +1284,30 @@ class BatchTest(KnowledgeTestCase):
             with self.subTest(bad=bad), self.assertRaises(KnowledgeError):
                 kr.decide(kr.parse_clauses(bad), groups)
 
+    def test_a_range_names_every_group_in_it_and_dropped_characters_are_refused(self) -> None:
+        groups = [["f1", "f2"], ["f3"], ["f4"], ["f5"]]
+        self.assertEqual(
+            kr.decide(kr.parse_clauses("confirm 1-3, reject 4"), groups),
+            {"f1": "confirm", "f2": "confirm", "f3": "confirm", "f4": "confirm", "f5": "reject"},
+        )
+        flags = kr.flag_clauses("2-3", None, None)
+        self.assertEqual(kr.decide(flags, groups), {"f3": "confirm", "f4": "confirm"})
+        for bad, says in (
+            ("confirm 1 - 3", "cannot read '-'"),
+            ("confirm 1-3.", "cannot read '.'"),
+            ("confirm 2b-2c", "cannot read '-'"),
+            ("confirm 3-1", "cannot read '3-1'"),
+            ("confirm 0-2", "cannot read '0-2'"),
+            ("confirm 1-5", "the batch has groups 1 to 4"),
+        ):
+            with self.subTest(bad=bad), self.assertRaisesRegex(KnowledgeError, says):
+                kr.decide(kr.parse_clauses(bad), groups)
+
+    def test_a_quote_with_a_range_holds_every_group_number_in_it(self) -> None:
+        clauses = kr.parse_clauses("confirm 1-3")
+        self.assertEqual(knowledge.batch_quote_refusal("yes, confirm 1-3", clauses), "")
+        self.assertIn("(1, 2, 3)", knowledge.batch_quote_refusal("yes, confirm 1 and 3", clauses))
+
     def test_the_fact_cap_and_the_limits(self) -> None:
         out = self.run_kg("batch", "--max-facts", "8")
         self.assertIn("Knowledge to review: 1 group, 5 facts (2 more groups wait for a later batch).", out)
@@ -1143,6 +1385,79 @@ class ImportTest(KnowledgeTestCase):
         self.assertIn("refused: 1 format, 1 unresolved or invalid", out)
         self.assertIn("record 2: no entity 'repo/missing'", out)
 
+    def test_entity_fields_and_rework_of_the_wrong_type_are_refused_with_a_reason(self) -> None:
+        bad = [
+            ({"type": "entity", "id": "repo/x", "aliases": 5}, "aliases must be a list of strings, not 5"),
+            (
+                {"type": "entity", "id": "repo/y", "aliases": {"strong": "abc"}},
+                "aliases.strong must be a list of strings, not 'abc'",
+            ),
+            (
+                {"type": "entity", "id": "repo/z", "weak_aliases": 5},
+                "weak_aliases must be a list of strings, not 5",
+            ),
+            (
+                {"type": "entity", "id": "repo/w", "summary": {"x": 1}},
+                "summary must be a string, not {'x': 1}",
+            ),
+            (
+                {
+                    "type": "fact",
+                    "subject": "repo/invoice-exporter",
+                    "predicate": "caveat",
+                    "value": "x",
+                    "rework": "no",
+                    "sources": ["memory:a"],
+                },
+                "rework must be true or false, not 'no'",
+            ),
+        ]
+        path = self.tmp / "import.json"
+        path.write_text(json.dumps([{"type": "entity", "id": "repo/invoice-exporter"}, *(r for r, _ in bad)]))
+        out = self.run_kg("import", str(path))
+        self.assertIn(f"refused: {len(bad)} unresolved or invalid", out)
+        for reason in (reason for _, reason in bad):
+            self.assertIn(reason, out)
+
+    def test_fields_of_the_wrong_type_are_refused_with_a_reason(self) -> None:
+        self.run_kg("import", str(FIXTURE), "--apply")
+        step = {
+            "type": "fact",
+            "subject": "process/release",
+            "predicate": "has_step",
+            "sources": ["memory:a"],
+        }
+        bad = {
+            "order '2'": {**step, "object": "step/merge", "order": "2"},
+            "order true": {**step, "object": "step/merge", "order": True},
+            "observations 'x'": {**step, "object": "step/merge", "observations": "x"},
+            "observations 0": {**step, "object": "step/merge", "observations": 0},
+            "a numeric object": {**step, "object": 7},
+            "a numeric value": {
+                **step,
+                "predicate": "caveat",
+                "subject": "repo/invoice-exporter",
+                "value": 3,
+            },
+        }
+        path = self.tmp / "import.json"
+        path.write_text(json.dumps([*bad.values(), {**step, "object": "step/merge", "order": 2}]))
+        out = self.run_kg("import", str(path), "--apply")
+        self.assertIn("facts: 0 new, 1 re-observed", out)
+        self.assertIn(f"refused: {len(bad)} unresolved or invalid", out)
+        for number, reason in enumerate(
+            (
+                "order must be a whole number, not '2'",
+                "order must be a whole number, not True",
+                "observations must be a whole number of at least 1, not 'x'",
+                "observations must be a whole number of at least 1, not 0",
+                "object must be a string, not 7",
+                "value must be a string, not 3",
+            ),
+            start=1,
+        ):
+            self.assertIn(f"record {number}: {reason}", out)
+
 
 class ContextTest(KnowledgeTestCase):
     def setUp(self) -> None:
@@ -1164,6 +1479,34 @@ class ContextTest(KnowledgeTestCase):
         self.assertIn("depends on pdf renderer", self.run_kg("context", "--for", "invoice-exporter"))
         self.assertIn("staging 2", self.run_kg("context", "--for", "retired environment"))
         self.assertIn("No knowledge recorded", self.run_kg("context", "--for", "quantum"))
+
+    def test_a_topic_is_found_by_its_phrase_never_by_its_words(self) -> None:
+        kb = self.kb()
+        self.assertEqual(kq.search(kb, "pdf renderer review")[0][1], "repo/pdf-renderer")  # search: by words
+        self.assertEqual(kq.pack_targets(kb, "pdf renderer review"), [])  # a pack: by phrase only
+        self.assertIn("No knowledge recorded", self.run_kg("context", "--for", "pdf renderer review"))
+        self.assertEqual(kq.pack_targets(kb, "retired environment"), ["lesson/retired-env"])
+
+    def test_a_topic_never_makes_a_person_the_target(self) -> None:
+        said = "wants invoice exports reviewed before noon"
+        self.run_kg(
+            "propose", "person/dana", "stated_preference", "--value", said,
+            "--authority", "stakeholder_said", "--source", "slack:D0000000003/1700000004.000004",
+        )  # fmt: skip
+        self.confirm_people()
+        kb = self.kb()
+        self.assertIn("person/dana", [e for _, e, _ in kq.search(kb, "invoice exports", words=False)])
+        self.assertEqual(kq.pack_targets(kb, "invoice exports"), [])  # found by search only: not a target
+        self.assertIn("No knowledge recorded", self.run_kg("context", "--for", "invoice exports"))
+        hits = [e for _, e, _ in kq.search(kb, "invoice", kq.PACK_TOPIC_ENTITIES, words=False)]
+        self.assertEqual(hits, ["repo/invoice-exporter", "person/dana"])
+        self.assertEqual(kq.pack_targets(kb, "invoice"), ["repo/invoice-exporter"])  # the person left out
+        pack = self.run_kg("context", "--for", "invoice")
+        self.assertIn("Dana Example reviews invoice exporter", pack)  # who reviews the topic stays
+        for profile in ("(person/dana)", "before noon", "Lisbon"):
+            self.assertNotIn(profile, pack)
+        for named in ("person/dana", "Dana Example"):  # naming her makes her the target: her own facts
+            self.assertIn("before noon", self.run_kg("context", "--for", named))
 
     def test_a_repo_is_found_by_its_last_path_segment(self) -> None:
         kb = self.kb()
@@ -1331,6 +1674,175 @@ class QueryTest(KnowledgeTestCase):
         self.assertTrue(out[0].startswith("repo/invoice-exporter"))
         self.assertIn("lesson/retired-env", self.run_kg("search", "follow-up"))
 
+    # Search by words: a routing question in a few words finds what it is about.
+
+    def test_several_words_match_each_at_the_start_of_a_word(self) -> None:
+        self.run_kg("add-entity", "process/review", "--name", "Review process")
+        for text in ("pdf renderer review", "who reviews the pdf renderer", "renderer reviewer"):
+            with self.subTest(text=text):
+                self.assertEqual(kq.search(self.kb(), text, words=False), [])  # no phrase matches it
+                self.assertEqual(kq.search(self.kb(), text)[0][1], "repo/pdf-renderer")
+        out = self.run_kg("search", "pdf renderer review").splitlines()
+        self.assertEqual(out[0], "repo/pdf-renderer  pdf renderer  (words: pdf, renderer)")
+        self.assertIn("process/review  Review process  (words: review)", out)  # fewer words: lower
+        self.assertNotIn("process/review", self.run_kg("search", "pdf renderer reviews"))  # a word's start
+
+    def test_a_phrase_hit_outranks_every_word_hit(self) -> None:
+        words = "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima"
+        self.run_kg("add-entity", "system/every-word", "--name", " ".join(reversed(words.split())))
+        self.run_kg("add-entity", "system/the-phrase", "--name", "holder")
+        self.run_kg(
+            "propose", "system/the-phrase", "caveat", "--value", f"says {words}", "--source", "memory:a.md"
+        )
+        hits = kq.search(self.kb(), words)
+        self.assertEqual([entity for _, entity, _ in hits], ["system/the-phrase", "system/every-word"])
+        self.assertEqual(hits[0][0], kq.SCORE_FACT)  # the lowest phrase score
+        self.assertLess(hits[1][0], kq.SCORE_FACT)
+        self.assertTrue(hits[1][2].startswith("words: alpha, bravo, charlie"))
+
+    def test_the_phrase_scores_stay_and_word_hits_come_after_them(self) -> None:
+        for text in ("smoke tests", "release flow", "credit note"):
+            with self.subTest(text=text):
+                phrase = kq.search(self.kb(), text, words=False)
+                both = kq.search(self.kb(), text)
+                self.assertTrue(phrase)
+                self.assertEqual(both[: len(phrase)], phrase)
+                self.assertTrue(all(why.startswith("words: ") for _, _, why in both[len(phrase) :]))
+
+    def test_stop_words_and_short_words_alone_find_nothing(self) -> None:
+        self.assertEqual(kq.query_words("who should we ask about it"), [])
+        self.assertEqual(self.run_kg("search", "who should we ask about it"), "no matches")
+
+    def test_a_single_word_is_matched_as_before(self) -> None:
+        for text in ("renderer", "release", "exporter", "smoke"):  # its phrase finds all its word finds
+            with self.subTest(text=text):
+                self.assertEqual(kq.search(self.kb(), text), kq.search(self.kb(), text, words=False))
+        for text in ("follow-up", "acme/pdf-renderer"):  # the phrase's hits first, as they were
+            with self.subTest(text=text):
+                phrase = kq.search(self.kb(), text, words=False)
+                self.assertEqual(kq.search(self.kb(), text)[: len(phrase)], phrase)
+
+    def test_punctuation_never_hides_a_word(self) -> None:
+        for text in ("renderer?", "renderer's reviewer", '"pdf renderer"'):
+            with self.subTest(text=text):
+                self.assertEqual(kq.search(self.kb(), text, words=False), [])
+                self.assertEqual(kq.search(self.kb(), text)[0][1], "repo/pdf-renderer")
+
+    # Where a word hits counts: a word of the name over several elsewhere, the name's words in a row,
+    # never an id's type.
+
+    def test_a_question_finds_what_its_name_words_name_before_a_decoy(self) -> None:
+        question = "Who should review a change to the pdf renderer, and where do I ask them?"
+        self.run_kg("add-entity", "process/review", "--name", "Review process", "--alias", "code review")
+        rule = "A change to exporter/tax.py needs a second review."
+        self.run_kg(
+            "propose", "process/review", "rule", "--value", rule,
+            "--source", "memory:review.md", "--source", "report:task:2026-10-01/1",
+        )  # fmt: skip
+        self.run_kg("add-entity", "system/decoy", "--name", "decoy", "--summary", "reviews every pdf change")
+        hits = kq.search(self.kb(), question)
+        self.assertEqual(hits[0][1:], ("repo/pdf-renderer", "words: pdf, renderer"))
+        ranked = [entity for _, entity, _ in hits]
+        self.assertLess(ranked.index("process/review"), ranked.index("system/decoy"))  # a name word first
+        self.assertEqual({e: s for s, e, _ in hits}["system/decoy"], 3 * kq.SCORE_WORD_OTHER)
+
+    def test_the_name_s_words_in_a_row_count_more(self) -> None:
+        self.run_kg("add-entity", "system/pdf-tools", "--name", "pdf tools for the renderer")
+        scores = {entity: score for score, entity, _ in kq.search(self.kb(), "renderer pdf")}
+        apart = 2 * kq.SCORE_WORD_NAMED
+        self.assertEqual(scores, {"repo/pdf-renderer": apart + kq.SCORE_WORD_RUN, "system/pdf-tools": apart})
+
+    def test_a_word_never_matches_an_id_s_type(self) -> None:
+        hits = kq.search(self.kb(), "who is the person that reviews exporter")
+        self.assertEqual(hits[0][1], "repo/invoice-exporter")
+        self.assertFalse([entity for _, entity, _ in hits if entity.startswith("person/")])
+
+    # Where to ask: a lookup of what someone reviews, owns or approves says where they prefer to be asked.
+
+    def fact_of(self, subject: str, predicate: str) -> str:
+        return next(
+            str(f["id"])
+            for f in self.kb().facts.values()
+            if (f["subject"], f["predicate"]) == (subject, predicate)
+        )
+
+    def test_a_lookup_says_where_a_reviewer_prefers_to_be_asked(self) -> None:
+        reviews = self.fact_of("person/lee", "reviews")
+        channel = self.fact_of("person/lee", "prefers_channel")
+        self.run_kg("confirm", reviews)
+        self.assertNotIn("prefers to be asked", self.run_kg("lookup", "exporter"))  # not confirmed yet
+        self.run_kg("confirm", channel)
+        out = self.run_kg("lookup", "exporter")
+        line = f"  {reviews} Lee Sample reviews invoice exporter [ledger:review:acme/invoice-exporter#101]"
+        self.assertIn(f"{line}; prefers to be asked in #acme-prs [{channel}]\n", out)
+        lee = self.run_kg("lookup", "person/lee")  # a person's own lookup lists it as one of her facts
+        self.assertIn(f"  {channel} Lee Sample prefers_channel #acme-prs", lee)
+        self.assertNotIn("; prefers to be asked", lee)
+
+    def test_only_the_person_s_own_confirmed_preference_counts(self) -> None:
+        self.run_kg(
+            "confirm", self.fact_of("person/dana", "reviews"), self.fact_of("person/dana", "member_of")
+        )
+        self.run_kg("propose", "person/dana", "prefers_channel", "channel/deploys", "--source", "ledger:x")
+        self.run_kg("propose", "team/billing", "prefers_channel", "channel/acme-prs", "--source", "ledger:y")
+        self.run_kg("confirm", self.fact_of("team/billing", "prefers_channel"))
+        (dana,) = [line for line in self.run_kg("lookup", "exporter").splitlines() if "Dana Example" in line]
+        self.assertNotIn("prefers", dana)  # hers waits for review, and her team's is not hers
+
+    def test_a_team_that_owns_it_says_where_it_prefers_to_be_asked(self) -> None:
+        for predicate, target in (("owns", "repo/invoice-exporter"), ("prefers_channel", "channel/acme-prs")):
+            self.run_kg("propose", "team/billing", predicate, target, "--source", f"ledger:{predicate}")
+            self.run_kg("confirm", self.fact_of("team/billing", predicate))
+        self.run_kg("propose", "team/billing", "approves", "repo/invoice-exporter", "--source", "ledger:a")
+        self.run_kg("confirm", self.fact_of("team/billing", "approves"))
+        out = self.run_kg("lookup", "exporter")
+        approves, channel = (
+            self.fact_of("team/billing", "approves"),
+            self.fact_of("team/billing", "prefers_channel"),
+        )
+        # once a team, on its first line, since it reviews nothing
+        self.assertRegex(out, rf"\n  {approves} Billing team approves invoice exporter \[[^]]*\]; prefers")
+        self.assertIn(f"; prefers to be asked in #acme-prs [{channel}]", out)
+        self.assertEqual(out.count("prefers to be asked"), 1)
+
+    def test_where_to_ask_is_on_the_reviews_line_of_one_who_also_owns_it(self) -> None:
+        for predicate, target in (("owns", "repo/invoice-exporter"), ("prefers_channel", "channel/acme-prs")):
+            self.run_kg("propose", "person/lee", predicate, target, "--source", f"ledger:{predicate}")
+        self.run_kg(
+            "confirm", *[self.fact_of("person/lee", p) for p in ("owns", "reviews", "prefers_channel")]
+        )
+        lines = self.run_kg("lookup", "exporter").splitlines()
+        (owns,) = [line for line in lines if " Lee Sample owns invoice exporter " in line]
+        (reviews,) = [line for line in lines if " Lee Sample reviews invoice exporter " in line]
+        self.assertLess(lines.index(owns), lines.index(reviews))  # owns sorts first
+        self.assertNotIn("prefers", owns)
+        self.assertTrue(
+            reviews.endswith(
+                f"; prefers to be asked in #acme-prs [{self.fact_of('person/lee', 'prefers_channel')}]"
+            )
+        )
+
+    def test_where_to_ask_counts_toward_the_lookup_s_budget(self) -> None:
+        for n in range(40):
+            person = f"person/reviewer-{n}"
+            self.run_kg("add-entity", person, "--name", f"Reviewer {n}")
+            self.run_kg("propose", person, "reviews", "repo/pdf-renderer", "--source", f"ledger:r{n}")
+            self.run_kg("propose", person, "prefers_channel", "channel/acme-prs", "--source", f"ledger:c{n}")
+        waiting = [f["id"] for f in self.kb().facts.values() if f["subject"].startswith("person/reviewer-")]
+        self.run_kg("confirm", *waiting)
+        out = self.run_kg("lookup", "pdf-renderer")
+        self.assertLessEqual(kq.estimate_tokens(out), kq.LOOKUP_TOKENS)
+        self.assertRegex(
+            out.splitlines()[-1], r"^\(\d+ more: kg lookup repo/pdf-renderer --max-tokens 3200\)$"
+        )
+        shown = [line for line in out.splitlines() if " reviews pdf renderer " in line]
+        self.assertTrue(shown)
+        self.assertTrue(
+            all(re.search(r"; prefers to be asked in #acme-prs \[f-\w{6}\]$", line) for line in shown)
+        )
+        fuller = self.run_kg("lookup", "pdf-renderer", "--max-tokens", "100000")
+        self.assertEqual(fuller.count("prefers to be asked in #acme-prs"), 40)
+
     def many(self, facts: int, status: str = "confirmed") -> Path:
         """An import of <facts> rules about repo/pdf-renderer (a file in the scratch folder)."""
         path = self.root.parent / f"many-{facts}-{status}.jsonl"
@@ -1437,6 +1949,36 @@ class GitHistoryTest(KnowledgeTestCase):
         tracked = self.git_out(self.root, "ls-files").split()
         self.assertNotIn("secret.key", tracked)
         self.assertIn("entities.jsonl", tracked)
+
+    def test_peoples_ids_and_the_local_journal_never_enter_the_history(self) -> None:
+        """identifiers.jsonl (mode 0600, which git does not keep) and journal/local.jsonl (what names a
+        person, my words) stay on this Mac's disk only (review-stores M1)."""
+        self.seed()
+        self.run_kg("identify", "person/dana", "slack", "U00000000DA")
+        self.assertTrue((self.root / "journal" / "local.jsonl").exists())
+        self.assertEqual((self.root / "identifiers.jsonl").stat().st_mode & 0o777, 0o600)
+        tracked = self.git_out(self.root, "ls-files").split()
+        self.assertNotIn("identifiers.jsonl", tracked)
+        self.assertNotIn("journal/local.jsonl", tracked)
+        self.assertIn("entities.jsonl", tracked)
+        self.assertNotIn("U00000000DA", self.git_out(self.root, "log", "-p", "--all"))
+
+    def test_a_history_that_tracked_them_untracks_them_at_its_next_commit(self) -> None:
+        """A history made before 2026-11-16 committed both: the next write's commit takes them out of
+        the tree (its earlier commits keep them until the history restarts) and leaves the files."""
+        self.seed()
+        self.run_kg("identify", "person/dana", "slack", "U00000000DA")
+        (self.root / ".gitignore").write_text("knowledge.lock\n*.tmp\nbatch.json\n")  # an older one
+        self.git_out(self.root, "add", "-f", ".gitignore", "identifiers.jsonl", "journal/local.jsonl")
+        self.git_out(self.root, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "old")
+        self.assertIn("identifiers.jsonl", self.git_out(self.root, "ls-files").split())
+        self.run_kg("add-entity", "repo/other")
+        tracked = self.git_out(self.root, "ls-files").split()
+        self.assertNotIn("identifiers.jsonl", tracked)
+        self.assertNotIn("journal/local.jsonl", tracked)
+        self.assertIn("identifiers.jsonl", (self.root / ".gitignore").read_text().splitlines())
+        self.assertIn("u00000000da", (self.root / "identifiers.jsonl").read_text().casefold())
+        self.assertTrue((self.root / "journal" / "local.jsonl").exists())
 
     def test_one_commit_per_change_and_forget_restarts_history(self) -> None:
         self.seed()
@@ -1619,7 +2161,8 @@ class GitHistoryTest(KnowledgeTestCase):
         ):
             self.assertEqual(knowledge.main(), 0)
         self.assertEqual(self.processes_naming(token), [])
-        self.assertIn("warning: git commit failed: git add ran past 0.5 s and was stopped\n", said.getvalue())
+        # the commit's first git command (untracking the restricted files) ran past its time
+        self.assertIn("warning: git commit failed: git rm ran past 0.5 s and was stopped\n", said.getvalue())
         self.assertIn("repo/other", self.kb().entities)
         go.touch()
         time.sleep(1)  # the grandchild, if it were still there, would have written the mark by now

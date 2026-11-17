@@ -12,6 +12,7 @@ from typing import ClassVar
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import agent_state
 import journal as jr
+import log_files
 import uninstall_plan as up
 import update_backups as ub
 from checkout_work import Checkout
@@ -236,10 +237,34 @@ class Folders(unittest.TestCase):
             "watchdog.launchd.err",
             "hook-2026-11-02.log.1",
             "launch-2026-11-02.log",
+            # every command's own day file (lib/common.sh's log)
+            "install-2026-11-02.log",
+            "watchdog-2026-11-02.log",
+            "slack-watch-2026-11-02.log",
+            "settings-2026-11-02.log",
+            # what an agent writes there, by its profile (agy's window logs, and the dated ones rolled over)
+            "agy-api.log",
+            "agy-api-2026-11-02-1.log",
         ):
             self.assertEqual(up.kind_of(name, up.LOG_FILES), up.WORKING, name)
-        for name in ("Zoom.log", "vpn-client.log"):
+            if name.endswith(".log") and not name.startswith("agy-"):
+                self.assertIsNotNone(log_files.day_of(name), name)  # what the morning run prunes, too
+        for name in (
+            "Zoom.log",
+            "vpn-client.log",
+            "Install-2026-11-02.log",
+            "report-2026-11.log",
+            "backup-2026-11-01.log",  # someone else's day file in a shared folder
+            "rsync-backup-2026-11-01.log",
+        ):
             self.assertEqual(up.kind_of(name, up.LOG_FILES), up.UNKNOWN, name)
+            self.assertIsNone(log_files.day_of(name), name)  # nor does the morning run prune it
+
+    def test_bosun_s_log_writers_are_its_commands_and_install_sh(self) -> None:
+        """lib/common.sh's log names its file after the command bin/bosun runs (libexec/bosun-<command>)."""
+        libexec = Path(__file__).resolve().parents[2] / "libexec"
+        commands = {path.name.removeprefix("bosun-") for path in libexec.glob("bosun-*")}
+        self.assertEqual(set(log_files.WRITERS), commands | {"install", "bosun"})
 
     def test_an_unsafe_folder_is_left_whole_and_named(self) -> None:
         plan = up.build_plan(facts(state_dir=HOME, log_dir=f"{HOME}/logs"), Choices(keep_ledger=False))
@@ -251,7 +276,7 @@ class Folders(unittest.TestCase):
 class Wake(unittest.TestCase):
     def test_bosuns_alone_is_cancelled(self) -> None:
         plan = up.build_plan(facts(), Choices())
-        self.assertEqual(plan.steps[0], Step(up.WAKE, WAKE_LINE, by_hand=up.CANCEL_WAKE))
+        self.assertEqual(plan.steps[0], Step(up.WAKE, WAKE_LINE, by_hand=up.CANCEL_BY_HAND))
 
     def test_any_other_is_left_and_named(self) -> None:
         for repeating in (
@@ -557,7 +582,7 @@ class TheNewLayout(unittest.TestCase):
         layout = side_by_side()
         stop = next(step for step in up.build_plan(layout, Choices()).steps if step.kind == up.STOP)
         self.assertEqual(stop.by_hand, f"{ROOT}/bin/bosun stop")
-        left = (Step(up.WAKE, WAKE_LINE, by_hand=up.CANCEL_WAKE),)
+        left = (Step(up.WAKE, WAKE_LINE, by_hand=up.CANCEL_BY_HAND),)
         text = up.render_done(up.build_plan(layout, Choices()), left, layout, inside_checkout=False)
         self.assertIn("~/.local/share/bosun/bin/bosun uninstall", text)
 
@@ -622,10 +647,13 @@ class Reading(unittest.TestCase):
             self.assertIn(words, text)
 
     def test_what_could_not_be_removed_comes_with_what_to_run(self) -> None:
-        left = (Step(up.WAKE, WAKE_LINE, by_hand=up.CANCEL_WAKE),)
+        left = (Step(up.WAKE, WAKE_LINE, by_hand=up.CANCEL_BY_HAND),)
         text = up.render_done(up.build_plan(facts(), Choices()), left, facts(), inside_checkout=False)
         self.assertNotIn("bosun is uninstalled", text)
         self.assertIn(up.CANCEL_WAKE, text)
+        self.assertIn(
+            f"{up.CANCEL_WAKE}  # it removes any other repeating event too", text
+        )  # still a line to paste
         self.assertIn("~/.local/share/bosun/bin/bosun uninstall", text)
 
     def test_a_shell_left_in_a_removed_folder_is_told(self) -> None:

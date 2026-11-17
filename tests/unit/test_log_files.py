@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from datetime import date, datetime, timedelta
@@ -44,6 +45,22 @@ class PruneTest(unittest.TestCase):
             path.write_text("keep me\n")
         self.assertEqual(log_files.prune(self.dir, TODAY, NOW), [])
         self.assertTrue(all(path.exists() for path in others))
+
+    def test_an_agent_s_logs_go_once_not_written_for_the_keep(self) -> None:
+        """agy's (its profile's log_files): the window's log and the dated ones agy rolls it over to, by when
+        each was last written, since the live one has no date in its name."""
+        old_live = self.dir / "agy-api.log"
+        old_rolled = self.dir / "agy-api-2026-09-01-1.log"
+        fresh = self.dir / "agy-web.log"
+        stale = (NOW - timedelta(days=log_files.KEEP_DAYS + 2)).timestamp()
+        for path in (old_live, old_rolled, fresh):
+            path.write_text("a line\n")
+        for path in (old_live, old_rolled):
+            os.utime(path, (stale, stale))
+        said = log_files.prune(self.dir, TODAY, NOW)
+        self.assertEqual((old_live.exists(), old_rolled.exists(), fresh.exists()), (False, False, True))
+        self.assertIn(f"removed agy-api.log (not written for {log_files.KEEP_DAYS} days)", said)
+        self.assertIn("agy-*.log", log_files.agent_logs())
 
     def test_a_large_launchd_file_keeps_its_end_in_the_same_file(self) -> None:
         path = self.dir / "console.launchd.err"

@@ -1,34 +1,58 @@
 # Development
 
-`uv sync && uv run pre-commit install` once after cloning. Commits then run ruff, mypy --strict,
-complexity limits (complexipy, lizard, and a shell checker in `tools/`), shellcheck, shfmt, hadolint for
-the Dockerfile, actionlint and zizmor for the workflows, spelling, the links between the docs, a build of
-the docs site, a secrets scan (detect-secrets) and the unit tests the change can reach; pushes also run
-the smoke suite ([Running the tests](#running-the-tests)). The hooks stop at the first one that fails, and the
-tests come last, so a lint or format failure never waits for them (CI's `lint` job runs every hook to the end,
-so it reports every finding at once). A
-forbidden-terms check (`tools/forbidden_terms.py`) refuses staged files and commit messages that
-contain a term from `~/.config/bosun/forbidden-terms.txt` (one case-insensitive regex
-per line, `#` comments), a list you keep outside the repo of names that must never be committed:
-your organization, products, repos, colleagues, internal hosts and ids. Without the file it
-passes. `uv run pre-commit run --all-files` checks everything by hand. See `CLAUDE.md` for the
-limits and conventions.
+How to work on bosun itself: the checks every commit runs, the tests and how long each takes, the docs site, the
+sandboxes that try an install without touching your Mac, and releasing the menu bar app. `CLAUDE.md` has the limits
+and conventions in full.
 
-On GitHub, every pull request to `main` runs the same checks (`.github/workflows/ci.yml`) and
-a gitleaks scan of the new commits (the smoke suite on macOS runs in the merge queue, for the sections the
-change can reach, and in full nightly, split over three runners), and `main` only takes pull requests
-that pass them, through GitHub's merge queue: once a pull request's checks pass, `gh pr merge --squash`
-(or the Merge button) adds it to the queue, which builds it on top of the latest `main` and the pull
-requests ahead of it, runs the same checks again on that commit (CI listens for `merge_group` as well
-as `pull_request`) and merges it when they pass, so nobody updates a branch by hand. Dependabot's patch
-and minor updates of the GitHub Actions, the sandbox's Docker base image, the pre-commit hooks and the
-uv development dependencies get auto-merge turned on by `.github/workflows/dependabot-auto-merge.yml`,
-which only adds them to the queue once their checks pass; majors and production dependencies wait for
-a person. CI runs every unit test on Linux (Python 3.13 and 3.14; on macOS too in the nightly run), and
-keeps a floor under their coverage, measured through `sys.monitoring` (`COVERAGE_CORE=sysmon`) because 3.13's
-default, `sys.settrace`, made every test about a quarter slower. The menu bar app has its own job, `app`: when a pull request or merge group changes nothing under `app/` (or the two tools that feed it, `tools/contract_samples.py` and `tools/swift_coverage.py`, the workflow, `setup-uv`, `uv.lock` or `pyproject.toml`), it is skipped (a cheap Linux job, `changes`, looks first, so no macOS runner starts, and a skipped job counts as passing for the required check); otherwise it runs the Swift tests with warnings as errors, the coverage floor, SwiftLint, `swift format lint --strict` and an ad hoc signed build. For the forbidden-terms check to run there too, store your list as the
-`FORBIDDEN_TERMS` Actions secret with `gh secret set FORBIDDEN_TERMS <
-~/.config/bosun/forbidden-terms.txt`; the logs never print what it matched.
+## Set up once
+
+`uv sync && uv run pre-commit install` once after cloning. `uv run pre-commit run --all-files` checks everything by
+hand.
+
+Each commit then runs, stopping at the first hook that fails (the tests come last, so a lint or format failure never
+waits for them; CI's `lint` job runs every hook to the end, so it reports every finding at once):
+
+- **Python:** ruff, mypy --strict, and complexity limits (complexipy, lizard).
+- **Shell:** shellcheck, shfmt, and a shell complexity checker in `tools/`.
+- **Everything else written by hand:** hadolint for the Dockerfile, actionlint and zizmor for the workflows,
+  spelling, the links between the docs, and a build of the docs site.
+- **Secrets and names:** a secrets scan (detect-secrets), and a forbidden-terms check (below).
+- **Tests:** the unit tests the change can reach. Pushes also run the smoke suite ([Running the tests](#running-the-tests)).
+
+The forbidden-terms check (`tools/forbidden_terms.py`) refuses staged files and commit messages that contain a term
+from `~/.config/bosun/forbidden-terms.txt` (one case-insensitive regex per line, `#` comments): a list you keep
+outside the repo of names that must never be committed, such as your organization, products, repos, colleagues,
+internal hosts and ids. Without the file it passes. For it to run in CI too, store your list as the
+`FORBIDDEN_TERMS` Actions secret with `gh secret set FORBIDDEN_TERMS < ~/.config/bosun/forbidden-terms.txt`; the
+logs never print what it matched.
+
+## CI and the merge queue
+
+On GitHub, every pull request to `main` runs the same checks (`.github/workflows/ci.yml`) and a gitleaks scan of the
+new commits, and `main` only takes pull requests that pass them, through GitHub's merge queue.
+
+<details class="note" markdown>
+<summary>How the merge queue, the smoke shards, the app job and Dependabot work</summary>
+
+- **The merge queue.** Once a pull request's checks pass, `gh pr merge --squash` (or the Merge button) adds it to the
+  queue, which builds it on top of the latest `main` and the pull requests ahead of it, runs the same checks again on
+  that commit (CI listens for `merge_group` as well as `pull_request`) and merges it when they pass, so nobody
+  updates a branch by hand.
+- **The smoke suite** runs on macOS in the merge queue, for the sections the change can reach, and in full nightly,
+  split over three runners.
+- **Unit tests** run on Linux (Python 3.13 and 3.14; on macOS too in the nightly run), with a floor under their
+  coverage, measured through `sys.monitoring` (`COVERAGE_CORE=sysmon`) because 3.13's default, `sys.settrace`, made
+  every test about a quarter slower.
+- **The menu bar app** has its own job, `app`. When a pull request or merge group changes nothing under `app/` (or
+  the two tools that feed it, `tools/contract_samples.py` and `tools/swift_coverage.py`, the workflow, `setup-uv`,
+  `uv.lock` or `pyproject.toml`), it is skipped: a cheap Linux job, `changes`, looks first, so no macOS runner starts,
+  and a skipped job counts as passing for the required check. Otherwise it runs the Swift tests with warnings as
+  errors, the coverage floor, SwiftLint, `swift format lint --strict` and an ad hoc signed build.
+- **Dependabot's** patch and minor updates of the GitHub Actions, the sandbox's Docker base image, the pre-commit
+  hooks and the uv development dependencies get auto-merge turned on by `.github/workflows/dependabot-auto-merge.yml`,
+  which only adds them to the queue once their checks pass; majors and production dependencies wait for a person.
+
+</details>
 
 Issues and pull requests are welcome: see [CONTRIBUTING.md](../CONTRIBUTING.md) and the
 [code of conduct](../CODE_OF_CONDUCT.md). Report security problems privately, as
@@ -100,8 +124,8 @@ run, not the whole suite: ...)`); a shard that no section falls in says so and e
 once (the `smoke-shard` matrix) and a small job named `smoke`, the required check, passes only when all three did,
 or, in the merge queue, when the Linux job `changes` found that the change reaches no section and skipped them.
 
-The shards are balanced by how long their sections take, not by how many: nine of the 64 sections take three fifths
-of the time (`update` and `install` about two minutes each, `send-new-start` nearly as long, then `connectors`,
+The shards are balanced by how long their sections take, not by how many: a few sections take most of the time
+(`update` and `install` about two minutes each, `send-new-start` nearly as long, then `connectors`,
 `orchestrator-refresh`, `refresh`, `quit`, `app` and `console-sessions`). `tests/smoke_weights.txt` holds one
 `<section id> <seconds>` line per section, and a section it does not list counts as the median. `tools/smoke_shard.py`
 makes the split: the longest section first, a section's length counting what it needs, each into the shard it adds
@@ -399,7 +423,7 @@ the version before's `ledger validate --journal`, that each hook command of that
 runs on the next, that the Slack watcher's next run catches up, and that a temporary link a switch cut
 short is swept. It measures the freeze (`freeze_ms` in the update's record, under 10 s) and what restoring
 the backup costs on that data (a recovering approval hook has 8 s). Then it goes back by hand, exactly as
-[Going back](setup.md#going-back) says, forward again with `bosun update`, and a person forgotten after
+[Going back](updating.md#going-back) says, forward again with `bosun update`, and a person forgotten after
 that must leave nothing in any backup or rehearsal copy (`grep -r`).
 
 Then writers at once (twenty in the ledger, ten in the knowledge base, then ten in each, under one replica
@@ -601,6 +625,14 @@ change to what one prints needs `uv run python tools/contract_samples.py` to wri
 decode. What the real app does on a real desktop is `tests/sandbox.sh mac app` (see
 [Which sandbox for what](#which-sandbox-for-what)).
 
+`bosun app install --build`, for a checkout without a publisher (developing bosun), builds the app on this Mac with
+`app/build.sh` (the first build takes minutes), ad hoc signed, and installs it without the team or Gatekeeper
+check, saying it is a development build. If it fails with exit 1 and no output on the first run of a fresh copy, run
+it again: it says "app/build.sh exited 1 and said nothing: run it again (the first run of a fresh copy can fail
+before the script starts; see docs/design/menu-bar.md, the Mac VM run of the app)". macOS can stop the first direct
+run of a copied `app/build.sh` before the script starts, and only that one; the second run builds. What was seen is
+in [the design note](design/menu-bar.md#the-mac-vm-run-of-the-app-2026-11-13).
+
 ## Releasing bosun.app
 
 The menu bar app is released apart from bosun: a tag `app-v<version>` on `main`, where `<version>` is what
@@ -768,7 +800,8 @@ Work up the levels; each one exercises more of the real chain.
    ...", "ping Priya again", "Marco answered, go ahead with b", and things that must not become
    outreach) and checks the resulting ledger. It runs with no MCP servers (`--with-mcp` loads
    yours, read tools only). Each run has a scratch world: scratch HOME, ledger
-   and tmux server, sends only logged, outward tools denied. It costs money (about $0.3 per case
+   and tmux server, a `gh` that knows only the pull requests its case gives it
+   (`tests/llm/gh_stand_in.py`), sends only logged, outward tools denied. It costs money (about $0.3 per case
    and run, for each case in `tests/llm/cases.py`), so neither the smoke suite nor the hooks run
    it; run it after changing `policy.md`, `chores.md`, the task files or `knowledge.md`. The run has
    the ontology on (`BOSUN_KNOWLEDGE_ENABLED=1`: its rules in the prompts, the acme world's knowledge

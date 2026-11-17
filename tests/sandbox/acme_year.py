@@ -150,7 +150,7 @@ def knowledge_day(year: Year, day: int, task: str, caveats: list[str]) -> None:
         year.kg("propose", feature, "caveat", "--value", f"Export feature {day} pages by 500", *sources)
     if day % 10 == 0 and caveats:
         corrected = f"Export batch {day}: invoices in date order, then by id"
-        year.kg("supersede", caveats.pop(0), "--value", corrected, *sources[2:])
+        year.kg("supersede", caveats.pop(0), "--value", corrected, *sources)  # two trusted kinds: it confirms
     if day % 15 == 0:
         said = ("--authority", "stakeholder_said", *sources[:2])
         year.kg(

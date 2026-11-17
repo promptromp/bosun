@@ -2,7 +2,7 @@
 
 Bosun reaches further into a machine than most tools: scheduled jobs, a wake that needs `sudo`, entries in other
 programs' config, a running tmux server. Taking all that off should not need a list from the docs, and should
-never cost anyone something they wanted to keep. What it does for you is in the [setup guide](../setup.md#uninstall);
+never cost anyone something they wanted to keep. What it does for you is in the [guide](../updating.md#uninstall);
 this note is why.
 
 ## What others do

@@ -201,7 +201,7 @@ Calls made from the research and the builder check, to check while reading:
   bosun is stopped by a Quit and whether the morning start is paused, and the console's state. It also lists the
   windows that need you (`attention`, added under contract 1 too: a `{"window", "problem"}` for each watchdog finding
   about one window, which the finding names itself (`Finding.window`, set by the checks that go over the windows one
-  by one: `stalled-start`, `waiting`, `long-shell`, `spend-limit`, `context-size`; never parsed from its key), in the
+  by one: `stalled-start`, `waiting`, `long-shell`, `spend-limit`, `context-size`, `no-credit`; never parsed from its key), in the
   order of `problems`, then each window waiting at a prompt that the `waiting` check has not named yet, which no level
   counts), so the app can offer to open one (`bosun attach <window>`). Its level comes
   from what the console's health view and the watchdog already compute (`lib/console_sessions.py`,

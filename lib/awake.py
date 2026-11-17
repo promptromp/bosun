@@ -6,7 +6,13 @@ status and `bosun morning --now`, which asks its command line:
 
 prints the whole seconds left in the window that now is in, and exits 0; outside every window it prints
 nothing and exits 3 (OUTSIDE: not 1, which is what Python exits with after a crash, so that a caller never
-takes a crash for "outside"); settings that do not parse are one line on stderr and exit 2."""
+takes a crash for "outside"); settings that do not parse are one line on stderr and exit 2.
+
+    awake.py morning-log --days MTWRF --start 08:00 --until 20:00
+
+prints the name of the morning run's log for now, `morning-<workday>.log` (morning_log_name): the one owner
+of that name, which `bosun morning` writes, and the watchdog, the status and the console read. With settings
+that do not parse it is today's (there is no window to go by), and it exits 0."""
 
 from __future__ import annotations
 
@@ -21,6 +27,7 @@ from typing import NoReturn
 
 OUTSIDE = 3  # the exit status of `remaining` outside every window
 DAY_LETTERS = "MTWRFSU"  # pmset's letters, Monday first like date.weekday()
+MORNING_LOG = "morning-{day}.log"  # the morning run's log, one a workday
 
 
 def parse_hhmm(value: str) -> time:
@@ -58,6 +65,18 @@ class AwakeWindow:
         return self.current(now) is not None
 
 
+def workday(window: AwakeWindow, now: datetime) -> date:
+    """The day the morning run, its log and the day's checks belong to: the day the awake window that <now> is
+    in began (yesterday, in one that runs past midnight), else today."""
+    current = window.current(now)
+    return current[0].date() if current else now.date()
+
+
+def morning_log_name(day: date) -> str:
+    """The name of the morning run's log of <day> (a workday)."""
+    return MORNING_LOG.format(day=day.isoformat())
+
+
 class SettingsError(Exception):
     """The command line or a setting is wrong; the message is the one line to show."""
 
@@ -89,17 +108,24 @@ def remaining_seconds(window: AwakeWindow, now: datetime) -> int | None:
 
 def main(argv: Sequence[str], now: datetime | None = None) -> int:
     parser = OneLineParser(prog="awake.py", allow_abbrev=False)
-    parser.add_argument("command", choices=("remaining",))
+    parser.add_argument("command", choices=("remaining", "morning-log"))
     parser.add_argument("--days", required=True)
     parser.add_argument("--start", required=True)
     parser.add_argument("--until", required=True)
+    moment = now or datetime.now()
     try:
         args = parser.parse_args(argv)
         window = window_from_settings(args.days, args.start, args.until)
     except SettingsError as exc:
+        if argv[:1] == ["morning-log"]:  # no window to go by: today's, so the run still has its log
+            print(morning_log_name(moment.date()))
+            return 0
         print(f"awake.py: {exc}", file=sys.stderr)
         return 2
-    seconds = remaining_seconds(window, now or datetime.now())
+    if args.command == "morning-log":
+        print(morning_log_name(workday(window, moment)))
+        return 0
+    seconds = remaining_seconds(window, moment)
     if seconds is None:
         return OUTSIDE
     print(seconds)

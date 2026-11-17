@@ -8,7 +8,8 @@ decides what each one is (kind, group, badge), and how its text is shown:
 - Config (bosun.env, sessions.yml, the orchestrator settings): masked, line by line, where a
   key's name says it holds a secret (TOKEN, SECRET, KEY, PASSWORD, ...) and wherever a webhook
   URL appears, then lib/redact.py over the whole text.
-- Anything from outside the repo (site files, memory notes) goes through lib/redact.py too.
+- Anything from outside the repo (site files, memory notes) goes through lib/redact.py too, its
+  front matter included wherever it is shown (the list's titles and summaries, ontology sources).
 - Task types carry an "effective" badge: lib/delegate.py's own resolution (`task_files`: a site file
   named like a repo type replaces it; `_common.md` files are added, never replaced) decides which
   file `bosun delegate` uses.
@@ -40,7 +41,10 @@ KEY_LENGTH = 16  # hex digits of a file's opaque key
 KEY_FORMAT = re.compile(rf"^[0-9a-f]{{{KEY_LENGTH}}}$")
 MASK = "<masked>"
 WEBHOOK_MASK = "<webhook URL>"
-SECRET_NAME = re.compile(r"TOKEN|SECRET|KEY|PASSWORD|PASSWD|CREDENTIAL|COOKIE|PRIVATE", re.IGNORECASE)
+# A config key whose name holds a secret: lib/redact.py's words, and any KEY or PRIVATE, which in a
+# config key's name (SSH_KEY, LICENSE_KEY) mean a secret far more often than in prose, and a masked
+# config value hides nothing anyone needs.
+SECRET_NAME = re.compile(rf"{redact.CREDENTIAL_WORD}|KEY|PRIVATE", re.IGNORECASE)
 # NAME=value, export NAME=value, NAME: value, "NAME": "value" (with the value's own quoting kept out)
 ASSIGNMENT = re.compile(
     r"""^(?P<head>\s*(?:-\s+)?(?:export\s+)?["']?(?P<name>[A-Za-z_][A-Za-z0-9_.-]*)["']?\s*[=:]\s*)(?P<value>.*?)(?P<tail>,?\s*)$"""
@@ -116,6 +120,12 @@ def front_matter(text: str) -> tuple[list[list[str]], str]:
     return fields, "\n".join(lines[end + 1 :]).lstrip("\n")
 
 
+def shown_fields(text: str, kind: str, root: str) -> dict[str, str]:
+    """A Markdown file's front matter as the file view shows it (shown_text: redacted when it comes
+    from outside the repo), for what is listed of it; other kinds have none."""
+    return dict(front_matter(shown_text(text, kind, root)[0])[0]) if kind == MARKDOWN else {}
+
+
 # ---- the catalog -------------------------------------------------------------------------------
 
 
@@ -152,7 +162,7 @@ def task_badges(repo_dir: Path, site_dir: Path | None, files: Iterable[Path]) ->
 
 def entry_summary(entry: Entry, text: str | None) -> dict[str, Any]:
     """An entry in /api/library: what it is, and its front-matter title, if any."""
-    fields = dict(front_matter(text)[0]) if text is not None and entry.kind == MARKDOWN else {}
+    fields = shown_fields(text, entry.kind, entry.root) if text is not None else {}
     return {
         "key": entry.key,
         "root": entry.root,

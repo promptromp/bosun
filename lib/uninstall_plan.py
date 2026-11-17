@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import agent_state
+import init_plan
+import log_files
 from checkout_work import Checkout, why_kept
 from init_plan import tilde
 
@@ -75,6 +77,7 @@ STATE_FILES = (
     ("quit.json", WORKING),  # bosun is stopped until started (lib/quit_state.py)
     (".quit.json.*", WORKING),  # what writing it left, cut short
     ("login-reload", WORKING),  # a reload of the jobs, so the login job's run is not taken for a login
+    ("loaded-*", WORKING),  # when its morning, learning and watchdog jobs were last loaded (reload_job)
     ("update", WORKING),
     (".*.restoring", WORKING),  # what an update's restore was writing, cut short (lib/update_backups.py)
     ("agent-changes.json", WORKING),
@@ -102,6 +105,7 @@ STATE_FILES = (
     ("signals", WORKING),
     ("slack-watch", WORKING),
     ("stopped-*", WORKING),
+    ("started-*", WORKING),  # when `bosun start` last made the session (the watchdog's gate on install day)
     ("wake-test.env", WORKING),
     ("watchdog.json", WORKING),
     ("watchdog.json.tmp", WORKING),
@@ -131,13 +135,11 @@ CONFIG_FILES = (
 LOG_FILES = tuple(
     (pattern, WORKING)
     for pattern in (
-        "morning-*.log",
-        "checkin-*.log",
-        "learn-*.log",
+        # A day's file, `<writer>-YYYY-MM-DD.log`, of bosun's own writers only (lib/log_files.py's WRITERS,
+        # what the morning run prunes): another program's day files in a shared folder stay
+        *(f"{writer}-[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].log" for writer in log_files.WRITERS),
+        *log_files.agent_logs(),  # what the agents write there (agy's logs, say: each one's profile)
         "hook-*.log*",
-        "delegate-*.log",
-        "impact-*.log",
-        "launch-*.log",
         "launchd.out",
         "launchd.err",
         "*.launchd.out",
@@ -162,7 +164,10 @@ LINK = "link"
 FILE = "file"
 CHECKOUT = "checkout"
 
-CANCEL_WAKE = "sudo pmset repeat cancel"
+CANCEL_WAKE = init_plan.CANCEL_WAKE  # the one line, which `bosun init` cancels bosun's own wake with too
+CANCEL_BY_HAND = (
+    f"{CANCEL_WAKE}  # {init_plan.CANCEL_TAKES_ALL}"  # the step's line to run, if it could not be
+)
 INSTALL_LINE = "curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | sh"
 UNREADABLE = -1  # records that are there but cannot be read, so they may hold anything
 AT_HOME = "it is where your home folder is, so it is not touched"
@@ -370,7 +375,7 @@ def wake_is_bosuns(facts: Facts) -> bool:
 
 
 def wake_steps(facts: Facts) -> list[Step]:
-    return [Step(WAKE, facts.repeating[0], by_hand=CANCEL_WAKE)] if wake_is_bosuns(facts) else []
+    return [Step(WAKE, facts.repeating[0], by_hand=CANCEL_BY_HAND)] if wake_is_bosuns(facts) else []
 
 
 def job_steps(facts: Facts) -> list[Step]:

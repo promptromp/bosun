@@ -43,7 +43,8 @@
 #
 # After a `bosun quit` that paused the morning start it logs that and exits 0 before doing anything, until
 # `bosun start`. After one that did not, it starts as usual and ends the quit. With --now it ends either, but
-# a quit made while it sets up is kept: its start is skipped, and the run says so.
+# a quit made while it sets up is kept: its start is skipped, and the run says so. Either way its last line is
+# `morning run skipped: <why>`, which the watchdog reads as the run's end: neither going nor failed.
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
 load_config
@@ -96,7 +97,7 @@ start_in_background() {
     fi
   done
   if launchd_said="$(launchctl kickstart "gui/$(id -u)/$label" 2>&1)"; then
-    log "morning run started by launchd ($label); its log is $BOSUN_LOG_DIR/morning-$(date +%F).log"
+    log "morning run started by launchd ($label); its log is $(morning_log_file)"
   else
     die "launchd did not start $label: $(tr '\n' ' ' <<<"$launchd_said")"
   fi
@@ -104,7 +105,7 @@ start_in_background() {
 }
 [ "$BACKGROUND" = "1" ] && start_in_background
 
-LOG_FILE="$BOSUN_LOG_DIR/morning-$(date +%F).log"
+LOG_FILE="$(morning_log_file)" # the workday's: a run past midnight, in a window that runs past it, is that day's
 exec > >(tee -a "$LOG_FILE") 2>&1
 LOG_TO_FILE=0 # all of its output goes to its day's file already (log() in lib/common.sh)
 
@@ -204,7 +205,8 @@ wait_for_update_hold() {
 }
 
 # The run's last word: complete and notify, or (a quit came during the run, so its start skipped) that
-# bosun was not started, with no "Sessions ready", or the problems and exit 1.
+# it was skipped, with no "Sessions ready", or the problems and exit 1. The watchdog reads each as the run's end
+# (lib/watchdog.py's parse_run).
 report_result() {
   local quit_note=""
   if [ ${#problems[@]} -gt 0 ]; then
@@ -214,7 +216,7 @@ report_result() {
     exit 1
   fi
   if [ "${quit_during:-0}" = 1 ]; then
-    log "bosun quit during the morning run; not starting"
+    log "morning run skipped: bosun quit during the run, so it did not start bosun"
     return
   fi
   log "morning run complete"
@@ -235,7 +237,8 @@ begin_run() {
       quit_clear
     fi
   elif quit_at="$(quit_paused)"; then
-    log "the morning start is paused (bosun quit at $quit_at); start bosun to resume"
+    # An end line, as every run's (the watchdog reads it as skipped: neither going nor failed, once bosun starts)
+    log "morning run skipped: the morning start is paused (bosun quit at $quit_at); start bosun to resume"
     exit 0
   elif [ "$DRY_RUN" != "1" ]; then
     # A quit that did not pause the morning ends here: bosun starts as usual, and the quit is over.

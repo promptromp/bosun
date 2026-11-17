@@ -276,6 +276,29 @@ class FailureTest(DispatcherTestCase):
         self.assertEqual(self.dispatch(NOW + timedelta(seconds=30)), f"delivered 1 event(s) to {ORCH}")
         self.assertIsNone(self.state().last_error)
 
+    def test_a_check_in_that_covers_what_failed_clears_the_error(self) -> None:
+        # The send failed, then a check-in covered the events before any retry worked: the error is old news,
+        # or the watchdog would alert it again every day.
+        self.event(100)
+        self.failure = "window 'orchestrator' is waiting"
+        self.dispatch()
+        self.assertIsNotNone(self.state().last_error)
+        events.cover(self.state_dir, NOW + timedelta(seconds=30))
+        self.assertIsNone(self.state().last_error)
+        self.assertIn("last delivery error: none", events.render_status(self.state_dir, NOW))
+
+    def test_nothing_pending_clears_an_old_error(self) -> None:
+        self.event(100)
+        self.failure = "window 'orchestrator' is waiting"
+        self.dispatch()
+        with events.locked(self.state_dir) as directory:  # covered some other way, as an older loop did
+            state = events.State.load(directory)
+            state.mark(events.pending(directory, state), events.VIA_CHECKIN, NOW)
+            state.save(directory)
+        self.assertIsNotNone(self.state().last_error)
+        self.assertEqual(self.dispatch(NOW + timedelta(seconds=30)), "")
+        self.assertIsNone(self.state().last_error)
+
     def test_an_unreadable_state_is_an_error_not_a_fresh_start(self) -> None:
         directory = events.events_dir(self.state_dir)
         directory.mkdir(parents=True)
@@ -383,6 +406,26 @@ class QueueTest(unittest.TestCase):
             self.assertEqual(
                 events.pasted_hashes(state_dir, "exporter", datetime.now(UTC)),
                 {"recent", activity.prompt_hash("next")},
+            )
+
+    def test_the_pasted_log_is_replaced_whole_never_rewritten_in_place(self) -> None:
+        """The hook, the guard and kg read it without the lock: a rewrite in place (truncate, then write)
+        let one of them read it empty or half written, and a pasted prompt count as typed by me
+        (review-runtime 7). A reader that opened it before a paste still reads it whole."""
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp)
+            events.note_pasted(state_dir, "orchestrator", "first")
+            log = events.events_dir(state_dir) / events.PASTED_FILE
+            written = log.read_text()
+            with log.open() as reader:
+                events.note_pasted(state_dir, "orchestrator", "second")
+                self.assertEqual(reader.read(), written)  # the old file, whole: a rename, not a rewrite
+            self.assertEqual(
+                events.pasted_hashes(state_dir, "orchestrator", datetime.now(UTC)),
+                {activity.prompt_hash("first"), activity.prompt_hash("second")},
+            )
+            self.assertEqual(
+                sorted(p.name for p in log.parent.iterdir()), [events.LOCK_FILE, events.PASTED_FILE]
             )
 
     def test_config_from_the_environment(self) -> None:

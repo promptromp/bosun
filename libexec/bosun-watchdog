@@ -37,6 +37,9 @@
 #   login-expired    Claude Code is logged out, the last login check failed, or a Claude window
 #                    answers every prompt with a login error (once per outage; held, like every
 #                    alert, until the awake window opens)
+#   no-credit        every prompt in a Claude window gets "Credit balance too low": an API key whose
+#                    organization has no credit that covers Claude Code (once per window and row of
+#                    such replies)
 #
 #   --once     check, record and alert (the default; what launchd runs)
 #   --dry-run  print what would alert; sends nothing and changes no state

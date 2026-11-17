@@ -104,6 +104,9 @@ STAMPED = re.compile(LOG_LINE)
 ERROR_LINE = re.compile(LOG_LINE + r"(?:ERROR|FAIL):")
 RUN_COMPLETE = "] morning run complete"
 RUN_PROBLEMS = "] morning run finished with problems"
+RUN_SKIPPED = "] morning run skipped"  # bosun was quit: paused, or quit while the run set up
+LOADED = "loaded-{role}"  # reload_job's stamp: when a job (morning, learn, watchdog) was last loaded
+STARTED = "started-{session}"  # when `bosun start` last made the session (start_marker in lib/common.sh)
 MORNING_PROBLEM = re.compile(
     r"\] (?:ERROR|FAIL):|finished with problems|could not open the window|skipping the window"
 )
@@ -329,7 +332,7 @@ def awake_seconds(config: Config, since: datetime, until: datetime) -> float:
 class MorningRun:
     started: datetime
     trigger: str
-    outcome: str = "running"  # complete, problems or running (no end line yet)
+    outcome: str = "running"  # complete, problems, skipped (bosun was quit: it started nothing) or running
     problems: list[str] = field(default_factory=list)
 
 
@@ -353,6 +356,8 @@ def parse_run(header: re.Match[str], body: list[str]) -> MorningRun:
             run.outcome = "complete"
         elif RUN_PROBLEMS in line:
             run.outcome = "problems"
+        elif RUN_SKIPPED in line:
+            run.outcome = "skipped"
         if MORNING_PROBLEM.search(line):
             run.problems.append(detail(line))
     return run
@@ -479,6 +484,8 @@ class Context:
     alive: Callable[[int], bool] = pid_alive
     auth_status: Callable[[str], claude_state.AuthStatus] = claude_state.auth_status
     morning_run: MorningRun | None = field(init=False)
+    # Each Claude window's login verdict, read once a run by the first check that asks (window_verdicts).
+    login_verdicts: dict[str, login.Verdict] | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         self.morning_run = last_real_run(self.morning_log)
@@ -488,8 +495,13 @@ class Context:
         return self.now.date()
 
     @property
+    def workday(self) -> date:
+        """The day the morning run, the session and the day's findings belong to (awake.workday)."""
+        return awake.workday(self.config.awake, self.now)
+
+    @property
     def morning_log(self) -> Path:
-        return self.config.log_dir / f"morning-{self.today:%Y-%m-%d}.log"
+        return self.config.log_dir / awake.morning_log_name(self.workday)
 
 
 def window_signals(ctx: Context, window: str, record: dict[str, Any] | None) -> signals.Signals:
@@ -499,23 +511,45 @@ def window_signals(ctx: Context, window: str, record: dict[str, Any] | None) -> 
     return signals.Signals.load(ctx.config.state_dir, window, record.get("sessionId"))
 
 
+def job_loaded_at(state_dir: Path, role: str) -> datetime | None:
+    """When bosun's launchd job for <role> (morning, learn, watchdog) was last loaded, if its stamp says."""
+    return stop_marker.read_stamp(state_dir / LOADED.format(role=role))
+
+
+def loaded_after(ctx: Context, due: datetime, role: str) -> datetime | None:
+    """When the job for <role> was last loaded, if that was at or after <due> (and not later than now): a run
+    due then is not owed, since launchd runs no time that passed before a job was loaded. None otherwise."""
+    loaded = job_loaded_at(ctx.config.state_dir, role)
+    return loaded if loaded is not None and due <= loaded <= ctx.now else None
+
+
+def morning_loaded_after(ctx: Context) -> datetime | None:
+    """loaded_after the workday's morning run: its job was loaded after its time (BOSUN_START_TIME)."""
+    return loaded_after(ctx, datetime.combine(ctx.workday, ctx.config.start), "morning")
+
+
 def check_morning_missing(ctx: Context) -> Result:
-    if not scheduled(ctx.config, ctx.today):
+    day = ctx.workday
+    if not scheduled(ctx.config, day):
         return Result("not a scheduled day")
-    due = morning_due(ctx.config, ctx.today)
+    due = morning_due(ctx.config, day)
     if ctx.now < due:
         return Result(f"not due until {due:%H:%M}")
     if ctx.morning_run:
         return Result(f"ran at {ctx.morning_run.started:%H:%M} ({ctx.morning_run.trigger})")
-    expected = datetime.combine(ctx.today, ctx.config.start) + timedelta(
-        minutes=ctx.config.wake_delay_minutes
-    )
+    loaded = morning_loaded_after(ctx)
+    if loaded:
+        start = ctx.config.start
+        return Result(
+            f"none today: its launchd job was loaded at {loaded:%H:%M}, after its {start:%H:%M} run"
+        )
+    expected = datetime.combine(day, ctx.config.start) + timedelta(minutes=ctx.config.wake_delay_minutes)
     message = (
         f"No morning run today: it was due at {expected:%H:%M} and {ctx.morning_log.name} has none. "
         "Check that the Mac woke and the launchd job is loaded (bosun doctor), "
         "then run bosun morning."
     )
-    return Result(findings=[Finding(f"morning-missing:{ctx.today}", message, confirm=True)])
+    return Result(findings=[Finding(f"morning-missing:{day}", message, confirm=True)])
 
 
 def unfinished_run(ctx: Context, run: MorningRun) -> Result:
@@ -534,7 +568,7 @@ def unfinished_run(ctx: Context, run: MorningRun) -> Result:
     message = (
         f"The morning run that started at {run.started:%H:%M} {how} without finishing; see {ctx.morning_log}."
     )
-    return Result(findings=[Finding(f"morning-failed:{ctx.today}", message, confirm=True)])
+    return Result(findings=[Finding(f"morning-failed:{ctx.workday}", message, confirm=True)])
 
 
 def check_morning_failed(ctx: Context) -> Result:
@@ -543,13 +577,15 @@ def check_morning_failed(ctx: Context) -> Result:
         return Result("no morning run today")
     if run.outcome == "running":
         return unfinished_run(ctx, run)
+    if run.outcome == "skipped":
+        return Result(f"the {run.started:%H:%M} run was skipped: bosun was quit")
     if not run.problems:
         return Result(f"the {run.started:%H:%M} run completed")
     message = (
         f"The morning run at {run.started:%H:%M} reported problems: {listed(run.problems)}. "
         f"Log: {ctx.morning_log}"
     )
-    return Result(findings=[Finding(f"morning-failed:{ctx.today}", message)])
+    return Result(findings=[Finding(f"morning-failed:{ctx.workday}", message)])
 
 
 def attach_hint(window: str) -> str:
@@ -687,9 +723,10 @@ def check_log_errors(ctx: Context) -> Result:
 
 
 def stopped_today(ctx: Context) -> datetime | None:
-    """When you stopped the session today with `bosun stop`, if you did."""
+    """When you stopped the session today with `bosun stop`, if you did: today, or since the workday began (in
+    a window past midnight, a stop before midnight counts until the window ends)."""
     stopped = stop_marker.read(ctx.config.state_dir, ctx.config.session)
-    return stopped if stopped is not None and stopped.date() == ctx.today else None
+    return stopped if stopped is not None and ctx.workday <= stopped.date() <= ctx.today else None
 
 
 # Why the session is not expected to run now (gate_kind): the awake window is not on, the morning is not
@@ -712,17 +749,41 @@ def session_gate_kind(ctx: Context) -> tuple[str, str] | None:
     return day_gate_kind(ctx)
 
 
-def day_gate_kind(ctx: Context) -> tuple[str, str] | None:
-    """session_gate_kind for a bosun that is not quit: the awake window, the morning run, `bosun stop`."""
-    if not in_awake_window(ctx.config, ctx.now):
-        return GATE_OUTSIDE, "outside the awake window"
-    due = morning_due(ctx.config, ctx.today)
+def started_since(ctx: Context, since: datetime) -> datetime | None:
+    """When `bosun start` last made the session, if that was at or after <since> (and not later than now)."""
+    started = stop_marker.read_stamp(ctx.config.state_dir / STARTED.format(session=ctx.config.session))
+    return started if started is not None and since <= started <= ctx.now else None
+
+
+def morning_gate_kind(ctx: Context) -> tuple[str, str] | None:
+    """day_gate_kind's part of the morning run, inside the awake window: none is coming today (its job was
+    loaded after its time), it is not due yet, there was none, or it is still going; None once it ended, or,
+    on a day none is coming, once `bosun start` made the session (the wizard's Start, say): it is expected."""
+    loaded = morning_loaded_after(ctx) if ctx.morning_run is None else None
+    if loaded and started_since(ctx, loaded):
+        return None
+    if loaded:  # no run is coming today: not "not due yet", which the menu shows as starting
+        return (
+            GATE_NO_MORNING,
+            f"no morning run today: its launchd job was loaded at {loaded:%H:%M}, after its time",
+        )
+    due = morning_due(ctx.config, ctx.workday)
     if ctx.now < due:
         return GATE_NOT_DUE, f"not expected before {due:%H:%M}"
     if ctx.morning_run is None:
         return GATE_NO_MORNING, "no morning run today (see morning-missing)"
     if ctx.morning_run.outcome == "running":
         return GATE_MORNING_RUNNING, "the morning run is still going"
+    return None
+
+
+def day_gate_kind(ctx: Context) -> tuple[str, str] | None:
+    """session_gate_kind for a bosun that is not quit: the awake window, the morning run, `bosun stop`."""
+    if not in_awake_window(ctx.config, ctx.now):
+        return GATE_OUTSIDE, "outside the awake window"
+    morning = morning_gate_kind(ctx)
+    if morning:
+        return morning
     stopped = stopped_today(ctx)
     if stopped:
         return GATE_STOPPED, f"you stopped it at {stopped:%H:%M} (bosun stop)"
@@ -747,7 +808,7 @@ def check_session(ctx: Context) -> Result:
         if ctx.morning_run
         else f"The tmux session '{ctx.config.session}' is not running."
     )
-    return Result(findings=[Finding(f"session-missing:{ctx.today}", message, confirm=True)])
+    return Result(findings=[Finding(f"session-missing:{ctx.workday}", message, confirm=True)])
 
 
 def check_checkin(ctx: Context) -> Result:
@@ -769,7 +830,7 @@ def check_checkin(ctx: Context) -> Result:
         problem, fix = "is missing", "run bosun refresh checkin"
     gets = "check-ins" if ctx.config.checkin_minutes > 0 else "events"
     message = f"The checkin window {problem}, so the orchestrator gets no {gets}: {fix}."
-    return Result(findings=[Finding(f"checkin-missing:{ctx.today}", message, confirm=True)])
+    return Result(findings=[Finding(f"checkin-missing:{ctx.workday}", message, confirm=True)])
 
 
 # The orchestrator's Claude not running inside the awake window: nothing reads the events, the
@@ -942,6 +1003,11 @@ def learn_missing(ctx: Context, runs: list[dict[str, Any]]) -> Result:
         return Result(f"next run due at {ctx.config.learn_at:%H:%M} on a scheduled day")
     if any(local_time(str(r["started"])) >= due for r in runs):
         return Result(f"ran today after {due:%H:%M}")
+    loaded = loaded_after(ctx, due, "learn")
+    if loaded:
+        return Result(
+            f"none today: its launchd job was loaded at {loaded:%H:%M}, after it was due at {due:%H:%M}"
+        )
     message = (
         f"No learning run today: it was due at {due:%H:%M}. Check its launchd agent (bosun doctor), "
         "or run bosun learn."
@@ -999,12 +1065,28 @@ def check_events(ctx: Context) -> Result:
     if state.last_error:
         failed_at = local_time(state.last_error["at"])
         error = state.last_error["error"]
-        message = f"Events could not be delivered to the orchestrator at {failed_at:%H:%M}: {error}"
+        when = f"{failed_at:%H:%M}" if failed_at.date() == ctx.today else f"{failed_at:%Y-%m-%d %H:%M}"
+        message = f"Events could not be delivered to the orchestrator at {when}: {error}"
         # Once a day: a failing transport fails on every dispatcher run until it is fixed.
         return Result(findings=[Finding(f"events:failed:{ctx.today}", message)])
     if not (ctx.facts.session_exists and ctx.facts.checkin_loop):
         return Result("the check-in loop is not running (see checkin-missing)")
-    return events_stalled(ctx, state)
+    held = events_held(ctx)
+    return Result(held) if held else events_stalled(ctx, state)
+
+
+def events_held(ctx: Context) -> str:
+    """Why the check-in loop runs no dispatcher on purpose, or "": while the orchestrator needs a login
+    (the gate the loop itself keeps in login.json) it holds events back, and its last tick ages. Only
+    while this run's own verdict agrees (or has none: no transcript): the loop lets the gate go on the
+    same signs, so a gate held past them is a loop running older code, which the stall's fix restarts."""
+    since = login.State.load(ctx.config.state_dir).gated.get(ctx.config.orchestrator)
+    own = window_verdicts(ctx).get(ctx.config.orchestrator)
+    if since is None or (own is not None and own.state != login.NEEDS_LOGIN):
+        return ""
+    when = login.shown(login.parse_stamp(since))
+    who = ctx.config.orchestrator
+    return f"the check-in loop holds events back while {who} needs /login (since {when}; see login-expired)"
 
 
 # The Slack watcher has stalled when no run started for this many of its intervals (at least
@@ -1081,26 +1163,46 @@ def check_slack_watch(ctx: Context) -> Result:
 
 # An expired or revoked Claude Code login: every prompt gets an error reply and nothing else.
 LOGIN_CHECK = "login-expired"
+# An API key whose organization has no credit that covers Claude Code: every prompt gets "Credit
+# balance too low" (lib/login.py's no-credit). Not spend-limit's probe: the login check request works
+# without credit, so it cannot tell when credit was added. A new row of such replies alerts again.
+NO_CREDIT = "no-credit"
+
+
+def window_transcripts(ctx: Context) -> dict[str, Path]:
+    """Each Claude window's transcript; a window without one is left out."""
+    found = {}
+    for window in ctx.facts.windows if ctx.facts.session_exists else ():
+        entry = ctx.record(window.agent_pid) if window.agent_pid else None
+        transcript = claude_state.transcript_of(entry) if entry else None
+        if transcript:
+            found[window.name] = transcript
+    return found
+
+
+def window_verdicts(ctx: Context) -> dict[str, login.Verdict]:
+    """Each Claude window's verdict (lib/login.py: its transcript, the last login check and what the other
+    windows show), as `bosun status`, the console and the check-in loop have it; read once a run."""
+    if ctx.login_verdicts is None:
+        probe = login.State.load(ctx.config.state_dir).last_probe
+        ctx.login_verdicts = login.window_verdicts(window_transcripts(ctx), probe)
+    return ctx.login_verdicts
 
 
 def window_logins(ctx: Context) -> list[str]:
     """The Claude windows whose latest replies are all login errors, with since when."""
-    found = []
-    for window in ctx.facts.windows if ctx.facts.session_exists else ():
-        entry = ctx.record(window.agent_pid) if window.agent_pid else None
-        transcript = claude_state.transcript_of(entry) if entry else None
-        verdict = login.window_verdict(transcript, None) if transcript else None
-        if verdict and verdict.state == login.NEEDS_LOGIN:
-            found.append(f"{window.name} (since {login.shown(verdict.since)})")
-    return found
+    return [
+        f"{name} (since {login.shown(verdict.since)})"
+        for name, verdict in window_verdicts(ctx).items()
+        if verdict.state == login.NEEDS_LOGIN
+    ]
 
 
 def check_login(ctx: Context) -> Result:
     """The login itself (`claude auth status`, the last login check) and every Claude window's
     latest replies. One alert per outage: the key stays the same until everything works again."""
-    overall = login.global_verdict(
-        ctx.auth_status(ctx.config.claude_bin), login.State.load(ctx.config.state_dir).last_probe
-    )
+    probe = login.State.load(ctx.config.state_dir).last_probe
+    overall = login.global_verdict(ctx.auth_status(ctx.config.claude_bin), probe)
     windows = window_logins(ctx)
     if overall.state != login.NEEDS_LOGIN and not windows:
         return Result(f"Claude Code {overall.detail}; no window answers only with login errors")
@@ -1112,6 +1214,30 @@ def check_login(ctx: Context) -> Result:
         "attach) or claude auth login; check-ins pause until the orchestrator works again."
     )
     return Result(findings=[Finding(f"{LOGIN_CHECK}:outage", message)])
+
+
+def credit_finding(window: str, since: datetime | None) -> Finding:
+    message = (
+        f"{window}: every prompt gets 'Credit balance too low' since {login.shown(since)}: the API key's "
+        "organization has no credit that covers Claude Code (a subscription's promotional credits do "
+        f"not). Add credit in the Console's billing, then tell the window to carry on (bosun send {window} "
+        "...); or use your subscription: remove the API key (ANTHROPIC_API_KEY in your shell profile, or "
+        f"apiKeyHelper in ~/.claude/settings.json), restart the window (bosun refresh {window}), then /login "
+        "in it."
+    )
+    row = f"{naive(since):%Y-%m-%dT%H:%M}" if since else "?"
+    return Finding(f"{NO_CREDIT}:{window}:{row}", message, window=window)
+
+
+def check_no_credit(ctx: Context) -> Result:
+    """Every Claude window whose latest replies are all "Credit balance too low", from its transcript.
+    One alert per row of such replies: a normal reply in between starts a new one."""
+    findings = [
+        credit_finding(name, verdict.since)
+        for name, verdict in window_verdicts(ctx).items()
+        if verdict.state == login.NO_CREDIT
+    ]
+    return Result("no Claude window gets only 'Credit balance too low'", findings)
 
 
 # A background command (a Bash tool call run in the background) keeps a Claude in "shell" once its
@@ -1532,6 +1658,13 @@ CHECKS: tuple[Check, ...] = (
         rearms=True,
     ),
     Check(
+        NO_CREDIT,
+        "error",
+        "every prompt in a Claude window gets 'Credit balance too low' (an API key whose organization "
+        "has no credit that covers Claude Code); once per window and row of such replies",
+        check_no_credit,
+    ),
+    Check(
         "update-stuck",
         "error",
         "an update stopped and left its hold (or paused writes), or its hold outlived its hour",
@@ -1653,14 +1786,22 @@ def rearm(state: State, report: Report) -> None:
     state.alerted = {k: at for k, at in state.alerted.items() if k.split(":", 1)[0] not in cleared}
 
 
+def consumed(report: Report, check: Check) -> bool:
+    """Whether this run consumed what <check> read (the log lines): only once what it found went out. Outside
+    the awake window, or while `batch` holds its alert for company, the next run reads the same lines again,
+    since nothing else would find them."""
+    return report.in_window and not any(
+        v.check.name == check.name and v.decision in (HELD, CONFIRMING) for v in report.verdicts
+    )
+
+
 def commit(ctx: Context, report: Report, checks: tuple[Check, ...], full_run: bool) -> None:
     """Record what this run alerts, what it is still confirming and how far it read the logs."""
     record_alerts(ctx.state, report, ctx.now)
     record_pending(ctx.state, report, checks, ctx.now)
     rearm(ctx.state, report)
-    for _check, result in report.results:
-        # Outside the awake window the logs are not consumed, so their errors alert later.
-        if result.offsets is not None and (ctx.state.logs is None or report.in_window):
+    for check, result in report.results:
+        if result.offsets is not None and (ctx.state.logs is None or consumed(report, check)):
             ctx.state.logs = result.offsets
         if result.shells is not None:
             ctx.state.shells = result.shells

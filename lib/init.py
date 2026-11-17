@@ -6,8 +6,8 @@ this file prints the plan and carries it out: it writes the config (with backups
 folders, then runs install.sh, which already knows launchd, pmset and `bosun doctor`. Design:
 docs/design/init.md.
 
-Exit status: 0 done (or only printed), 1 blocked or `bosun doctor` found a problem, 2 bad usage or
-answers.
+Exit status: 0 done (or only printed), 1 blocked or install.sh stopped at a step, 2 bad usage or answers,
+3 set up, and `bosun doctor` found problems (listed last).
 """
 
 from __future__ import annotations
@@ -15,11 +15,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
-from dataclasses import asdict, replace
+from collections.abc import Mapping, Sequence
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -29,13 +31,20 @@ import init_plan
 import init_terminal
 import init_wizard
 from init_plan import Answers, AnswersError, DirState, Facts, Plan, RepoUse
-from install_paths import install_bin
+from install_paths import install_bin, install_path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 EXIT_BLOCKED = 1
 EXIT_USAGE = 2
+EXIT_DOCTOR = 3  # set up, with the problems `bosun doctor` found; install.sh's own exit status for that
+FAIL_LINE = "  FAIL  "  # how `bosun doctor` begins a check that failed
+UNDER_A_LINE = "    "  # how it indents what it lists under one (the missing tools, a store's findings)
+ERROR_MARK = "ERROR: "  # how lib/common.sh's die says what stopped a script
+LAST_LINES = 3  # of what install.sh printed, said again when doctor stopped without saying what failed
 UNATTENDED_VARIABLE = "BOSUN_INIT_UNATTENDED"  # what get.sh --unattended sets: --unattended
+# What get.sh hands init for this run only (init_detect's CHANNEL_VARIABLE among them): never for the windows
+HANDED_OVER = frozenset({"BOSUN_USER_PATH", "BOSUN_RERUN", UNATTENDED_VARIABLE, init_detect.CHANNEL_VARIABLE})
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -146,21 +155,85 @@ def can_ask_for_sudo() -> bool:
     return init_detect.output_of("sudo", "-n", "true") is not None
 
 
-def run_steps(plan: Plan) -> int:
-    """Trust the folders, then let install.sh do the rest. Its status is `bosun doctor`'s."""
+@dataclass(frozen=True)
+class Installed:
+    """What install.sh came to: its exit status, and from what it printed, what stopped it (its last ERROR
+    line) or the problems `bosun doctor` found (each FAIL line, with what is listed under it)."""
+
+    status: int
+    error: str = ""
+    problems: tuple[str, ...] = ()
+    last_lines: tuple[str, ...] = ()  # what it printed last, said again when doctor stopped with no FAIL line
+
+    @property
+    def set_up(self) -> bool:
+        """Every step of install.sh was made: doctor found nothing, or only problems (EXIT_DOCTOR)."""
+        return self.status in (0, EXIT_DOCTOR)
+
+
+def doctor_problems(lines: Sequence[str]) -> tuple[str, ...]:
+    """The FAIL lines of `bosun doctor` among <lines>, each with the lines indented under it."""
+    found: list[str] = []
+    under_a_failure = False
+    for line in lines:
+        if line.startswith(FAIL_LINE):
+            found.append(line)
+            under_a_failure = True
+        elif under_a_failure and line.startswith(UNDER_A_LINE):
+            found[-1] += "\n" + line
+        else:
+            under_a_failure = False
+    return tuple(found)
+
+
+def last_error(lines: Sequence[str]) -> str:
+    """What the last ERROR line among <lines> says (lib/common.sh's die), or ""."""
+    said = [line.split(ERROR_MARK, 1)[1] for line in lines if ERROR_MARK in line]
+    return said[-1].strip() if said else ""
+
+
+def run_shown(command: Sequence[str]) -> tuple[int, list[str]]:
+    """<command> run, each line it prints (its stderr with it) shown as it comes, and kept: its exit status
+    and its lines."""
+    lines = []
+    with subprocess.Popen(
+        list(command), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace"
+    ) as process:
+        for line in process.stdout or ():
+            print(line, end="", flush=True)
+            lines.append(line.rstrip("\n"))
+    return process.returncode, lines
+
+
+def cancel_by_hand(event: str) -> str:
+    """What to run to cancel bosun's own wake <event> by hand: install.sh's --cancel-wake, which looks again
+    before it does, since `sudo pmset repeat cancel` takes every repeating event."""
+    command = shlex.join([str(install_path(ROOT) / "install.sh"), "--cancel-wake", event])
+    only = f"it runs {init_plan.CANCEL_WAKE} only while bosun's wake is pmset's one repeating event"
+    return f"{command} ({only}: {init_plan.CANCEL_TAKES_ALL})"
+
+
+def run_steps(plan: Plan) -> Installed:
+    """Trust the folders, then let install.sh do the rest: what it came to."""
     sys.stdout.flush()  # what was printed so far comes before what these print
     if plan.trust:
         subprocess.run([str(ROOT / "bin" / "bosun"), "trust", "--any", *plan.trust], check=False)
     flags = []
-    if plan.wake_command:
+    for command, flag, by_hand in (
+        (plan.wake_command, ["--with-wake"], plan.wake_command),
+        (plan.cancel_wake, ["--cancel-wake", plan.cancel_event], cancel_by_hand(plan.cancel_event)),
+    ):
+        if not command:
+            continue
         if can_ask_for_sudo():
-            flags.append("--with-wake")
+            flags += flag
         else:
-            print(
-                f"No terminal to ask for your password, so run this once yourself: {plan.wake_command}",
-                flush=True,
-            )
-    return subprocess.run([str(ROOT / "install.sh"), *flags], check=False).returncode
+            print(f"No terminal to ask for your password, so run this once yourself: {by_hand}", flush=True)
+    status, lines = run_shown([str(ROOT / "install.sh"), *flags])
+    if status == EXIT_DOCTOR:
+        said = tuple(line for line in lines if line.strip())[-LAST_LINES:]
+        return Installed(status, problems=doctor_problems(lines), last_lines=said)
+    return Installed(status, error="" if status == 0 else last_error(lines))
 
 
 def bosun_app(*argv: str) -> bool:
@@ -229,21 +302,53 @@ def apply_hint() -> str:
     )
 
 
-def carry_out(plan: Plan, config_dir: Path) -> int:
+def stopped_line(installed: Installed) -> str:
+    """Why init stopped, when install.sh stopped at a step: what it said stopped it."""
+    what = installed.error or f"it exited with {installed.status}, without saying why"
+    return f"\ninstall.sh stopped before it was done: {what}. Fix that, then run bosun init again."
+
+
+def doctor_closing(installed: Installed) -> str:
+    """The last thing init says when `bosun doctor` found problems: each of them, said again; or, when it
+    stopped without a FAIL line, the last lines it printed."""
+    if installed.problems:
+        listed = "\n".join(installed.problems)
+        return f"\n`bosun doctor` found problems:\n{listed}\nFix them, then run bosun doctor again to check."
+    if installed.status == EXIT_DOCTOR:
+        said = "\n".join(installed.last_lines) or "(nothing)"
+        return (
+            f"\n`bosun doctor` stopped before it was done; it said last:\n{said}\n"
+            "Run bosun doctor to see it whole."
+        )
+    return ""
+
+
+def carry_out(plan: Plan, config_dir: Path) -> Installed:
+    """The plan carried out: the files, install.sh, then the app, once install.sh made every step (doctor's
+    problems are said last, by the caller: doctor_closing)."""
     if plan.blockers:
         print("\nNothing was changed: fix what is under Blocked first.", file=sys.stderr)
-        return EXIT_BLOCKED
+        return Installed(EXIT_BLOCKED)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     env_found = (config_dir / init_plan.ENV_FILE).exists()  # before this run writes it
     apply_files(plan, config_dir, stamp)
-    status = run_steps(plan)
-    if status != 0:
-        print("\n`bosun doctor` found problems, listed above. Fix them and run it again.", file=sys.stderr)
-        return EXIT_BLOCKED
+    installed = run_steps(plan)
+    if not installed.set_up:
+        print(stopped_line(installed), file=sys.stderr)
+        return replace(installed, status=EXIT_BLOCKED)
     if plan.menu_app:
         add_the_app(plan, config_dir, stamp, env_found=env_found)
     print(path_note(), end="\n" if path_note() else "")
-    return 0
+    return installed
+
+
+def finished(installed: Installed) -> int:
+    """init's exit status for what carry_out came to, after saying doctor's problems last."""
+    closing = doctor_closing(installed)
+    if closing:
+        sys.stdout.flush()  # what init said before comes first
+        print(closing, file=sys.stderr)
+    return installed.status
 
 
 def typed_repo(typed: str) -> RepoUse | None:
@@ -259,8 +364,18 @@ def wants_wizard(args: argparse.Namespace) -> bool:
     return not asked_for_something and sys.stdin.isatty() and sys.stdout.isatty()
 
 
+def windows_environment(environ: Mapping[str, str]) -> dict[str, str]:
+    """The environment the windows start with: init's, without what get.sh handed it for this run and without
+    the settings bosun.env now holds from the answers (`curl ... | BOSUN_HARNESS=codex sh` among them). `bosun
+    start` starts the tmux server with it, whose every window and command would keep them, beating bosun.env
+    (an exported BOSUN_* setting does) until the server ends. A setting init does not write (BOSUN_CONFIG_DIR,
+    say) passes, as a real override."""
+    answered = init_plan.answer_keys()
+    return {key: value for key, value in environ.items() if key not in HANDED_OVER and key not in answered}
+
+
 def start_windows() -> None:
-    subprocess.run([str(ROOT / "bin" / "bosun"), "start"], check=False)
+    subprocess.run([str(ROOT / "bin" / "bosun"), "start"], check=False, env=windows_environment(os.environ))
     print("\nThe windows are up. `bosun attach` opens them, and `bosun console` shows what they are doing.")
 
 
@@ -283,10 +398,10 @@ def run_wizard(facts: Facts, config_dir: Path) -> int:
     if answers is None:
         print("\nNothing was changed. `bosun init` starts again whenever you like.")
         return 0
-    status = carry_out(plan_for(answers), config_dir)
-    if status == 0 and init_wizard.ask_start(ui):
+    installed = carry_out(plan_for(answers), config_dir)
+    if installed.set_up and init_wizard.ask_start(ui):
         start_windows()
-    return status
+    return finished(installed)
 
 
 def show_plan(facts: Facts, answers: Answers, args: argparse.Namespace, config_dir: Path) -> int:
@@ -297,12 +412,12 @@ def show_plan(facts: Facts, answers: Answers, args: argparse.Namespace, config_d
     if not args.recommended and args.answers is None:
         print(apply_hint())
         return 0
-    status = carry_out(plan, config_dir)
-    if status == 0:
+    installed = carry_out(plan, config_dir)
+    if installed.set_up:
         print("\nbosun is set up. `bosun start` brings the windows up now; `bosun console` shows them.")
         note = init_plan.unattended_note(facts, answers) if args.unattended else ""
         print(note, end="\n" if note else "")
-    return status
+    return finished(installed)
 
 
 def main(argv: list[str]) -> int:

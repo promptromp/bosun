@@ -1,4 +1,4 @@
-"""The context a session gets back after Claude Code compacts its conversation (docs/setup.md: compaction).
+"""The context a session gets back after Claude Code compacts its conversation (docs/day.md: compaction).
 
 A compaction keeps a summary of the conversation, which can drop which ledger items the window
 holds. `bosun hook compact-context` (a SessionStart hook, matcher `compact`) adds a short block

@@ -12,8 +12,9 @@ runs it) and for a repo session holding a delegated item (its real task text fro
 delegate --print`, in a scratch git repo). A case can say things earlier in the same session first
 (`before`, each its own turn, so a background task one turn starts still runs at the next). Each run
 gets a scratch world (tests/llm/world.py):
-scratch ledger, sends only logged, its own tmux server with fake windows, and outward tools
-denied, so nothing reaches Slack, GitHub, Jira, Confluence or the live session. Claude runs with no
+scratch ledger, sends only logged, its own tmux server with fake windows, a gh that knows only the
+pull requests its case gives it, and outward tools denied, so nothing reaches Slack, GitHub, Jira,
+Confluence or the live session. Claude runs with no
 MCP servers (--strict-mcp-config), so runs cannot read real Slack or other connected systems and
 real names stay out of the results; --with-mcp loads the user's MCP servers (read tools only, as
 above) for a more realistic run. Cases and their expectations are in tests/llm/cases.py.

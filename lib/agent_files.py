@@ -124,6 +124,9 @@ class Profile:
     # whether bosun can check a quote of my words in its sessions' transcripts (a genuine prompt I typed
     # there), so that a fact or a review in my words from one of its sessions can count as mine
     verifies_quotes: bool = False
+    # the files it writes in bosun's log folder (fnmatch patterns), which the morning's pruning removes once
+    # not written for its keep, and `bosun uninstall` knows as bosun's (lib/log_files.py's agent_logs)
+    log_files: tuple[str, ...] = ()
 
 
 def command_line(pid: int | str) -> str:

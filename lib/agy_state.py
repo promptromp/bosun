@@ -1274,6 +1274,8 @@ PROFILE = Profile(
     autocompact=False,
     subagents=False,
     state_files=(NAMES_FILE, STATUS_DIR),
+    # the window's --log-file (lib/launch/agy.sh), and the agy-<window>-<date>-<n>.log agy rolls it over to
+    log_files=("agy-*.log",),
     display_name="Antigravity",
     setup_preview=(
         (
