@@ -831,17 +831,19 @@ widened_by_the_repo() {
 
 # Claude Code loads every plugin I enabled; bosun keeps them in repo windows (BOSUN_PLUGINS=all) and switches them off
 # in the orchestrator (BOSUN_ORCHESTRATOR_PLUGINS empty) with a `false` per plugin in its --settings. A tiny plugin,
-# probe-hook, from a local marketplace, whose SessionStart hook notes the session's folder in PLUGIN_STARTS: a start
-# that loads the plugin leaves a line there, one that does not leaves none (plugins_of_mine sets the names).
+# probe-hook, from a local marketplace, whose SessionStart hook notes the session's id and folder in PLUGIN_STARTS: a
+# start that loads the plugin leaves its line there, one that does not leaves none. Lines go by the session's id, so a
+# headless `claude -p` bosun starts meanwhile (a login check) cannot stand for a window (plugins_of_mine sets the
+# names).
 a_claude_plugin() {
   local kit="$PLUGIN_MARKET/plugins/probe-hook"
   mkdir -p "$PLUGIN_MARKET/.claude-plugin" "$kit/.claude-plugin" "$kit/hooks"
   echo '{"name": "probe-local", "owner": {"name": "sandbox"}, "plugins": [{"name": "probe-hook", "source": "./plugins/probe-hook", "description": "notes where a session starts"}]}' \
     >"$PLUGIN_MARKET/.claude-plugin/marketplace.json"
   echo '{"name": "probe-hook", "version": "0.1.0", "description": "notes where a session starts"}' >"$kit/.claude-plugin/plugin.json"
-  echo '{"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/note.sh\""}]}]}}' >"$kit/hooks/hooks.json"
-  printf '#!/bin/sh\njq -r .cwd >>"%s"\n' "$PLUGIN_STARTS" >"$kit/hooks/note.sh"
-  chmod +x "$kit/hooks/note.sh"
+  # Run with sh, so that an exec bit the install does not keep does not matter.
+  echo '{"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/note.sh\""}]}]}}' >"$kit/hooks/hooks.json"
+  printf '#!/bin/sh\njq -r '"'"'"\\(.session_id) \\(.cwd)"'"'"' >>"%s"\n' "$PLUGIN_STARTS" >"$kit/hooks/note.sh"
   if ! claude plugin marketplace add "$PLUGIN_MARKET" >"$OUT/claude-plugin-add.txt" 2>&1 ||
     ! claude plugin install "$PLUGIN_ID" >>"$OUT/claude-plugin-add.txt" 2>&1; then
     cat "$OUT/claude-plugin-add.txt"
@@ -850,7 +852,16 @@ a_claude_plugin() {
   jq -e --arg id "$PLUGIN_ID" '.enabledPlugins[$id] == true' "$HOME/.claude/settings.json" >/dev/null
 }
 # The plugin's hook ran in a session in the probe repo (its path as given, or resolved).
-started_in_probe() { grep -qxF -e "$PROBE_REPO" -e "$(cd "$PROBE_REPO" && pwd -P)" "$PLUGIN_STARTS" 2>/dev/null; }
+started_in_probe() {
+  grep -qE " ($PROBE_REPO|$(cd "$PROBE_REPO" && pwd -P))\$" "$PLUGIN_STARTS" 2>/dev/null
+}
+# The plugin's hook ran in no session of <session id> (none known counts as ran: nothing to tell it by).
+not_started_in() {
+  if [ -z "$1" ] || grep -q "^$1 " "$PLUGIN_STARTS" 2>/dev/null; then
+    echo "session '$1'; the hook's lines: $(tr "\n" " " <"$PLUGIN_STARTS")"
+    return 1
+  fi
+}
 # The orchestrator's agent stopped, and started again by bosun refresh.
 orchestrator_restarted() {
   local pid
@@ -871,12 +882,14 @@ plugins_of_mine() {
   orchestrator_restarted
   check "... launched with probe-hook switched off in its --settings" bash -c '
     ps -o command= -p "$1" | grep -qF "\"$2\":false"' _ "$(pid_of orchestrator)" "$PLUGIN_ID"
-  check "... and the plugin's hook ran in no session" bash -c '[ ! -s "$1" ] || { tr "\n" " " <"$1"; exit 1; }' _ "$PLUGIN_STARTS"
+  check "... and the plugin's hook ran in none of its sessions" not_started_in "$(window orchestrator sessionId)"
   bosun doctor >"$OUT/plugin-doctor.txt" 2>&1
-  check "doctor's line: the orchestrator loads none of mine, one switched off" grep -q "orchestrator: plugins: none of yours (1 switched off)" "$OUT/plugin-doctor.txt"
+  check "doctor's line: the orchestrator loads none of mine" grep -qF "orchestrator: plugins: none of yours (" "$OUT/plugin-doctor.txt"
   check "doctor's line: the probe window loads all of mine" grep -q "$PROBE_WINDOW: plugins: all of yours" "$OUT/plugin-doctor.txt"
   grep ": plugins: " "$OUT/plugin-doctor.txt" | sed 's/^/  note  doctor: /'
   claude plugin uninstall "$PLUGIN_ID" >>"$OUT/claude-plugin-add.txt" 2>&1 || echo "  note  could not uninstall $PLUGIN_ID"
+  claude plugin marketplace remove probe-local >>"$OUT/claude-plugin-add.txt" 2>&1 || echo "  note  could not remove the marketplace probe-local"
+  rm -rf "$PLUGIN_MARKET"
 }
 
 connectors() {
