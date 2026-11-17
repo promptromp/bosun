@@ -268,7 +268,8 @@ watchdog has); check whether an applied change stops its finding from recurring 
 findings that came back, not yet against when their fix was applied); sandboxed on-demand reads of
 transcript excerpts; proposals as diffs to the generic prompts (reviewed as PRs); a second harness
 adapter, for Codex windows. Open: whether `learn apply` should also need a permission prompt once
-phone approvals are verified.
+phone approvals are verified; and the analysis call, which still loads every Claude Code plugin of mine (the
+Slack watcher's loads no settings files; the orchestrator's plugin list, 2026-11-17, is the other way).
 
 ### 6. Sync and sharing
 
@@ -355,7 +356,12 @@ does not list (synced from the account, `--plugin-dir`, managed) is allowed by w
 Claude Code adds up every scope's allow list, so a window whose repo (or my own settings) allows a server its
 list does not name refuses to start, saying which file and what to do. A window whose restart in an update
 dies at its launch (that refusal, a failed Codex listing, an agent that exits at once) is no longer waited for:
-the summary says it did not start, why, and what to do (2026-11-17). Design note:
+the summary says it did not start, why, and what to do (2026-11-17). Plugins too (2026-11-17): every Claude
+Code window loaded all of my plugins, their hooks, skills and commands, so one whose hook asks for a skill before any
+reply could stop the orchestrator's unattended chores at a question. Now the orchestrator loads none of mine unless
+`BOSUN_ORCHESTRATOR_PLUGINS` names them (an older install keeps `all`), repo windows keep them (`BOSUN_PLUGINS`,
+`plugins:` per window), a plugin a window's connectors need stays on, and `bosun doctor` says what each loads. Run
+in the macOS VM with real Claude Code and a local plugin's hook. Design note:
 [docs/design/connectors.md](docs/design/connectors.md).
 
 **Done (2026-11-10): a hardening round.** Gaps an inventory of the adversarial cases turned up, each now
