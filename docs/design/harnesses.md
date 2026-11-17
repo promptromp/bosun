@@ -28,6 +28,7 @@ Shared code never asks which agent it has. Each layer has one place per agent, a
 | What an agent is and can do | `lib/agent_state.py profiles` prints one tab-separated line per agent, which `lib/agents.sh` reads (`profile_field`, `known_harnesses`, `agent_bin_env`, `harness_bin`, `harness_default_model`) | A `Profile` in each adapter (`PROFILE`, `lib/agent_files.py`): its config keys, whether its name for a session comes from the agent, which statuses it reports, Remote Control, autocompact, per-task subagents, its state files, and how `bosun init` shows it |
 | Reading a screen | `lib/pane_input.py` asks the `AGENTS` table; `lib/screen_text.py` has the helpers readers share | A `Screen` in its profile: `typed`, `question`, `rejected` (`lib/agent_files.py`) |
 | Holding a window to its connectors | `lib/connectors.py`: reading a list, the report's helpers, and `doctor`, which imports the module the window's profile names | `lib/connectors_<harness>.py`, named by `Profile.connectors`: `main` (its launch command line) and `doctor_line` |
+| Which of my plugins a window loads | `lib/plugins.py` (the list, and Claude Code's plan), and `connectors.py plugins-doctor`, which imports the module the window's profile names | The module named by `Profile.plugins` (`lib/plugins_claude.py`, or the agent's connectors module): `plugins_doctor_line`; its launch limits plugins per plugin, switches them all off, or refuses a list ([connectors](connectors.md#plugins)) |
 | The end of a turn | `lib/hook.py`'s `turn-end --harness <agent>`: the update gate, events, the log | A `TurnEnd` in its profile, or none (`lib/agent_files.py`): `report` (what its JSON says: `TurnReport`, or why it is ignored) and `remember` (the name its session goes by) |
 
 `window_specs` is the one source of which agent a window runs: `window_harness` and `harnesses_in_use` read it.
@@ -77,7 +78,8 @@ mcp_servers={<name>={enabled=false},...}` for every configured server the list d
 bare TOML key or a TOML basic string; `--disable plugins` when the list does not name one of the plugins'
 servers, since a plugin's server is not an `mcp_servers` table (naming one there stops Codex) and nothing
 Codex prints says which plugin it is from, so every plugin goes, a plugin server the list names too; and
-`--disable apps` to switch ChatGPT's connectors off; nothing for `all`. One inline table, because Codex splits a `-c` path at every dot, quotes included (`config/src/overrides.rs`), so
+`--disable apps` to switch ChatGPT's connectors off; nothing for `all`. A window whose plugin list is not
+`all` gets `--disable plugins` too, alone for the connectors `all` ([plugins](connectors.md#plugins)). One inline table, because Codex splits a `-c` path at every dot, quotes included (`config/src/overrides.rs`), so
 `-c mcp_servers."a.b".enabled=false` names a server `"a` and Codex exits at start (`invalid transport`); a
 table in the value is read as TOML and merges into the configuration. The Mac VM (`tests/sandbox.sh mac live
 codex`, Codex 0.166.0) showed it for a user's server, a project's and one named with a dot, new and after
@@ -150,14 +152,15 @@ with the facts and their reasons in [the design note](antigravity.md#part-2-agy-
    `AGENTS` (`lib/agent_state.py`). `mypy` checks it has them all.
 3. `lib/launch/<harness>.sh`, with the functions of `lib/launch/codex.sh`.
    Its `lib/connectors_<harness>.py` (`main`, `doctor_line`; `Profile.connectors` names it) holds a window to
-   its list of connectors.
+   its list of connectors, and the module `Profile.plugins` names (`plugins_doctor_line`) says what it does with
+   a window's plugin list.
 4. A stand-in in `tests/sandbox/`, a section of `tests/sandbox/fresh_user.sh`, and a run with the real thing:
    `tests/sandbox.sh mac live <harness>`. The stand-in only behaves the way you already believed: every trap
    above was found by the real run, so teach the stand-in each one afterwards.
 5. `tests/unit/test_agent_names.py` must still pass: it fails on an agent's id as a string constant in shared
    Python, or as a case arm or comparison in shared shell. Its `ALLOWED` lists the files that hold what only
-   Claude Code has; a new agent adds nothing there, and its own modules are taken from `AGENTS` and
-   `Profile.connectors`. An agent other than the orchestrator's also needs `setup_sessions` and `setup_note` in its
+   Claude Code has; a new agent adds nothing there, and its own modules are taken from `AGENTS`,
+   `Profile.connectors` and `Profile.plugins`. An agent other than the orchestrator's also needs `setup_sessions` and `setup_note` in its
    profile (`tests/unit/test_agent_profiles.py` checks), which `bosun init` shows when it is chosen.
    An agent that needs something set up once (a plugin installed in it) declares `Profile.setup`, an `AgentSetup`:
    `bosun launch` makes it before the agent's first window starts (`agent_setup` in `lib/agents.sh`, holding

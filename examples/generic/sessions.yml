@@ -8,6 +8,9 @@
 # Optional per window: `connectors`, the MCP servers and connectors it may reach, by the names `claude mcp
 # list` (or `codex mcp list`) shows, or URL patterns: a list, [] for none, `all` for every one; default:
 # BOSUN_CONNECTORS in bosun.env (empty: none). See docs/configuration.md, "Connectors".
+# Optional per window: `plugins`, which of your Claude Code plugins it loads, by id (acme-helper@acme-market)
+# or bare name: a list, [] for none, `all` for every one; default: BOSUN_PLUGINS in bosun.env (all). See
+# docs/configuration.md, "Plugins".
 sessions:
   - name: my-service
     dir: ~/Development/my-service

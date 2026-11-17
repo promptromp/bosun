@@ -18,6 +18,9 @@ hands to repo windows, and how to steer it.
 - **Only the connectors you name** in `BOSUN_ORCHESTRATOR_CONNECTORS` (empty: none), such as `claude.ai Slack` and a
   tracker ([Connectors](configuration.md#connectors-what-each-window-may-reach)). A name it cannot find at launch is
   left out, and `bosun alert` tells you which.
+- **None of your Claude Code plugins** unless `BOSUN_ORCHESTRATOR_PLUGINS` names them
+  ([Plugins](configuration.md#plugins-which-of-yours-each-window-loads)): a plugin's hook or skill could stop its
+  unattended chores at a question. Its own plugin (`/bosun:chores`) always loads.
 - **A folder Claude Code already trusts** (`BOSUN_ORCHESTRATOR_DIR`, default your repos folder), since a trust prompt
   would stop an unattended start; `bosun doctor` checks it.
 

@@ -290,6 +290,9 @@ or an update holds it, and a watchdog job that never ran warns three intervals a
   each name not found. It warns while the orchestrator's list is `all` or `bosun.env` does not set it, and for a
   Claude Code window that another settings file would widen, which does not start. See
   [Connectors](configuration.md#connectors-what-each-window-may-reach).
+- **Which of your plugins each window loads**: all of yours, or none or the ones it keeps, how many it switches off,
+  what it keeps for its connectors; it warns for a name not found and a plugin managed settings force on. See
+  [Plugins](configuration.md#plugins-which-of-yours-each-window-loads).
 - **What the last `bosun update` left to you**: what to change by hand in your own files (warns), and the config keys
   it added that `bosun.env` does not set, with the value each has now and what it means.
 
