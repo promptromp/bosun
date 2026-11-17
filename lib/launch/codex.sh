@@ -21,20 +21,21 @@ set_codex_connector_args() { # <name>
   local list plugins output line errors code=0
   list="$(window_connectors "$1")" || die "could not read the connectors of '$1' in $BOSUN_SESSIONS_FILE"
   plugins="$(window_plugins "$1")" || die "could not read the plugins of '$1' in $BOSUN_SESSIONS_FILE"
-  errors="$(mktemp "${TMPDIR:-/tmp}/bosun-connectors.XXXXXX")" || die "'$1' does not start: no temporary file"
+  errors="$(mktemp "${TMPDIR:-/tmp}/bosun-connectors.XXXXXX")" || launch_refused "$1" "no temporary file"
   # Each list is its own argument, so one that starts with "-" is no flag.
   output="$(python3 "$BOSUN_ROOT/lib/connectors_codex.py" --agent-bin "$BOSUN_CODEX_BIN" --list="$list" \
     --plugins="$plugins" 2>"$errors")" || code=$?
   log_connector_lines "$1" "$errors"
+  [ "$code" = 0 ] || note_reason "$errors"
   rm -f "$errors"
   [ "$code" = 0 ] ||
-    die "'$1' does not start: could not tell which servers its connectors switch off (lib/connectors_codex.py, above)"
+    launch_refused "$1" "could not tell which servers its connectors switch off" lib/connectors_codex.py
   codex_connector_args=()
   if [ -n "$output" ]; then
     while IFS= read -r line; do codex_connector_args+=("$line"); done <<<"$output"
   fi
   codex_connector_args_valid "$list" "$plugins" ||
-    die "'$1' does not start: lib/connectors_codex.py gave arguments not of the expected shape"
+    launch_refused "$1" "lib/connectors_codex.py gave arguments not of the expected shape"
   codex_connector_window="$1"
 }
 

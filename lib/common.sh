@@ -562,6 +562,24 @@ refuse() {
 # A launch's last error, in its window's file (launch_error_file), which `refresh --update-restart` reads to say
 # why a window did not start: only where the command set LAUNCH_ERROR_FILE (bosun launch; never exported).
 note_error() { [ -z "${LAUNCH_ERROR_FILE:-}" ] || printf '%s\n' "$*" 2>/dev/null >"$LAUNCH_ERROR_FILE" || true; }
+# A resolver's own reason, the last line it said on stderr (<file>), as this launch's error (note_error), for the
+# launch_refused that follows to keep; nothing for a resolver that said nothing. A file, so it works in $(...).
+note_reason() { # <file>
+  local line
+  line="$(grep -v '^[[:space:]]*$' "$1" 2>/dev/null | tail -n 1)"
+  [ -z "$line" ] || note_error "$line"
+}
+# The launch of <window> stops: "'<window>' does not start: <why>" on stderr and in the log file, as die says it,
+# with "(<module>, above)" after it when a module's lines above say more. The launch's error (note_error) keeps a
+# reason this launch already noted (note_reason: what the module said), which says more than <why>; else it is
+# <why> (and "(<module>)"), without the window, which the update's summary names itself.
+launch_refused() { # <window> <why> [module]
+  local where="" said=""
+  [ -z "${3:-}" ] || where=" ($3, above)" said=" ($3)"
+  [ -n "${LAUNCH_ERROR_FILE:-}" ] && [ -s "$LAUNCH_ERROR_FILE" ] || note_error "$2$said"
+  log "ERROR: '$1' does not start: $2$where" >&2
+  exit 1
+}
 launch_error_file() { echo "$BOSUN_STATE_DIR/launches/${BOSUN_SESSION_NAME//\//_}/${1//\//_}.error"; } # <window>
 
 # Print a script's leading comment block (its `# Usage:` header): what --help shows. Reads one file and
@@ -1212,7 +1230,7 @@ set_connector_settings() { # <name>
   list="$(window_connectors "$1")" || die "could not read the connectors of '$1' in $BOSUN_SESSIONS_FILE"
   is_orchestrator "$1" && [ "${CONNECTOR_LOOKUP:-1}" != 0 ] && alert=1
   connector_settings_json="$(resolve_connectors "$1" "$list" "$PWD" "$alert")" ||
-    die "'$1' does not start: its connectors were refused or could not be resolved (lib/connectors_claude.py, above)"
+    launch_refused "$1" "its connectors were refused or could not be resolved" lib/connectors_claude.py
   connector_settings_list="$list" # its list as read, for set_plugin_settings
   connector_settings_window="$1"
 }
@@ -1242,7 +1260,7 @@ set_plugin_settings() { # <name>
   fi
   is_orchestrator "$1" && site="${BOSUN_ORCHESTRATOR_SETTINGS/#"$BOSUN_INSTALL"\//$BOSUN_ROOT/}"
   plugin_settings_json="$(resolve_plugins "$1" "$list" "$connectors" "$PWD" "$site")" ||
-    die "'$1' does not start: its plugins were refused or could not be resolved (lib/plugins_claude.py, above)"
+    launch_refused "$1" "its plugins were refused or could not be resolved" lib/plugins_claude.py
   plugin_settings_window="$1"
 }
 
@@ -1270,6 +1288,7 @@ resolve_plugins() { # <window> <plugin list> <connector list> <dir> [settings fi
   json="$(python3 "$BOSUN_ROOT/lib/plugins_claude.py" --plugins="$2" --connectors="$3" --cwd "$4" \
     ${site[@]+"${site[@]}"} 2>"$errors")" || code=$?
   log_connector_lines "$1" "$errors"
+  [ "$code" = 0 ] || note_reason "$errors"
   rm -f "$errors"
   [ "$code" = 0 ] && plugin_settings_valid "$2" "$json" || return 1
   printf '%s\n' "$json"
@@ -1308,6 +1327,7 @@ resolve_connectors() { # <window> <list> <dir> <alert: 0|1>
     printf '%s\n' "$json"
     return 0
   fi
+  [ "$code" -lt 2 ] || note_reason "$work/errors"
   rm -rf "$work"
   return 1
 }

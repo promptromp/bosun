@@ -951,6 +951,15 @@ check "refuse exits 1 with the same line on stderr, and none in the file" bash -
   [ "$1" = "1|ERROR: no such thing" ] && [ ! -e "$2" ]' _ "$(ends_with refuses refuse "no such thing")" "$log_dir/refuses-$log_day.log"
 check "die_usage exits 2 pointing at --help on stderr, and none in the file" bash -c '
   [ "$1" = "2|ERROR: unknown argument (see --help)" ] && [ ! -e "$2" ]' _ "$(ends_with mistyped die_usage "unknown argument")" "$log_dir/mistyped-$log_day.log"
+printf 'connectors: probe not found, so this window starts without it\nplugins: the real reason\n\n' >"$WORK/resolver.err"
+check "launch_refused says the window does not start, with the module above, and keeps the reason the resolver noted" bash -c '
+  out="$(LAUNCH_ERROR_FILE="$3" BOSUN_LOG_DIR="$4" bash -c "source \"\$1/lib/common.sh\"; note_reason \"\$2\"; launch_refused w \"it was refused\" lib/x.py" _ "$1" "$2" 2>&1)"
+  [ $? = 1 ] && [[ "$out" == *"ERROR: '"'"'w'"'"' does not start: it was refused (lib/x.py, above)" ]] && [ "$(cat "$3")" = "plugins: the real reason" ]' \
+  _ "$ROOT" "$WORK/resolver.err" "$WORK/refused.error" "$log_dir"
+rm -f "$WORK/refused.error"
+check "... and without one, records its own reason, with no window and no \"above\"" bash -c '
+  LAUNCH_ERROR_FILE="$2" BOSUN_LOG_DIR="$3" bash -c "source \"\$1/lib/common.sh\"; launch_refused w \"it was refused\" lib/x.py" _ "$1" 2>/dev/null
+  [ "$(cat "$2")" = "it was refused (lib/x.py)" ]' _ "$ROOT" "$WORK/refused.error" "$log_dir"
 for n in 1 2 3 4 5; do
   BOSUN_LOG_FILE_MAX_BYTES=80 BOSUN_LOG_DIR="$log_dir" BOSUN_COMMAND=capped fn log "line $n of five, long enough to pass the cap" >/dev/null
 done
@@ -2686,7 +2695,7 @@ check "--check passes once trusted" "$BOSUN" trust --check "$TRUST_REPO"
 check "--revoke removes it" bash -c '"$1" trust --revoke "$2" && ! "$1" trust --check "$2"' _ "$BOSUN" "$TRUST_REPO"
 check "--any trusts any folder" "$BOSUN" trust --any "$REPO_B"
 
-section send-new-start "send --new and --start (fake Claude that registers itself)" needs folder-trust covers 'libexec/bosun-delegate,libexec/bosun-ledger,libexec/bosun-refresh,libexec/bosun-send,libexec/bosun-start,libexec/bosun-stop,libexec/bosun-trust'
+section send-new-start "send --new and --start (fake Claude that registers itself)" needs folder-trust covers 'lib/plugins_claude.py,libexec/bosun-delegate,libexec/bosun-ledger,libexec/bosun-refresh,libexec/bosun-send,libexec/bosun-start,libexec/bosun-stop,libexec/bosun-trust'
 cat >"$WORK/live-claude" <<FAKE
 #!/bin/bash
 if [ "\$1" = "--version" ]; then echo "2.0.0 (Claude Code)"; exit 0; fi
@@ -2765,6 +2774,20 @@ rm -f "$BOSUN_CONFIG_DIR/bosun.env"
 check "an update's restart whose launch fails did not start: refresh exits 5, with the launch's own error last on stderr" bash -c '
   [ "$1" = 5 ] && tail -1 "$2" | grep -q "^effort must be one of: .*(got .extreme.)$"' _ "$rc" "$WORK/not-started.err"
 check "... read from the launch's error file, which it removes" test ! -e "$BOSUN_STATE_DIR/launches/smoke/alpha.error"
+# One refused by its resolver says the resolver's own reason, naming the file, not the launch's line that follows it.
+mkdir -p "$HOME/.claude/plugins"
+installed_plugins="$HOME/.claude/plugins/installed_plugins.json"
+[ ! -e "$installed_plugins" ] || mv "$installed_plugins" "$WORK/installed_plugins.before-restart"
+echo '[not an object]' >"$installed_plugins"
+echo 'BOSUN_PLUGINS=""' >"$BOSUN_CONFIG_DIR/bosun.env"
+env BOSUN_LAUNCH_DRY_RUN=0 "$BOSUN" refresh --update-restart "$WORK/update-prompt" alpha >/dev/null 2>"$WORK/not-started.err"
+rc=$?
+rm -f "$BOSUN_CONFIG_DIR/bosun.env" "$installed_plugins"
+[ ! -e "$WORK/installed_plugins.before-restart" ] || mv "$WORK/installed_plugins.before-restart" "$installed_plugins"
+check "... and one whose plugins cannot be resolved: exit 5, the resolver's reason last, naming the file" bash -c '
+  [ "$1" = 5 ] && tail -1 "$2" | grep -qxF "plugins: $3 does not parse, so bosun cannot tell which plugins to switch off"' \
+  _ "$rc" "$WORK/not-started.err" "$installed_plugins"
+check "... from the launch's error file, which it removes" test ! -e "$BOSUN_STATE_DIR/launches/smoke/alpha.error"
 check "delegate --window delivers through send" contains "$("$BOSUN" delegate investigate --id slack:C8/1 --ask 'look into it' --window delta 2>&1)" "delivered to smoke:delta"
 check "the prompt file is removed once read" bash -c '[ -z "$(ls -A "$1")" ]' _ "$BOSUN_STATE_DIR/prompts"
 check "--new refuses an existing window" fails_with "already exists" live --new delta "$REPO_A" again

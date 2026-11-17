@@ -202,7 +202,7 @@ set_agent_args "$name"
 set_up_agent() {
   local why
   [ "$BOSUN_LAUNCH_DRY_RUN" = "1" ] && return 0
-  why="$(agent_setup "$harness" 2>&1)" || die "'$name' does not start: $why"
+  why="$(agent_setup "$harness" 2>&1)" || launch_refused "$name" "$why"
 }
 set_up_agent
 
