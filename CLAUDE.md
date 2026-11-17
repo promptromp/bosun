@@ -14,7 +14,8 @@ of truth, so don't copy rules into this file.
   settings default) names the install link (`BOSUN_INSTALL`, `BOSUN_CMD`), which an update points at a
   newer version. In a checkout they are the same. A new place that writes a path out uses the second.
 - Updating (design: `docs/design/update.md`): `lib/versions.py` (version folders, the link switched in
-  one rename, pruning), `lib/update_state.py` (the update's record and lock, the hold),
+  one rename, pruning), `lib/update_state.py` (the update's record and lock, the hold, and who holds the lock: the
+  lock-holder markers `update/run` and `update/turn`, with the lock files `run.lock` and `turn.lock` beside them),
   `lib/update_backups.py` (backups, restore, pruning, deleted by a forget), `lib/update_gate.py` (the
   write gate and `guarded`), `lib/migrations.py` (the one registry of the stores' format
   migrations, and the config's renamed keys), `lib/launch_record.py` (what each window was
@@ -30,11 +31,14 @@ of truth, so don't copy rules into this file.
   (the command: the rehearsal, the hold, the freeze and its put-back, the release, an update cut
   short carried on; `update note` and `update advance`), `lib/update_agents.py` (the decisions, its
   only file the update's record: what each window gets turn by turn, the take-stock and update prompts,
-  what came of each), `lib/update_windows.py` (carrying them out: bosun's commands, the update's wait
+  what came of each, and the takeover of the windows the last update still waits for: `taken_or_left`,
+  `take_over`, the record's `carried` and `taken_over`), `lib/update_windows.py` (carrying them out: bosun's commands, the update's wait
   and its Ctrl-C, which the check-in loop carries on), `lib/update_notes.py` (the windows' note
   files) and `lib/update_summary.py` (pure: the summary it ends with, from what each step kept in the
   record, its text and `--json`, and what the last update left me, which `bosun doctor` lists through
-  `lib/update.py after-update`); `reload_changed_jobs` in `lib/common.sh`
+  `lib/update.py after-update`); a launch's last error goes to its window's error file (`note_error`,
+  `launch_error_file` and `launch_refused` in `lib/common.sh`), which `refresh --update-restart` reads to say why
+  a restart did not start (exit 5); `reload_changed_jobs` in `lib/common.sh`
   (also install.sh's); its smoke section's next version is `tests/sandbox/update_patch.sh`.
 - `lib/common.sh`: config defaults (`load_config`) and shared helpers: the window list
   (`window_specs`: orchestrator, sessions.yml entries, checkin), tmux, the one
@@ -70,7 +74,11 @@ of truth, so don't copy rules into this file.
   `lib/codex_state.py`; design: `docs/design/connectors.md`. The shell side is
   `window_connectors` and `set_connector_settings` (`lib/common.sh`), which `build_agent_args` calls once
   per launch; `bosun doctor`'s line per window is `connectors.py doctor`, which asks the window's agent
-  module (`check_connectors`).
+  module (`check_connectors`). Which of my own plugins a window loads, the same way: `lib/plugins.py` (the list,
+  the plan of which plugin ids go off and why, doctor's words, `plugins.py doctor`), turned into the launch by
+  the module its `Profile.plugins` names (`lib/plugins_claude.py`: the `enabledPlugins` launch settings; Codex's
+  and agy's in their connectors modules); the shell side is `window_list` (both lists' reader), `window_plugins`,
+  `set_plugin_settings` and `require_plugin_limit` (`lib/common.sh`).
   `lib/delegate.py`: task rendering. `lib/guard.py`: the orchestrator's PreToolUse permission hook
   (which `guard_hook_settings` in `lib/common.sh` adds to the orchestrator's launch and to `chores
   --dry-run`), and with `BOSUN_APPROVALS_ENABLED` its approval hooks (`--approvals`, `--permission-request`,
