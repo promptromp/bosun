@@ -68,10 +68,14 @@ HOLD_STEPS = STEPS[STEPS.index("holding") : STEPS.index("released")]
 # An update that ended with bosun as it was: cut short before anything changed, or put back.
 PUT_BACK = ("failed", "restored")
 BEFORE_FREEZE = ("planned", "rehearsed", "holding")  # nothing had changed but the hold
-# Who holds update.lock, each in a file of its own in UPDATE_DIR naming its pid (marking): an update, from
-# before it waits for the lock until it ends, and the check-in loop's turn at the windows an update left.
+# Who holds update.lock, each in a file of its own in UPDATE_DIR naming its pid and update id (marking): an
+# update, from before it waits for the lock until it ends, and the check-in loop's turn at the windows an
+# update left. A marker is live only while its owner holds an exclusive lock on its lock file beside it
+# (<marker>.lock), which the system drops when the owner dies: a pid can be anyone's after a crash and a
+# restart. The lock files stay: one removed while another process opens it would let two owners lock apart.
 RUN_MARKER = "run"
 TURN_MARKER = "turn"
+MARKER_LOCK = "{}.lock"
 # The most an update waits for update.lock while the check-in loop takes its turn at the windows: a turn
 # restarts a window or two (each a stop, a launch and its start) and lets go.
 TURN_SECONDS = 180.0
@@ -440,16 +444,25 @@ def _marker(state_dir: Path, name: str) -> Path:
     return state_dir / UPDATE_DIR / name
 
 
-def _alive(pid: int) -> bool:
-    if pid <= 0:
+def _lock_path(state_dir: Path, name: str) -> Path:
+    return _marker(state_dir, MARKER_LOCK.format(name))
+
+
+def _owned(state_dir: Path, name: str) -> bool:
+    """Whether marker <name>'s owner lives: some process holds its lock file exclusively, so a shared lock
+    cannot be taken beside it (as `running` asks of update.lock; the asker may be the owner itself, whose
+    lock is on another open file)."""
+    try:
+        fd = os.open(_lock_path(state_dir, name), os.O_RDONLY)
+    except OSError:
         return False
     try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True  # alive, someone else's
-    return True
+        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+    except OSError:
+        return True
+    finally:
+        os.close(fd)  # closing releases a lock taken
+    return False
 
 
 def _read_marker(path: Path) -> tuple[int, str]:
@@ -462,60 +475,56 @@ def _read_marker(path: Path) -> tuple[int, str]:
 
 
 def _live_marker(state_dir: Path, name: str) -> tuple[int, str] | None:
-    """Marker <name>'s pid and id when its process is alive; None when it is absent, unreadable or its
-    process is gone (a crash)."""
-    pid, update_id = _read_marker(_marker(state_dir, name))
-    return (pid, update_id) if _alive(pid) else None
+    """Marker <name>'s pid and id while its owner holds its lock file; None when nothing holds it (a marker
+    left by a crash, whatever pid it names) or when there is no marker. (0, "") for one held but not yet
+    written."""
+    if not _owned(state_dir, name):
+        return None
+    return _read_marker(_marker(state_dir, name))
 
 
 def marked(state_dir: Path, name: str) -> bool:
-    """Whether marker <name> (RUN_MARKER, TURN_MARKER) names a process that is alive; a marker whose
-    process is gone (a crash), or that cannot be read, counts as absent."""
+    """Whether marker <name> (RUN_MARKER, TURN_MARKER) has a live owner (its lock file held); a marker
+    whose owner is gone (a crash), or that cannot be read, counts as absent."""
     return _live_marker(state_dir, name) is not None
 
 
-def _placed(path: Path, text: str) -> bool:
-    """<text> placed at <path> at once and only if nothing is there (a temp file linked into place)."""
+def _claimed(state_dir: Path, name: str) -> int | None:
+    """The open lock file of marker <name>, locked exclusively by this process, which now owns the marker
+    (written anew: one left by a crash is replaced); None while another live process owns it."""
+    fd = os.open(_lock_path(state_dir, name), os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return None
+    _write_marker(_marker(state_dir, name), f"{os.getpid()}\n")
+    return fd
+
+
+def _write_marker(path: Path, text: str) -> None:
+    """<text> in marker <path> at once (a temp file renamed into place), for its owner only."""
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     tmp.write_text(text)
-    try:
-        os.link(tmp, path)
-    except FileExistsError:
-        return False
-    finally:
-        tmp.unlink(missing_ok=True)
-    return True
-
-
-def _claimed(path: Path) -> bool:
-    """Whether this process now owns marker <path>: placed exclusively; a stale one (its process gone)
-    removed, if it still names that process, and placing tried once more; a live other's left alone."""
-    mine = f"{os.getpid()}\n"
-    if _placed(path, mine):
-        return True
-    stale, _ = _read_marker(path)
-    if _alive(stale):
-        return False
-    if _read_marker(path)[0] == stale:
-        path.unlink(missing_ok=True)
-    return _placed(path, mine)
+    tmp.replace(path)
 
 
 @contextlib.contextmanager
 def marking(state_dir: Path, name: str) -> Iterator[None]:
     """Marker <name> naming this process, from now until the block ends: RUN_MARKER from before an update
-    waits for update.lock until it ends, TURN_MARKER around the check-in loop's turn. Created at once and
-    exclusively, so of two at once only one owns it; another live process's marker is left as it is (a
-    second update, to be refused, never takes the first one's away). Removed as it ends only if it still
-    names this process."""
+    waits for update.lock until it ends, TURN_MARKER around the check-in loop's turn. Owned by whoever
+    holds its lock file, so of two at once only one owns it; another live process's marker is left as it
+    is (a second update, to be refused, never takes the first one's away). Removed as it ends, while its
+    lock is still held, then the lock let go."""
     path = _marker(state_dir, name)
     path.parent.mkdir(parents=True, exist_ok=True)
-    owned = _claimed(path)
+    fd = _claimed(state_dir, name)
     try:
         yield
     finally:
-        if owned and _read_marker(path)[0] == os.getpid():
+        if fd is not None:
             path.unlink(missing_ok=True)
+            os.close(fd)
 
 
 def mark_update(state_dir: Path, update_id: str) -> None:
@@ -525,9 +534,7 @@ def mark_update(state_dir: Path, update_id: str) -> None:
     pid, known = _read_marker(path)
     if pid != os.getpid() or known == update_id:
         return
-    tmp = path.with_name(f".{path.name}.{pid}.id.tmp")
-    tmp.write_text(f"{pid}\n{update_id}\n")
-    tmp.replace(path)
+    _write_marker(path, f"{pid}\n{update_id}\n")
 
 
 def record_runs(state_dir: Path, state: UpdateState | None) -> bool:

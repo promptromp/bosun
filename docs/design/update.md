@@ -870,10 +870,13 @@ Decided while building it:
   records when (`handed_over`). Who holds `update.lock` is never guessed from the record: each holder says
   so in a marker of its own, its pid in `update/run` (an update, from before it waits for the lock until it
   ends, and its update's id once its record has one) or `update/turn` (the check-in loop's turn, written
-  before it tries the lock), each made at once and exclusively (a temp file linked into place), a stale one
-  (its process gone) replaced, and removed as it ends only if it still names its process; a marker whose
-  process is gone counts as absent, and the turn's counts as the holder only with no other update's marker
-  live. An update runs (`update_state.update_runs`) while its marker is live, or while the lock is held with
+  before it tries the lock). A marker is owned by the process that holds an exclusive lock on its lock file
+  beside it (`update/run.lock`, `update/turn.lock`) for the marker's whole life, and is live only while that
+  lock is held: the system drops it when its owner dies, where the pid a marker names can be any process's
+  after a crash and a restart. So of two at once only one owns it, a stale one (its lock free) is replaced, it
+  is removed as it ends while its lock is still held, and the lock files stay (one removed while another
+  process opens it would let two owners lock apart). The turn's marker counts as the holder only with no
+  other update's marker live. An update runs (`update_state.update_runs`) while its marker is live, or while the lock is held with
   no live turn marker (a writer putting back a freeze); so the status calls neither the loop's turn an
   update running nor a takeover planning before it writes its record none. The record's pending windows are
   the running update's own wait only when the marker names its id; a record at `agents` whose update is not

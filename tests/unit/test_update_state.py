@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import fcntl
 import json
@@ -12,6 +13,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -272,18 +274,66 @@ class LockTest(unittest.TestCase):
         with update_state.one_update(self.dir):
             self.assertTrue(update_state.update_runs(self.dir))  # no marker: whoever it is counts
 
-    def test_a_marker_whose_process_is_gone_counts_as_absent(self) -> None:
+    def held(self, name: str, pid: int) -> contextlib.AbstractContextManager[None]:
+        """Marker <name> as another live owner leaves it: its lock file held on an open file of its own
+        (flock locks apart from this process's other opens of it), naming <pid>."""
+        lock = self.dir / update_state.UPDATE_DIR / update_state.MARKER_LOCK.format(name)
+        lock.parent.mkdir(parents=True, exist_ok=True)
+
+        @contextlib.contextmanager
+        def holding() -> Iterator[None]:
+            fd = os.open(lock, os.O_RDWR | os.O_CREAT)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                (lock.parent / name).write_text(f"{pid}\n")
+                yield
+            finally:
+                os.close(fd)
+
+        return holding()
+
+    def test_a_marker_counts_only_while_its_lock_is_held_whatever_pid_it_names(self) -> None:
+        """Item 2: after a SIGKILL or a power cut and a restart, the pid a marker names may be any live
+        process; the kernel's lock, which goes with its owner, says whether the owner lives."""
         marker = self.dir / update_state.UPDATE_DIR / update_state.TURN_MARKER
         marker.parent.mkdir(parents=True)
-        dead = subprocess.Popen(["true"])
-        dead.wait()
-        for text in (f"{dead.pid}\n", "not a pid\n", "0\n"):
+        unrelated = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(unrelated.kill)
+        for text in (f"{unrelated.pid}\n", f"{os.getpid()}\n", "not a pid\n", "0\n"):
             marker.write_text(text)
             self.assertFalse(update_state.marked(self.dir, update_state.TURN_MARKER), text)
         with update_state.one_update(self.dir):
             self.assertTrue(update_state.update_runs(self.dir))
-        marker.write_text(f"{os.getpid()}\n")
-        self.assertTrue(update_state.marked(self.dir, update_state.TURN_MARKER))
+        with self.held(update_state.TURN_MARKER, unrelated.pid):
+            self.assertTrue(update_state.marked(self.dir, update_state.TURN_MARKER))
+        self.assertFalse(update_state.marked(self.dir, update_state.TURN_MARKER))
+
+    def test_a_marker_whose_owner_was_killed_is_stale_and_replaced(self) -> None:
+        """An owner killed outright (SIGKILL) leaves its marker naming its pid; the lock went with it."""
+        lock = self.dir / update_state.UPDATE_DIR / update_state.MARKER_LOCK.format(update_state.RUN_MARKER)
+        code = (
+            "import sys; sys.path.insert(0, sys.argv[1]); import update_state; from pathlib import Path\n"
+            "with update_state.marking(Path(sys.argv[2]), update_state.RUN_MARKER):\n"
+            "    print('owned', flush=True); sys.stdin.read()\n"
+        )
+        owner = subprocess.Popen(
+            [sys.executable, "-c", code, str(Path(update_state.__file__).parent), str(self.dir)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        self.addCleanup(owner.kill)
+        assert owner.stdout is not None
+        self.assertEqual(owner.stdout.readline().strip(), "owned")
+        self.assertTrue(update_state.update_runs(self.dir))
+        with update_state.marking(self.dir, update_state.RUN_MARKER):  # a second at once: not its own
+            self.assertEqual(update_state._live_marker(self.dir, update_state.RUN_MARKER), (owner.pid, ""))
+        owner.kill()
+        owner.wait()
+        self.assertTrue(lock.exists())
+        self.assertFalse(update_state.update_runs(self.dir))  # the marker names its pid still: stale
+        with update_state.marking(self.dir, update_state.RUN_MARKER):
+            self.assertEqual(update_state._live_marker(self.dir, update_state.RUN_MARKER), (os.getpid(), ""))
 
     def test_a_marker_is_made_exclusively_and_a_stale_one_replaced(self) -> None:
         marker = self.dir / update_state.UPDATE_DIR / update_state.RUN_MARKER
@@ -292,42 +342,42 @@ class LockTest(unittest.TestCase):
             with update_state.marking(self.dir, update_state.RUN_MARKER):  # a second at once: not its own
                 self.assertEqual(marker.read_text(), first)
             self.assertEqual(marker.read_text(), first)  # nor removed by it
+            self.assertTrue(update_state.marked(self.dir, update_state.RUN_MARKER))
         self.assertFalse(marker.exists())
-        dead = subprocess.Popen(["true"])
-        dead.wait()
-        marker.write_text(f"{dead.pid}\n")
+        unrelated = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(unrelated.kill)
+        marker.write_text(f"{unrelated.pid}\n")  # left by a crash; its pid now someone else's
         with update_state.marking(self.dir, update_state.RUN_MARKER):
             self.assertEqual(marker.read_text().strip(), str(os.getpid()))
             update_state.mark_update(self.dir, "u7")
             self.assertEqual(marker.read_text(), f"{os.getpid()}\nu7\n")
         self.assertFalse(marker.exists())
-        self.assertEqual(sorted(p.name for p in marker.parent.iterdir()), [])  # no temp file left
+        # no temp file left; the lock file stays (removing it could let two owners lock apart)
+        self.assertEqual(sorted(p.name for p in marker.parent.iterdir()), ["run.lock"])
 
     def test_the_loop_s_marker_counts_only_with_no_other_update_s(self) -> None:
         """The loop writes its marker before it tries the lock: with another update's live marker, that
         update is the holder, and a refusal never blames the loop; the refusal says how long it waited."""
         other = subprocess.Popen(["sleep", "30"])
         self.addCleanup(other.kill)
-        run = self.dir / update_state.UPDATE_DIR / update_state.RUN_MARKER
         with update_state.marking(self.dir, update_state.TURN_MARKER):
             self.assertTrue(update_state.turn_holds(self.dir))
-            run.write_text(f"{other.pid}\n")
-            self.assertFalse(update_state.turn_holds(self.dir))
-            self.assertEqual(update_state.lock_wait(self.dir), 0.0)
-            run.unlink()
+            with self.held(update_state.RUN_MARKER, other.pid):
+                self.assertFalse(update_state.turn_holds(self.dir))
+                self.assertEqual(update_state.lock_wait(self.dir), 0.0)
+            (self.dir / update_state.UPDATE_DIR / update_state.RUN_MARKER).unlink()
             refused = self.assertRaisesRegex(update_state.LoopTurnRunning, r"after 0\.5 s;")
             with update_state.one_update(self.dir), refused, update_state.one_update(self.dir, wait=0.0):
                 pass
 
     def test_a_second_update_never_takes_the_first_ones_marker_away(self) -> None:
         marker = self.dir / update_state.UPDATE_DIR / update_state.RUN_MARKER
-        marker.parent.mkdir(parents=True)
         other = subprocess.Popen(["sleep", "30"])
         self.addCleanup(other.kill)
-        marker.write_text(f"{other.pid}\n")
-        with update_state.marking(self.dir, update_state.RUN_MARKER):
+        with self.held(update_state.RUN_MARKER, other.pid):
+            with update_state.marking(self.dir, update_state.RUN_MARKER):
+                self.assertEqual(marker.read_text().strip(), str(other.pid))
             self.assertEqual(marker.read_text().strip(), str(other.pid))
-        self.assertEqual(marker.read_text().strip(), str(other.pid))
 
     def test_one_update_at_a_time(self) -> None:
         update_state.write(self.dir, state())
