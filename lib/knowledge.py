@@ -956,7 +956,7 @@ def unverified_reason(session: agent_state.CallingSession | None, after: datetim
     if session is not None and not session.verifies_quotes:
         return f"bosun cannot check your words in {session.agent_name}"
     hours = int(QUOTE_MAX_AGE.total_seconds() // 3600)
-    reason = f"the quote is not in anything you typed in that session in the last {hours} hours"
+    reason = f"the quote is not whole words of anything you typed in that session in the last {hours} hours"
     if after is not None and after > CLOCK() - QUOTE_MAX_AGE:
         reason += f" since what it decides on was proposed ({km.iso(after)})"
     return reason

@@ -254,7 +254,7 @@ class AutoConfirmTest(KnowledgeTestCase):
                     transcript,
                 )
                 self.assertIn("proposed", out)
-                self.assertIn("not in anything you typed", out)
+                self.assertIn("not whole words of anything you typed", out)
 
     def test_two_trusted_sources_confirm_a_low_risk_fact(self) -> None:
         self.seed()
@@ -394,7 +394,7 @@ class SessionQuoteTest(KnowledgeTestCase):
         self.assertEqual(self.kb().facts, {})
         out = self.run_kg(*argv, "oke tests gate")  # cuts "smoke"
         self.assertEqual(self.fact(self.f(1))["status"], km.PROPOSED)
-        self.assertIn("note: the quote is not in anything you typed", out)
+        self.assertIn("note: the quote is not whole words of anything you typed", out)
 
     def test_a_quote_older_than_a_day_stays_proposed(self) -> None:
         self.seed()
@@ -402,7 +402,8 @@ class SessionQuoteTest(KnowledgeTestCase):
         out = self.propose_mine()
         self.assertEqual(self.fact(self.f(1))["status"], km.PROPOSED)
         self.assertIn(
-            "note: the quote is not in anything you typed in that session in the last 24 hours", out
+            "note: the quote is not whole words of anything you typed in that session in the last 24 hours",
+            out,
         )
 
     def test_text_bosun_pasted_into_the_window_is_not_my_words(self) -> None:
@@ -463,7 +464,7 @@ class SessionQuoteTest(KnowledgeTestCase):
         self.assertEqual(self.fact(self.f(2))["sources"][0]["quote"], "it is retired now")
         self.later(2)
         with self.assertRaisesRegex(
-            KnowledgeError, "not in anything you typed in that session in the last 24"
+            KnowledgeError, "not whole words of anything you typed in that session in the last 24"
         ):
             self.run_kg(
                 "supersede", self.f(2), "--value", "back", "--from-user", "--quote", "it is retired now"
@@ -585,7 +586,7 @@ class SessionQuoteTest(KnowledgeTestCase):
                     KnowledgeError, "from a session, supersede with --from-user --quote"
                 ):
                     self.run_kg("supersede", old, *form)
-                with self.assertRaisesRegex(KnowledgeError, "not in anything you typed"):
+                with self.assertRaisesRegex(KnowledgeError, "not whole words of anything you typed"):
                     self.run_kg("supersede", old, *form, "--from-user", "--quote", "it runs hourly instead")
                 self.assertIsNone(self.fact(old)["valid_to"])
         out = self.run_kg("supersede", old, "--close", "--from-user", "--quote", "no longer runs nightly")
@@ -598,7 +599,7 @@ class SessionQuoteTest(KnowledgeTestCase):
         self.seed()
         first, second = self.proposed("runs nightly"), self.proposed("runs weekly")
         transcript = self.transcript(typed("it does not run nightly", START))
-        with self.assertRaisesRegex(KnowledgeError, "not in anything you typed"):
+        with self.assertRaisesRegex(KnowledgeError, "not whole words of anything you typed"):
             self.run_kg(
                 "supersede",
                 first,
@@ -631,7 +632,7 @@ class SessionQuoteTest(KnowledgeTestCase):
         self.later(1 / 12)
         with self.assertRaisesRegex(KnowledgeError, "from a session, confirm with --from-user --quote"):
             self.run_kg("confirm", first)
-        with self.assertRaisesRegex(KnowledgeError, "not in anything you typed in that session"):
+        with self.assertRaisesRegex(KnowledgeError, "not whole words of anything you typed in that session"):
             self.run_kg("confirm", first, "--from-user", "--quote", "words I never typed")
         self.assertEqual(self.fact(first)["status"], km.PROPOSED)
         self.assertIn(
@@ -833,7 +834,7 @@ class TimelineTest(KnowledgeTestCase):
         self.seed()
         self.run_kg("propose", "environment/staging-2", "status", "--value", "active", "--source", "memory:a")
         transcript = self.transcript(typed("other words", START))
-        with self.assertRaisesRegex(KnowledgeError, "not in anything you typed"):
+        with self.assertRaisesRegex(KnowledgeError, "not whole words of anything you typed"):
             self.run_kg(
                 "supersede",
                 self.f(1),
