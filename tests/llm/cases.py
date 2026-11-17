@@ -10,7 +10,7 @@ import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, TypedDict
 
 from world import ROOT, World
@@ -387,9 +387,62 @@ def seed_three_proposals(world: World) -> None:
     world.bosun("ledger", "propose", ROUNDING_PR, "--run", MERGE_111)
 
 
+VAT_URL = "https://github.com/acme/exporter/pull/102"
+VAT_THREADS = (
+    ("exporter/tax.py", 41, "Round the VAT per line here, not once on the total."),
+    ("exporter/tax.py", 58, "A credit note's VAT comes out positive."),
+    ("tests/test_tax.py", 12, "Please add a test with two VAT rates on one invoice."),
+)
+
+
+def ago(hours: float) -> str:
+    return (datetime.now(UTC) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def vat_pr_answered() -> dict[str, Any]:
+    """PR #102 as GitHub shows it once exporter-tax pushed (for the world's gh): Lena's one review
+    requested changes in three threads, I answered each after it, CI is green, no review is newer."""
+    reviewed, answered = ago(26), ago(1)
+    lena, me = {"login": "lena-acme", "__typename": "User"}, {"login": "acme-dev", "__typename": "User"}
+    review = {
+        "id": "R1", "url": f"{VAT_URL}#pullrequestreview-1", "author": lena,
+        "state": "CHANGES_REQUESTED", "submittedAt": reviewed, "body": "Three things on the breakdown.",
+    }  # fmt: skip
+    threads = [
+        {
+            "id": f"T{n}", "isResolved": False, "isOutdated": True, "path": path, "line": line,
+            "first": {"totalCount": 2, "nodes": [{
+                "author": lena, "createdAt": reviewed, "url": f"{VAT_URL}#discussion_r{n}", "body": body,
+                "pullRequestReview": {"id": "R1"},
+            }]},
+            "last": {"nodes": [{"author": me, "createdAt": answered, "url": f"{VAT_URL}#discussion_r{n}0"}]},
+        }
+        for n, (path, line, body) in enumerate(VAT_THREADS, start=1)
+    ]  # fmt: skip
+    node = {
+        "url": VAT_URL, "author": me, "baseRepository": {"autoMergeAllowed": False},
+        "reviews": {"nodes": [review]},
+        "reviewThreads": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": threads},
+    }  # fmt: skip
+    seen = {k: review[k] for k in ("author", "state", "submittedAt", "body")}
+    commits = [("a" * 40, "Show the VAT breakdown per rate", ago(50)), ("b" * 40, "Address review", answered)]
+    view = {
+        "number": 102, "url": VAT_URL, "title": VAT_TITLE, "state": "OPEN", "isDraft": False,
+        "author": {"login": me["login"]}, "reviewDecision": "CHANGES_REQUESTED", "reviewRequests": [],
+        "latestReviews": [seen], "reviews": [seen], "comments": [], "mergeable": "MERGEABLE",
+        "mergeStateStatus": "BLOCKED", "headRefName": "vat-breakdown", "headRefOid": commits[-1][0],
+        "commits": [{"oid": o, "messageHeadline": m, "committedDate": d} for o, m, d in commits],
+        "statusCheckRollup": [{"name": "test", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+        "updatedAt": answered,
+    }  # fmt: skip
+    return {"pullRequest": node, "view": view}
+
+
 def seed_fix_pushed(world: World) -> None:
-    """My VAT breakdown PR: its window reported the fixes pushed; Lena's review thread is known."""
+    """My VAT breakdown PR: its window reported the fixes pushed, and GitHub shows Lena's three threads
+    answered (the live check the policy makes before a re-review request); her review thread is known."""
     seed_vat_review(world)
+    world.pull_request(VAT_URL, vat_pr_answered())
     world.bosun(
         "ledger", "upsert", VAT_PR, "--field", f"review_thread={thread(*LENA_THREAD, LENA_THREAD[1])}"
     )

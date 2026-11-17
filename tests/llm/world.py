@@ -2,6 +2,8 @@
 
 - HOME, config and state dirs of its own. `bosun` on PATH is a wrapper that runs this
   checkout with that HOME, config and state, and BOSUN_SEND_DRY_RUN=1, and logs every call.
+- A `gh` on PATH (tests/llm/gh_stand_in.py) that answers only about the pull requests the seeds gave it
+  (`pull_request`), and never reaches GitHub.
 - Its own tmux server with the windows the fictional ledger names, each "running Claude" (a sleep
   with a Claude session record in the scratch HOME), so `bosun context` and `send --list` look
   like a live session.
@@ -24,6 +26,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+import gh_stand_in
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -58,6 +62,10 @@ WRAPPER = """#!/bin/bash
 printf '%s\\n' "$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@")" >>"{calls}"
 exec env HOME="{home}" BOSUN_CONFIG_DIR="{config}" BOSUN_STATE_DIR="{state}" \\
   BOSUN_LOG_DIR="{state}/logs" BOSUN_SEND_DRY_RUN=1 "{bosun}" "$@"
+"""
+GH = """#!/bin/bash
+# gh for a scratch world: the pull requests its seeds gave it, never GitHub.
+exec python3 "{stand_in}" "{store}" "$@"
 """
 ENV_FILE = """BOSUN_SESSION_NAME="{session}"
 BOSUN_TMUX_SOCKET="{socket}"
@@ -116,6 +124,11 @@ class World:
         return self.base / "orchestrator"
 
     @property
+    def github(self) -> Path:
+        """The pull requests the world's gh answers about (gh_stand_in.py)."""
+        return self.base / "github"
+
+    @property
     def calls_file(self) -> Path:
         return self.base / "bosun-calls.jsonl"
 
@@ -161,6 +174,12 @@ class World:
             return {"items": {}}
         data: dict[str, Any] = json.loads((self.state / "ledger.json").read_text())
         return data
+
+    def pull_request(self, url: str, data: dict[str, Any]) -> None:
+        """Let the world's gh answer about the PR at <url> (seeds only): <data> as gh_stand_in.py reads it."""
+        path = gh_stand_in.url_file(self.github, url)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=2))
 
     def backdate_messages(self, outreach_id: str, days: float) -> None:
         """Pretend the messages of <outreach_id> went out <days> ago (seeds only)."""
@@ -212,6 +231,12 @@ def build_world(base: Path, socket: str, knowledge: bool = True) -> World:
         )
     )
     wrapper.chmod(0o755)
+    # Claude finds gh in bin, bosun's commands in the scratch HOME's ~/.local/bin (first on their PATH).
+    stand_in = GH.format(stand_in=Path(gh_stand_in.__file__).resolve(), store=world.github)
+    for place in (world.bin, world.home / ".local" / "bin"):
+        place.mkdir(parents=True, exist_ok=True)
+        (place / "gh").write_text(stand_in)
+        (place / "gh").chmod(0o755)
     (world.config / "bosun.env").write_text(
         ENV_FILE.format(
             session=SESSION,

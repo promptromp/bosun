@@ -800,7 +800,8 @@ Work up the levels; each one exercises more of the real chain.
    ...", "ping Priya again", "Marco answered, go ahead with b", and things that must not become
    outreach) and checks the resulting ledger. It runs with no MCP servers (`--with-mcp` loads
    yours, read tools only). Each run has a scratch world: scratch HOME, ledger
-   and tmux server, sends only logged, outward tools denied. It costs money (about $0.3 per case
+   and tmux server, a `gh` that knows only the pull requests its case gives it
+   (`tests/llm/gh_stand_in.py`), sends only logged, outward tools denied. It costs money (about $0.3 per case
    and run, for each case in `tests/llm/cases.py`), so neither the smoke suite nor the hooks run
    it; run it after changing `policy.md`, `chores.md`, the task files or `knowledge.md`. The run has
    the ontology on (`BOSUN_KNOWLEDGE_ENABLED=1`: its rules in the prompts, the acme world's knowledge
