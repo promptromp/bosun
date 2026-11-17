@@ -31,6 +31,7 @@ import app_release
 import install_paths
 import knowledge_store
 import ledger
+import menu_status_live
 import migrations
 import update
 import update_agents
@@ -130,7 +131,7 @@ class World(unittest.TestCase):
 
     def record(self, step: str, **fields: Any) -> UpdateState:
         state = UpdateState(
-            id="u1",
+            id=fields.pop("id", "u1"),
             from_root=str(self.old),
             to_root=str(self.new),
             from_commit=FROM,
@@ -918,6 +919,52 @@ class ResumeTest(World):
             back = update.resume(self.state)
             self.assertEqual(back, last, step)
             self.assertEqual(update_state.read(self.state), last, step)
+
+    def marker(self) -> list[str]:
+        return (self.state / update_state.UPDATE_DIR / update_state.RUN_MARKER).read_text().split()
+
+    def test_a_record_this_run_only_settles_ends_or_gives_back_is_never_its_own(self) -> None:
+        """Round 3: an update U resuming L0's record (settling it at agents, ending one cut short before its
+        freeze, giving back what a failed one carried) keeps no id in its marker: until U writes its own
+        record, the status shows L0's windows as owed, never as U's own wait."""
+        l0 = self.record(
+            "agents", pending=("api", "web"), windows=dict.fromkeys(("api", "web"), ("repo", "restart"))
+        )
+        update_notes.note(self.state, "web", "status", "carrying on")
+        for step in (None, "holding", "failed"):
+            if step is not None:
+                self.record(step, carried=update_state.as_object(l0), id="K1")
+            with update_state.marking(self.state, update_state.RUN_MARKER):
+                with update_state.one_update(self.state):
+                    update._carry_on(self.state) if step != "failed" else update._give_back(self.state)
+                self.assertEqual(self.marker(), [str(os.getpid())], step)
+                self.assertEqual(menu_status_live.update_facts(self.state), (True, ()), step)
+                self.assertEqual(menu_status_live.update_owed(self.state), (("api", "restart"),), step)
+
+    def test_a_released_record_this_run_carries_on_is_its_own_wait(self) -> None:
+        """A record past its checks that this run brings along is its own: its id in the marker, so its
+        windows are its own wait while it waits, not handed over."""
+        self.record("released", id="R1")
+        seen: list[tuple[Any, Any]] = []
+
+        def bring_along(state: UpdateState, plan: update_plan.Plan, say: Any, **_: Any) -> UpdateState:
+            waiting = update_state.advanced(
+                state, "agents", pending=("api",), windows={"api": ("repo", "restart")}
+            )
+            update_state.write(self.state, waiting)
+            seen.append((menu_status_live.update_facts(self.state), menu_status_live.update_owed(self.state)))
+            done = update_state.advanced(waiting, "done", pending=())
+            update_state.write(self.state, done)
+            return done
+
+        with (
+            update_state.marking(self.state, update_state.RUN_MARKER),
+            mock.patch.object(update_facts, "plan_for", return_value=a_plan()),
+            mock.patch.object(update_windows, "bring_along", side_effect=bring_along),
+        ):
+            update.resume(self.state)
+            self.assertEqual(self.marker(), [str(os.getpid()), "R1"])
+        self.assertEqual(seen, [((True, ("api",)), ())])
 
     def test_a_newer_bosuns_step_is_refused(self) -> None:
         state = self.record("checked")

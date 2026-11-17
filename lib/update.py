@@ -181,8 +181,14 @@ class UpdateFailed(Exception):
 
 
 def _record(state_dir: Path, state: UpdateState) -> UpdateState:
-    """<state> written, and its id in this update's marker (update_state.mark_update)."""
     update_state.write(state_dir, state)
+    return state
+
+
+def _runs_as(state_dir: Path, state: UpdateState) -> UpdateState:
+    """<state>'s update is this run's own (one it starts, or one past its checks it carries on): its id in
+    this process's marker (update_state.mark_update), so the status tells its windows as its own wait.
+    Never for a record this run only settles, ends or gives back."""
     update_state.mark_update(state_dir, state.id)
     return state
 
@@ -468,6 +474,8 @@ def _carry_on(state_dir: Path) -> UpdateState | None:
             state_dir, state, "failed", error=f"cut short at step {state.step}; nothing had changed"
         )
         return _give_back(state_dir) or failed
+    if state.step in ("checked", "released"):  # this run carries that update on, through its wait
+        _runs_as(state_dir, state)
     if state.step == "checked":
         state = release(state)
     if state.step == "released":
@@ -629,7 +637,7 @@ def _prepared(plan: Plan, old_root: Path, new_root: Path, where: Folders) -> Upd
     Output.say("Asking bosun doctor what fails before the update...")
     before = _doctor_fails(new_root)
     started = _started(plan, old_root, new_root, before, _taken_from(where.state_dir))
-    return _rehearsed(_record(where.state_dir, started), plan, where)
+    return _rehearsed(_runs_as(where.state_dir, _record(where.state_dir, started)), plan, where)
 
 
 def _taken_from(state_dir: Path) -> UpdateState | None:
