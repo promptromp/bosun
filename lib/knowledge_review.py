@@ -334,8 +334,12 @@ VERBS = {
 EXCEPT = "except"
 ALL = "all"
 FILLER = {"and", "but", "the", "groups", "group", "facts", "fact"}
-WORDS = re.compile(r"\d+[a-z]*|[a-z]+")
+WORDS = re.compile(r"\d+-\d+|\d+[a-z]*|[a-z]+")
 REF = re.compile(r"^(\d+)([a-z]?)$")
+RANGE = re.compile(r"^(\d+)-(\d+)$")
+RANGE_WORDS = re.compile(r"\d+-\d+")  # the ranges in my own words (a quote)
+SEPARATORS = re.compile(r"[\s,;]+")  # all a decision may hold between its words
+MAX_RANGE = 1000  # groups a range may span: far more than any batch holds
 
 
 @dataclass
@@ -359,14 +363,51 @@ def add_word(clauses: list[Clause], word: str) -> None:
         raise km.KnowledgeError(f"cannot read {word!r} in the decision (refs look like 2 or 2b)")
 
 
+def range_numbers(word: str) -> list[str] | None:
+    """The group numbers a range N-M names, in order; None for a word that is no range a batch
+    could hold (no range at all, one that goes down or from 0, or one wider than MAX_RANGE)."""
+    match = RANGE.match(word)
+    if not match:
+        return None
+    first, last = int(match.group(1)), int(match.group(2))
+    if not 1 <= first <= last or last - first >= MAX_RANGE:
+        return None
+    return [str(number) for number in range(first, last + 1)]
+
+
+def refs_of(word: str) -> list[str]:
+    """The refs a word stands for: a range N-M each group number in it, any other word itself."""
+    if not RANGE.match(word):
+        return [word]
+    numbers = range_numbers(word)
+    if numbers is None:
+        raise km.KnowledgeError(
+            f"cannot read {word!r} in the decision (a range names groups of the batch in order, like 1-3)"
+        )
+    return numbers
+
+
+def check_readable(text: str) -> None:
+    """Refuse a decision with anything the words leave out but commas, spaces and semicolons: a
+    character dropped silently would change what it says ('1-3' read as '1, 3')."""
+    stray = SEPARATORS.sub("", WORDS.sub(" ", text.lower()))
+    if stray:
+        raise km.KnowledgeError(
+            f"cannot read {stray[0]!r} in the decision (refs look like 2, 2b or 1-3, apart by commas, "
+            "spaces or semicolons)"
+        )
+
+
 def parse_clauses(text: str) -> list[Clause]:
-    """'confirm all except 2b', 'confirm 1,3 reject 2b', 'reject 4; skip 5' as clauses."""
+    """'confirm all except 2b', 'confirm 1,3 reject 2b', 'confirm 1-3; skip 5' as clauses."""
+    check_readable(text)
     clauses: list[Clause] = []
     for word in WORDS.findall(text.lower()):
         if word in VERBS:
             clauses.append(Clause(VERBS[word]))
         elif word not in FILLER:
-            add_word(clauses, word)
+            for ref in refs_of(word):
+                add_word(clauses, ref)
     for clause in clauses:
         if not clause.targets:
             raise km.KnowledgeError(f"'{clause.verb}' names no groups (say all, or numbers like 1,3 or 2b)")
@@ -406,11 +447,12 @@ def decide(clauses: list[Clause], groups: list[list[str]]) -> dict[str, str]:
 
 
 def flag_clauses(confirm: str | None, reject: str | None, skip: str | None) -> list[Clause]:
-    """--confirm 1,3 --reject 2b as clauses."""
+    """--confirm 1,3 --reject 2b (--confirm 1-3 too) as clauses."""
     found = []
     for verb, refs in ((CONFIRM, confirm), (REJECT, reject), (SKIP, skip)):
         if refs:
-            found.append(Clause(verb, [r for r in re.split(r"[\s,]+", refs.lower()) if r]))
+            words = [word for word in re.split(r"[\s,]+", refs.lower()) if word]
+            found.append(Clause(verb, [ref for word in words for ref in refs_of(word)]))
     return found
 
 

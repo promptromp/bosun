@@ -819,6 +819,31 @@ class RetentionAndForgetTest(KnowledgeTestCase):
             self.run_kg("add-entity", "person/dana")
         self.run_kg("add-entity", "person/dana", "--allow-forgotten")
 
+    def test_forget_lists_where_the_name_still_occurs_and_edits_none_of_it(self) -> None:
+        self.seed()
+        self.run_kg("add-entity", "team/billing", "--name", "Billing", "--summary", "ask Dana Example first")
+        self.run_kg(
+            "propose",
+            "repo/invoice-exporter",
+            "caveat",
+            "--value",
+            "dana reviews every change",
+            "--source",
+            "memory:a",
+        )
+        caveat = self.f(1)
+        self.run_kg("propose", "process/release", "has_step", "step/merge", "--source", "ledger:a")
+        expected = [
+            "still named in:",
+            "  entity team/billing (summary)",
+            f"  fact {caveat} (value)",
+        ]
+        for argv in (("--dry-run",), ()):
+            with self.subTest(argv=argv):
+                said = self.run_kg("forget", "person/dana", *argv).splitlines()
+                self.assertEqual(said[1:], expected)
+        self.assertIn("ask Dana Example first", (self.root / "entities.jsonl").read_text())
+
     def backups(self, count: int) -> list[Path]:
         """<count> update backups in the state folder, as an update leaves them."""
         folder = self.state / ub.BACKUPS_DIR
@@ -1068,6 +1093,30 @@ class BatchTest(KnowledgeTestCase):
             with self.subTest(bad=bad), self.assertRaises(KnowledgeError):
                 kr.decide(kr.parse_clauses(bad), groups)
 
+    def test_a_range_names_every_group_in_it_and_dropped_characters_are_refused(self) -> None:
+        groups = [["f1", "f2"], ["f3"], ["f4"], ["f5"]]
+        self.assertEqual(
+            kr.decide(kr.parse_clauses("confirm 1-3, reject 4"), groups),
+            {"f1": "confirm", "f2": "confirm", "f3": "confirm", "f4": "confirm", "f5": "reject"},
+        )
+        flags = kr.flag_clauses("2-3", None, None)
+        self.assertEqual(kr.decide(flags, groups), {"f3": "confirm", "f4": "confirm"})
+        for bad, says in (
+            ("confirm 1 - 3", "cannot read '-'"),
+            ("confirm 1-3.", "cannot read '.'"),
+            ("confirm 2b-2c", "cannot read '-'"),
+            ("confirm 3-1", "cannot read '3-1'"),
+            ("confirm 0-2", "cannot read '0-2'"),
+            ("confirm 1-5", "the batch has groups 1 to 4"),
+        ):
+            with self.subTest(bad=bad), self.assertRaisesRegex(KnowledgeError, says):
+                kr.decide(kr.parse_clauses(bad), groups)
+
+    def test_a_quote_with_a_range_holds_every_group_number_in_it(self) -> None:
+        clauses = kr.parse_clauses("confirm 1-3")
+        self.assertEqual(knowledge.batch_quote_refusal("yes, confirm 1-3", clauses), "")
+        self.assertIn("(1, 2, 3)", knowledge.batch_quote_refusal("yes, confirm 1 and 3", clauses))
+
     def test_the_fact_cap_and_the_limits(self) -> None:
         out = self.run_kg("batch", "--max-facts", "8")
         self.assertIn("Knowledge to review: 1 group, 5 facts (2 more groups wait for a later batch).", out)
@@ -1144,6 +1193,79 @@ class ImportTest(KnowledgeTestCase):
         out = self.run_kg("import", str(path))
         self.assertIn("refused: 1 format, 1 unresolved or invalid", out)
         self.assertIn("record 2: no entity 'repo/missing'", out)
+
+    def test_entity_fields_and_rework_of_the_wrong_type_are_refused_with_a_reason(self) -> None:
+        bad = [
+            ({"type": "entity", "id": "repo/x", "aliases": 5}, "aliases must be a list of strings, not 5"),
+            (
+                {"type": "entity", "id": "repo/y", "aliases": {"strong": "abc"}},
+                "aliases.strong must be a list of strings, not 'abc'",
+            ),
+            (
+                {"type": "entity", "id": "repo/z", "weak_aliases": 5},
+                "weak_aliases must be a list of strings, not 5",
+            ),
+            (
+                {"type": "entity", "id": "repo/w", "summary": {"x": 1}},
+                "summary must be a string, not {'x': 1}",
+            ),
+            (
+                {
+                    "type": "fact",
+                    "subject": "repo/invoice-exporter",
+                    "predicate": "caveat",
+                    "value": "x",
+                    "rework": "no",
+                    "sources": ["memory:a"],
+                },
+                "rework must be true or false, not 'no'",
+            ),
+        ]
+        path = self.tmp / "import.json"
+        path.write_text(json.dumps([{"type": "entity", "id": "repo/invoice-exporter"}, *(r for r, _ in bad)]))
+        out = self.run_kg("import", str(path))
+        self.assertIn(f"refused: {len(bad)} unresolved or invalid", out)
+        for reason in (reason for _, reason in bad):
+            self.assertIn(reason, out)
+
+    def test_fields_of_the_wrong_type_are_refused_with_a_reason(self) -> None:
+        self.run_kg("import", str(FIXTURE), "--apply")
+        step = {
+            "type": "fact",
+            "subject": "process/release",
+            "predicate": "has_step",
+            "sources": ["memory:a"],
+        }
+        bad = {
+            "order '2'": {**step, "object": "step/merge", "order": "2"},
+            "order true": {**step, "object": "step/merge", "order": True},
+            "observations 'x'": {**step, "object": "step/merge", "observations": "x"},
+            "observations 0": {**step, "object": "step/merge", "observations": 0},
+            "a numeric object": {**step, "object": 7},
+            "a numeric value": {
+                **step,
+                "predicate": "caveat",
+                "subject": "repo/invoice-exporter",
+                "value": 3,
+            },
+        }
+        path = self.tmp / "import.json"
+        path.write_text(json.dumps([*bad.values(), {**step, "object": "step/merge", "order": 2}]))
+        out = self.run_kg("import", str(path), "--apply")
+        self.assertIn("facts: 0 new, 1 re-observed", out)
+        self.assertIn(f"refused: {len(bad)} unresolved or invalid", out)
+        for number, reason in enumerate(
+            (
+                "order must be a whole number, not '2'",
+                "order must be a whole number, not True",
+                "observations must be a whole number of at least 1, not 'x'",
+                "observations must be a whole number of at least 1, not 0",
+                "object must be a string, not 7",
+                "value must be a string, not 3",
+            ),
+            start=1,
+        ):
+            self.assertIn(f"record {number}: {reason}", out)
 
 
 class ContextTest(KnowledgeTestCase):

@@ -742,12 +742,13 @@ def already_known(kb: KB, subject: str, shown: set[str]) -> list[dict[str, Any]]
 
 
 def block_head(kb: KB, subject: str) -> dict[str, Any]:
-    """A block's heading: the entity, its type in words and its summary."""
+    """A block's heading: the entity, its type in words and its summary (never a person's, as on
+    the entity's page)."""
     entity = kb.entities.get(subject) or {}
     return {
         **(ref(kb, subject) or {}),
         "type_label": ks.entity_type(subject).replace("_", " "),
-        "summary": str(entity.get("summary") or ""),
+        "summary": "" if ks.is_person(subject) else str(entity.get("summary") or ""),
     }
 
 

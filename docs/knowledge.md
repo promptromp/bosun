@@ -39,8 +39,9 @@ bosun kg context --for releases         # a small cited pack of confirmed facts
 `bosun kg batch` lists what waits for you as one batch: grouped by entity and axis, the groups that prevent rework
 first, at most 10 groups, 8 facts a group and 40 facts a day (`BOSUN_KNOWLEDGE_BATCH_CAP`,
 `BOSUN_KNOWLEDGE_GROUP_FACTS`, `BOSUN_KNOWLEDGE_BATCH_FACTS`). You answer it in one line: "confirm all except 2b"
-leaves 2b proposed, and only "reject 2b" rejects it. The same batch can be answered in the console's review page
-(`#/knowledge/review`). A proposal nobody reviews expires after 30 days, unless something observes it again.
+leaves 2b proposed, only "reject 2b" rejects it, and "confirm 1-3" takes a range. The same batch can be answered in
+the console's review page (`#/knowledge/review`). A proposal nobody reviews expires after 30 days, unless something
+observes it again.
 
 ## In the agents' hands
 
@@ -70,8 +71,8 @@ Always on, whatever the key says:
   `--transcript` too). Text bosun pasted into the window (a brief, a `bosun send`) is never your words.
 - **Decisions need your words too.** `kg confirm`, `reject`, `batch apply`, and `supersede --close` or `--by`, run
   from a session, need a `--from-user --quote` that verifies, at least 8 characters, typed after the facts they decide
-  on were proposed; for `batch apply` the quote holds each group number the decision names (or "all", when it says
-  all). A correction with `--value` or `--object` needs a source: your words, checked the same way, or a `--source`.
+  on were proposed; for `batch apply` the quote holds each group number the decision names (a range such as 1-3 holds each in it; or
+  "all", when it says all). A correction with `--value` or `--object` needs a source: your words, checked the same way, or a `--source`.
 - **From a terminal, and in the console's review,** they work as before.
 
 The quote is kept in the decision's note, on this Mac only. The check guards against a session's mistakes, not
@@ -161,6 +162,11 @@ every backup `bosun update` took, since restoring one from before would bring th
 ("kg: deleted 2 update backups taken before this; going back past it is no longer possible"), never whom. A person
 deleted on request is never taken back: one found again in files restored from before is left out, and the write
 says so without naming them; `kg add-entity <id> --allow-forgotten` adds them again if they asked.
+
+It does not reach their name where it is free text elsewhere (another entity's summary or aliases, a fact's value
+or note, a quote): it lists those places as "still named in" (`--dry-run` too). An edit does not take the name out of
+them for good: the shared journal and the history keep every earlier text, and a fact's text can only be superseded,
+which keeps the old fact.
 
 What it keeps of them is a keyed hash of the id, under `secret.key` in the knowledge folder (made on the first write,
 readable only by you, not in the history, and never leaving this Mac). Once such records exist, `kg forget` and adding

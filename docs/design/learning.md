@@ -177,9 +177,12 @@ Deferred (ROADMAP), each for a reason:
 - **Data minimisation.** Only sessions of bosun windows are read; other conversations in the
   same folders are skipped, and `BOSUN_LEARN_EXCLUDE_SESSIONS` excludes ids outright. The digest
   keeps short excerpts (prompts to 600 characters, other lines to 300) and redacts tokens, keys,
-  passwords, signed URL queries and email addresses. The analysis call sends it to the same model
+  passwords, signed URL queries and email addresses before it cuts an excerpt (a private key cut
+  short already is redacted from its BEGIN marker on). The analysis call sends it to the same model
   provider the sessions already use; no other service sees it.
-- **Retention.** Run folders (digest, prompt, raw result, report) are deleted after 14 days;
+- **Retention.** Run folders (digest, prompt, raw result, stderr, report), dry runs' too, are deleted after
+  14 days, when a run starts (a dry run, a digest, a scheduled one that is not due; not one that
+  `libexec/bosun-learn` skips during an update's hold or, scheduled, while bosun is quit);
   `state.json` keeps keys, titles and counts, not excerpts.
 - **People.** Memory notes are work-relevant only (how someone prefers to work with the user, never
   judgements); the prompt says so, and the user reviews each note.

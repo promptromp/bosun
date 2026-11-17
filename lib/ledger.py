@@ -1277,6 +1277,27 @@ def update_item(item: Item, args: argparse.Namespace, fields: dict[str, Any]) ->
     return "updated" if changed else "unchanged"
 
 
+# Fields a command keeps, by kind: `upsert --field` refuses them and names where they come from.
+COMMAND_FIELDS: dict[str, dict[str, str]] = {
+    OUTREACH_KIND: {
+        "messages": "each message sent is added by bosun ledger sent '<out-id>' --ref '<permalink>'",
+        "parent": "it is set by bosun ledger reach-out '<parent-id>' when the outreach is made, and the "
+        "outreach's id names it",
+    },
+    TICKET_KIND: dict.fromkeys(
+        ("system", "key", "project"), "a ticket's system, key and project come from its id and never change"
+    ),
+}
+
+
+def check_command_fields(kind: str | None, fields: Mapping[str, str]) -> None:
+    """Refuse --field for a field a command keeps (a list of messages, the parent, a ticket's key)."""
+    owned = COMMAND_FIELDS.get(kind or "", {})
+    for name in fields:
+        if name in owned:
+            raise LedgerError(f"--field {name} is not set by hand on {kind} items: {owned[name]}")
+
+
 def cmd_upsert(args: argparse.Namespace) -> str:
     if args.kind and args.kind not in KINDS:
         raise LedgerError(f"unknown kind {args.kind!r}; kinds: {', '.join(KINDS)}")
@@ -1284,6 +1305,7 @@ def cmd_upsert(args: argparse.Namespace) -> str:
     hint = ""
     with locked_ledger(write=True) as ledger:
         item = ledger["items"].get(args.id)
+        check_command_fields(item["kind"] if item else args.kind, fields)
         if item is None:
             if not args.kind:
                 raise LedgerError(

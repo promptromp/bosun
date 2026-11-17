@@ -148,7 +148,11 @@ Examples, in the fictional acme world:
 
    Person facts not re-observed for 12 months (`RETENTION_DAYS`) are reported by `kg lint` and
    deleted by `kg expire`, which you run by hand; nothing runs it on a schedule yet.
-   `kg forget person/<id>` deletes a person on request.
+   `kg forget person/<id>` deletes a person on request: their entity, the facts that name them by
+   id and their identifiers. Their name as free text elsewhere (another entity's summary or aliases,
+   a fact's value, note or quote) is not edited; forget lists where it still occurs ("still named
+   in"). Those texts stay in the shared journal and the history whatever is edited later, and a
+   fact's text is only ever superseded (the old fact is kept, closed).
 
 ## How it is used (retrieval)
 

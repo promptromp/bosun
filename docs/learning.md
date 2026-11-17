@@ -11,8 +11,13 @@ With `BOSUN_LEARN_ENABLED=1`, `install.sh` loads a launchd job that runs it on y
 (18:30), over what happened since the last run (at most `BOSUN_LEARN_HOURS`, 24). On a new install, `bosun init`
 sets this when you choose "Proactive". It skips while bosun is stopped by `bosun quit`.
 
-You can run it by hand any time: `bosun learn`, or `--dry-run` to write only its report, or `--collect-only` to
-write only the digest (no Claude call, no cost).
+You can run it by hand any time: `bosun learn`; `--dry-run` writes only its run folder (the digest, the prompt, the
+raw result, `stderr.log` and the report) and no ledger items, state or log; `--collect-only` writes only the digest
+(no Claude call, no cost).
+
+Run folders older than 14 days, dry runs' too, are deleted when a run starts: one you type, a dry run,
+`--collect-only`, or the scheduled one even when it is not due. Not one skipped because an update is holding bosun's
+background work, nor a scheduled one while bosun is stopped by `bosun quit`.
 
 ## What a run does
 

@@ -246,6 +246,21 @@ class CatalogTestCase(unittest.TestCase):
         self.assertEqual(console_files.read(big), (None, console_files.TOO_LARGE))
         self.assertEqual(console_files.read(self.config / "missing.md"), (None, console_files.UNREADABLE))
 
+    def test_the_list_shows_front_matter_redacted_as_the_file_view_does(self) -> None:
+        note = "---\ntitle: Ask dana@example.com\ndescription: the db password: hunter2hunter2\n---\nbody\n"
+        write(self.memory / "notes" / "deploys.md", note)
+        write(self.config / "policy.md", note)
+        entries = console_files.catalog(self.settings(memory_dirs=(self.memory,)))
+        texts = {e.key: console_files.read(e.path)[0] for e in entries}
+        listed = console_library.library_model(entries, texts, memory_on=True)
+        shown = {(e["root"], e["name"]): e for g in listed["groups"] for e in g["entries"]}
+        for where in (("memory", "notes/deploys.md"), ("site", "policy.md")):
+            with self.subTest(where=where):
+                entry = shown[where]
+                self.assertEqual(
+                    (entry["title"], entry["summary"]), ("Ask <email>", "the db password: <redacted>")
+                )
+
     def test_the_library_model(self) -> None:
         entries = console_files.catalog(self.settings())
         texts = {e.key: console_files.read(e.path)[0] for e in entries}
