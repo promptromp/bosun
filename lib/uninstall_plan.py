@@ -165,6 +165,9 @@ FILE = "file"
 CHECKOUT = "checkout"
 
 CANCEL_WAKE = init_plan.CANCEL_WAKE  # the one line, which `bosun init` cancels bosun's own wake with too
+CANCEL_BY_HAND = (
+    f"{CANCEL_WAKE}  # {init_plan.CANCEL_TAKES_ALL}"  # the step's line to run, if it could not be
+)
 INSTALL_LINE = "curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | sh"
 UNREADABLE = -1  # records that are there but cannot be read, so they may hold anything
 AT_HOME = "it is where your home folder is, so it is not touched"
@@ -372,7 +375,7 @@ def wake_is_bosuns(facts: Facts) -> bool:
 
 
 def wake_steps(facts: Facts) -> list[Step]:
-    return [Step(WAKE, facts.repeating[0], by_hand=CANCEL_WAKE)] if wake_is_bosuns(facts) else []
+    return [Step(WAKE, facts.repeating[0], by_hand=CANCEL_BY_HAND)] if wake_is_bosuns(facts) else []
 
 
 def job_steps(facts: Facts) -> list[Step]:

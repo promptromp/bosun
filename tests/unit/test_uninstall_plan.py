@@ -276,7 +276,7 @@ class Folders(unittest.TestCase):
 class Wake(unittest.TestCase):
     def test_bosuns_alone_is_cancelled(self) -> None:
         plan = up.build_plan(facts(), Choices())
-        self.assertEqual(plan.steps[0], Step(up.WAKE, WAKE_LINE, by_hand=up.CANCEL_WAKE))
+        self.assertEqual(plan.steps[0], Step(up.WAKE, WAKE_LINE, by_hand=up.CANCEL_BY_HAND))
 
     def test_any_other_is_left_and_named(self) -> None:
         for repeating in (
@@ -582,7 +582,7 @@ class TheNewLayout(unittest.TestCase):
         layout = side_by_side()
         stop = next(step for step in up.build_plan(layout, Choices()).steps if step.kind == up.STOP)
         self.assertEqual(stop.by_hand, f"{ROOT}/bin/bosun stop")
-        left = (Step(up.WAKE, WAKE_LINE, by_hand=up.CANCEL_WAKE),)
+        left = (Step(up.WAKE, WAKE_LINE, by_hand=up.CANCEL_BY_HAND),)
         text = up.render_done(up.build_plan(layout, Choices()), left, layout, inside_checkout=False)
         self.assertIn("~/.local/share/bosun/bin/bosun uninstall", text)
 
@@ -647,10 +647,13 @@ class Reading(unittest.TestCase):
             self.assertIn(words, text)
 
     def test_what_could_not_be_removed_comes_with_what_to_run(self) -> None:
-        left = (Step(up.WAKE, WAKE_LINE, by_hand=up.CANCEL_WAKE),)
+        left = (Step(up.WAKE, WAKE_LINE, by_hand=up.CANCEL_BY_HAND),)
         text = up.render_done(up.build_plan(facts(), Choices()), left, facts(), inside_checkout=False)
         self.assertNotIn("bosun is uninstalled", text)
         self.assertIn(up.CANCEL_WAKE, text)
+        self.assertIn(
+            f"{up.CANCEL_WAKE}  # it removes any other repeating event too", text
+        )  # still a line to paste
         self.assertIn("~/.local/share/bosun/bin/bosun uninstall", text)
 
     def test_a_shell_left_in_a_removed_folder_is_told(self) -> None:

@@ -1659,8 +1659,9 @@ job_calendar() { # <plist>
 # Job <label> unloaded, then, from the plist <rendered> (checked already; empty: the job is no longer
 # wanted), written as <installed> and loaded again; or its plist removed. A fresh load, or one that moves the job's
 # calendar (its time or its days), is stamped (stamp_job_loaded): launchd runs no time that passed before it. A
-# job that was loaded on its calendar already and keeps it (the log folder or a template changed; a put-back)
-# keeps its stamp, so the run due today stays owed.
+# job that was loaded on its calendar already and keeps it (the log folder or a template changed) keeps its
+# stamp, so the run due today stays owed. The put-back of a failed Settings change moves the calendar back, so it
+# is stamped too, as the change before it was.
 reload_job() { # <label> <rendered> <installed>
   local kept=0 before after
   before="$(job_calendar "$3")" after="$(job_calendar "$2")"

@@ -826,9 +826,9 @@ class CommandTest(WorldTest):
         self.assertEqual(self.calls[-1], ["install.sh"])  # 08:01 is not the wake bosun.env's 09:00 sets
         with mock.patch.object(init, "can_ask_for_sudo", return_value=False):
             _, out, _ = self.bosun_init("--answers", self.answers_file(wake=False, menu_app=False))
-        self.assertIn(
-            "run this once yourself: sudo pmset repeat cancel (it removes any other repeating event too)", out
-        )
+        by_hand = f"{init.ROOT / 'install.sh'} --cancel-wake 'wakepoweron at 8:01AM weekdays only'"
+        self.assertIn(f"run this once yourself: {by_hand} (it runs sudo pmset repeat cancel only while", out)
+        self.assertIn("one repeating event: it removes any other repeating event too)", out)
         self.assertEqual(self.calls[-1], ["install.sh"])
         self.pmset_schedule = "Repeating power events:\n  wakepoweron at 6:30AM every day\n"
         self.bosun_init("--answers", self.answers_file(wake=False, menu_app=False))

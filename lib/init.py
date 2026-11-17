@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -30,7 +31,7 @@ import init_plan
 import init_terminal
 import init_wizard
 from init_plan import Answers, AnswersError, DirState, Facts, Plan, RepoUse
-from install_paths import install_bin
+from install_paths import install_bin, install_path
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -204,26 +205,30 @@ def run_shown(command: Sequence[str]) -> tuple[int, list[str]]:
     return process.returncode, lines
 
 
+def cancel_by_hand(event: str) -> str:
+    """What to run to cancel bosun's own wake <event> by hand: install.sh's --cancel-wake, which looks again
+    before it does, since `sudo pmset repeat cancel` takes every repeating event."""
+    command = shlex.join([str(install_path(ROOT) / "install.sh"), "--cancel-wake", event])
+    only = f"it runs {init_plan.CANCEL_WAKE} only while bosun's wake is pmset's one repeating event"
+    return f"{command} ({only}: {init_plan.CANCEL_TAKES_ALL})"
+
+
 def run_steps(plan: Plan) -> Installed:
     """Trust the folders, then let install.sh do the rest: what it came to."""
     sys.stdout.flush()  # what was printed so far comes before what these print
     if plan.trust:
         subprocess.run([str(ROOT / "bin" / "bosun"), "trust", "--any", *plan.trust], check=False)
     flags = []
-    cancel_note = f" ({init_plan.CANCEL_TAKES_ALL})"
-    for command, flag, note in (
-        (plan.wake_command, ["--with-wake"], ""),
-        (plan.cancel_wake, ["--cancel-wake", plan.cancel_event], cancel_note),
+    for command, flag, by_hand in (
+        (plan.wake_command, ["--with-wake"], plan.wake_command),
+        (plan.cancel_wake, ["--cancel-wake", plan.cancel_event], cancel_by_hand(plan.cancel_event)),
     ):
         if not command:
             continue
         if can_ask_for_sudo():
             flags += flag
         else:
-            print(
-                f"No terminal to ask for your password, so run this once yourself: {command}{note}",
-                flush=True,
-            )
+            print(f"No terminal to ask for your password, so run this once yourself: {by_hand}", flush=True)
     status, lines = run_shown([str(ROOT / "install.sh"), *flags])
     if status == EXIT_DOCTOR:
         said = tuple(line for line in lines if line.strip())[-LAST_LINES:]
