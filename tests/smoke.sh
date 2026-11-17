@@ -4025,6 +4025,7 @@ EOF
 cat >"$HOME/.local/bin/sudo" <<EOF
 #!/bin/bash
 echo "sudo \$*" >>"$WORK/system.log"
+[ "\$1" = -v ] && exit 0 # the password asked for ahead: always given here
 [ "\$1" = -n ] && shift
 exec "\$@"
 EOF
@@ -4128,7 +4129,10 @@ for path in sys.argv[1:]:
   check "... and with BOSUN_WAKE=1 it is bosun's" contains "$(env "${ours_env[@]}" BOSUN_WAKE=1 "$BOSUN" doctor 2>&1)" "ok    pmset repeating wake:"
   # install.sh --cancel-wake <event> (cancel_wake): it cancels only while pmset's repeating events are exactly the
   # event bosun init judged bosun's (pmset cancels them all), whatever schedule bosun.env has by then.
-  cancel() { env BOSUN_CONFIG_DIR="$INSTALL_CFG" BOSUN_START_TIME=09:00 bash -c 'source "$1/lib/common.sh"; load_config; cancel_wake "$2"' _ "$ROOT" "$1"; }
+  cancel_with() { # <shell to run first, to stand in for a tool> <event>
+    env BOSUN_CONFIG_DIR="$INSTALL_CFG" BOSUN_START_TIME=09:00 bash -c 'source "$1/lib/common.sh"; load_config; eval "$2"; cancel_wake "$3"' _ "$ROOT" "$@"
+  }
+  cancel() { cancel_with "" "$1"; }
   ours_event="wakepoweron at 8:01AM weekdays only"
   printf 'Repeating power events:\n  %s\n  shutdown at 11:00PM every day\n' "$ours_event" >"$WORK/pmset-sched"
   check "cancelling bosun's wake is refused while pmset has another repeating event, which it would take too" fails_with "pmset has 2 repeating events, and cancelling takes them all" cancel "$ours_event"
@@ -4136,8 +4140,15 @@ for path in sys.argv[1:]:
   check "... and when pmset's is not the event init judged bosun's (given by hand, or changed since)" fails_with "pmset's (wakepoweron at 6:30AM every day) is not the one bosun init judged bosun's ($ours_event)" cancel "$ours_event"
   check "... neither ran pmset repeat cancel" bash -c '! grep -q "repeat cancel" "$1"' _ "$WORK/system.log"
   printf 'Repeating power events:\n  %s\n' "$ours_event" >"$WORK/pmset-sched"
+  pmset_reads="$(grep -c '^pmset -g sched$' "$WORK/system.log")"
+  if cancel_with 'sudo() { return 1; }' "$ours_event" >/dev/null 2>&1; then sudo_refused=no; else sudo_refused=yes; fi
+  check "... nor looked at pmset when sudo was refused: sudo is asked first, so nothing changes behind its prompt" bash -c '[ "$1" = yes ] && [ "$(grep -c "^pmset -g sched$" "$2")" = "$3" ]' _ "$sudo_refused" "$WORK/system.log" "$pmset_reads"
+  out="$(cancel_with 'pmset() { return 1; }' "$ours_event" 2>&1)"
+  cancel_rc=$?
+  check "... and a schedule pmset cannot give is a warning, no failure, and nothing is cancelled" bash -c '[ "$1" = 0 ] && grep -q "WARN: could not read pmset" <<<"$2" && [ -s "$3" ]' _ "$cancel_rc" "$out" "$WORK/pmset-sched"
   cancel "$ours_event" >/dev/null 2>&1
-  check "that event alone is cancelled with sudo pmset repeat cancel, though bosun.env's start has moved to 09:00 since (a no that moved it)" grep -q "sudo pmset repeat cancel" "$WORK/system.log"
+  check "that event alone is cancelled, though bosun.env's start has moved to 09:00 since (a no that moved it)" grep -q "sudo -n pmset repeat cancel" "$WORK/system.log"
+  check "... sudo asked first, then pmset looked at, then the cancel with sudo -n" bash -c 'grep -E "^(sudo -v|pmset -g sched|sudo -n pmset repeat cancel)$" "$1" | tail -3 | paste -sd "|" - | grep -qx "sudo -v|pmset -g sched|sudo -n pmset repeat cancel"' _ "$WORK/system.log"
   check "with no repeating event left there is nothing to cancel, and that is no failure" cancel "$ours_event"
   rm -f "$WORK/pmset-sched"
   # A ledger of its own: a link to an item that is gone (an old prune) warns and adds no failure;

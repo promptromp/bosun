@@ -1913,10 +1913,17 @@ repeating_events() { # <schedule>
 # to the wake. `pmset repeat cancel` cancels every repeating event, and init's plan was made when it started, against
 # the schedule bosun.env had then (another app may add an event while the wizard is open; the flag can be given by
 # hand), so it looks again first: it cancels only while pmset's repeating events are exactly <event>, and otherwise
-# refuses, saying why. None left is nothing to do. Fails, saying so, when it refuses or sudo or pmset fails.
+# refuses, saying why. sudo is asked before it looks (sudo -v; the cancel then runs sudo -n), so an event added
+# while its prompt waits is seen. None left is nothing to do; a schedule pmset cannot give is a warning, and
+# nothing is cancelled. Fails when it refuses or sudo or pmset fails.
 cancel_wake() { # <event>
-  local events
-  events="$(repeating_events "$(pmset -g sched)")"
+  local schedule events
+  sudo -v || return 1
+  if ! schedule="$(pmset -g sched)"; then
+    log "WARN: could not read pmset's schedule (pmset -g sched failed), so no wake was cancelled" >&2
+    return 0
+  fi
+  events="$(repeating_events "$schedule")"
   if [ -z "$events" ]; then
     log "pmset has no repeating event: there is no wake to cancel"
     return 0
@@ -1930,7 +1937,7 @@ cancel_wake() { # <event>
     return 1
   fi
   log "cancelling bosun's repeating wake ($1): sudo pmset repeat cancel"
-  sudo pmset repeat cancel
+  sudo -n pmset repeat cancel
 }
 
 # `set_wake` sets the wake with sudo; `set_wake print` only says the command to run once; `set_wake no-prompt`
