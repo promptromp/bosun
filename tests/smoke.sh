@@ -3423,6 +3423,10 @@ if [ "$now_hm" -ge 30 ] && [ "$now_hm" -lt 2230 ]; then
   now_morning BOSUN_DAYS=MTWRFSU BOSUN_START_TIME="$(date -v+1H +%H:%M)" BOSUN_AWAKE_UNTIL="$(date -v+30M +%H:%M)" "$BOSUN" morning --now --dry-run >/dev/null
   check "in a window that began yesterday and runs past midnight, the run's log is the workday's, as the watchdog reads it" grep -q "=== morning run (trigger=now, session=smoke, dry_run=1) ===" "$BOSUN_LOG_DIR/morning-$(date -v-1d +%F).log"
 fi
+check "the morning log's name falls back to today's when lib/awake.py cannot say, with a warning on stderr" bash -c '
+  source "$1/lib/common.sh"; load_config
+  python3() { return 1; }
+  name="$(morning_log_file 2>"$2")" && [ "$name" = "$BOSUN_LOG_DIR/morning-$(date +%F).log" ] && grep -q "WARN: lib/awake.py did not name the morning log" "$2"' _ "$ROOT" "$WORK/morning-log.err"
 
 out="$(now_morning "${awake_unscheduled[@]}" "$BOSUN" morning --now --skip-setup)"
 check "--now on a day that is not scheduled holds no keep-awake, and starts the session" bash -c 'grep -q "outside the awake window" <<<"$1" && ! grep -q "holding keep-awake" <<<"$1" && tmux -L "$2" has-session -t =smoke' _ "$out" "$SOCKET"

@@ -1352,7 +1352,12 @@ seconds_until_awake_end() {
 # awake window that now is in began, so a run past midnight in a window that runs past it is that day's, as the
 # watchdog, the status and the console read it.
 morning_log_file() {
-  echo "$BOSUN_LOG_DIR/$(python3 "$BOSUN_ROOT/lib/awake.py" morning-log --days "$BOSUN_DAYS" --start "$BOSUN_START_TIME" --until "$BOSUN_AWAKE_UNTIL")"
+  local name
+  if ! name="$(python3 "$BOSUN_ROOT/lib/awake.py" morning-log --days "$BOSUN_DAYS" --start "$BOSUN_START_TIME" --until "$BOSUN_AWAKE_UNTIL" 2>/dev/null)" || [ -z "$name" ]; then
+    name="morning-$(date +%F).log" # today's: the run still has its log
+    log "WARN: lib/awake.py did not name the morning log; using $name" >&2
+  fi
+  echo "$BOSUN_LOG_DIR/$name"
 }
 
 # Seconds left in the awake window that now is in: the one rule (lib/awake.py, which the watchdog and the status
