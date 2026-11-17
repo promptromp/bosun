@@ -13,8 +13,8 @@ the [console](console.md)'s Ontology view shows it.
 Facts come from three places:
 
 - **Your own words.** Tell an agent "the release rolls out gradually once the canary checks pass", and it records
-  that as a standing fact in your words. A fact is confirmed at once when your quote is in a prompt you typed in that
-  session ([Words that count](#words-that-count)).
+  that as a standing fact in your words. A fact is confirmed at once when your quote is whole words of a prompt you
+  typed in that session ([Words that count](#words-that-count)).
 - **Sources bosun has seen:** trusted ones (the ledger, a repo window's or learning run's report, a memory note, a
   session's transcript, a profile field) and untrusted ones (Slack, pull requests, tickets, documents). These become
   proposals. Two trusted sources of different kinds confirm a low-risk fact that names no person, and a profile
@@ -68,12 +68,19 @@ Always on, whatever the key says:
 - **A quote is checked against the session that ran `kg`.** Inside an agent session, `--from-user --quote` needs no
   `--transcript`: `kg` finds its session by walking up its process tree to an agent's session record. Another
   session's transcript is refused, and only genuine prompts of the last 24 hours count (from a terminal with
-  `--transcript` too). Text bosun pasted into the window (a brief, a `bosun send`) is never your words.
+  `--transcript` too). It counts as whole words of a prompt (never a piece of a word), and from a session it holds
+  at least 8 characters. Text bosun pasted into the window (a brief, a `bosun send`) is never your words.
 - **Decisions need your words too.** `kg confirm`, `reject`, `batch apply`, and `supersede --close` or `--by`, run
-  from a session, need a `--from-user --quote` that verifies, at least 8 characters, typed after the facts they decide
-  on were proposed; for `batch apply` the quote holds each group number the decision names (a range such as 1-3 holds each in it; or
-  "all", when it says all). A correction with `--value` or `--object` needs a source: your words, checked the same way, or a `--source`.
-- **From a terminal, and in the console's review,** they work as before.
+  from a session, need a `--from-user --quote` that verifies, at least 8 characters, typed after the facts they
+  decide on were proposed; for `batch apply` the quote holds each group number the decision names (a range such as
+  1-3 holds each in it; or "all", when it says all).
+- **Corrections.** A correction with `--value` or `--object` needs a source: your words, checked the same way, or a
+  `--source`. On sources alone, from a terminal too, the correction is proposed, or a fact already recorded with
+  that value re-observed, as `kg propose` would (Slack, PR, ticket and doc text confirm nothing, and a rejected fact
+  stays rejected), and the fact it corrects closes only when that confirms the correction. In your words, a
+  correction to a value already recorded is a replacement by that fact (`--by`), your words typed after that fact
+  was proposed too. A correction to the fact's own value is refused.
+- **From a terminal, and in the console's review,** confirming, rejecting, `--by` and `--close` need no quote.
 
 The quote is kept in the decision's note, on this Mac only. The check guards against a session's mistakes, not
 against a hostile agent, which can escape the process-tree walk.

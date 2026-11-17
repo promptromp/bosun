@@ -18,15 +18,17 @@
 #   propose ... --from-user --quote '<my exact words>' [--transcript <session.jsonl>]
 #                                      record a fact (an object entity or a --value). Proposing the
 #                                      same fact again re-observes it (adds the source). It is
-#                                      confirmed at once only when: the quote is in a prompt I typed
-#                                      in the last 24 hours in the session; or two trusted sources of
-#                                      different kinds back a low-risk fact naming no person; or a
-#                                      profile source gives a person's title or timezone. Slack, PR,
-#                                      ticket and doc text never confirms anything. Otherwise it
-#                                      waits for kg batch. The session is the agent's session that
-#                                      ran kg (a --transcript of another is refused; in an agent
-#                                      whose words bosun cannot check, the fact stays proposed);
-#                                      from a terminal, the one --transcript names, which it needs
+#                                      confirmed at once only when: the quote is whole words of a
+#                                      prompt I typed in the last 24 hours in the session (from an
+#                                      agent's session, at least 8 characters of them); or two
+#                                      trusted sources of different kinds back a low-risk fact
+#                                      naming no person; or a profile source gives a person's title
+#                                      or timezone. Slack, PR, ticket and doc text never confirms
+#                                      anything. Otherwise it waits for kg batch. The session is
+#                                      the agent's session that ran kg (a --transcript of another is
+#                                      refused; in an agent whose words bosun cannot check, the fact
+#                                      stays proposed); from a terminal, the one --transcript names,
+#                                      which it needs
 #   confirm <fact-id|group-key> ... [--from-user --quote Q] [--note N]
 #   reject <fact-id|group-key> ... [--from-user --quote Q] [--note N]
 #                                      confirm or reject facts after review (a group key: an entity
@@ -40,7 +42,11 @@
 #                                      close a fact (valid_to, superseded_by), never delete it; a
 #                                      correction in my words needs a quote that counts. From an
 #                                      agent's session, --by and --close need one too, as confirm
-#                                      (a correction with a --source needs none)
+#                                      (a correction with a --source needs none). A correction with
+#                                      only --source is confirmed only as propose would confirm it;
+#                                      otherwise it waits for kg batch and the fact stays open. To a
+#                                      value already recorded, it re-observes that fact (in my words:
+#                                      --by that fact); to the fact's own value, it is refused
 #   batch [--cap N] [--max-facts N] [--json]
 #                                      the review batch: proposals grouped by entity and axis, one
 #                                      numbered list, rework-preventing groups first; at most --cap

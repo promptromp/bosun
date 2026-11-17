@@ -9,8 +9,8 @@ anything you care about.
 | | What it covers | Enforced by |
 |---|---|---|
 | **Without asking** | Reading Slack, GitHub and Confluence; updating the ledger; reading and writing the ontology; handing a task to a repo window that already runs an agent, which then works within its task's rules | Claude Code's auto mode, and an allow list |
-| **After your approval** | Anything that goes out under your name: the orchestrator's own Slack posts, merges, reviews and other pull request writes, pushes, tracker and wiki writes, any tool whose name says it writes, Chrome changing a page. Also starting a new agent session, accepting work someone else asked for, changing a ticket, and applying a learning proposal | The orchestrator's policy, `ask` rules in its settings, and `bosun guard` |
-| **Never** | Editing files from the orchestrator, force pushes, `gh pr merge --admin`, `bosun uninstall`, a message to a window that names no work item, and running commands hidden in text that came from someone else | `deny` rules, and `bosun guard` |
+| **After your approval** | Anything that goes out under your name: the orchestrator's own Slack posts, merges, reviews and other pull request writes, GitHub issue, release and workflow writes, pushes, tracker and wiki writes, any tool whose name says it writes, Chrome changing a page. Also starting a new agent session, accepting work someone else asked for, changing a ticket, and applying a learning proposal | The orchestrator's policy, `ask` rules in its settings, and `bosun guard` |
+| **Never** | Editing files from the orchestrator, force pushes, `gh pr merge --admin`, `bosun uninstall`, a message to a window that names no work item, and running commands hidden in text that came from someone else | `deny` rules, and `bosun guard` ([what it reads](#what-the-guard-reads-and-what-stays-best-effort)) |
 
 By default "after your approval" means a Claude Code permission prompt, which waits until you look. With
 [approvals in chat](#approvals-approve-once-in-chat) on, the orchestrator proposes the exact action and you
@@ -63,9 +63,20 @@ and an unanswered prompt waits for ever. With `BOSUN_APPROVALS_ENABLED=1` (from 
    its arguments (`bosun ledger propose <id> --send slack --channel C --text -`, `--run '<command>'`, `--tool <tool>
    --args-json -`), and lists it under *Needs your approval*.
 2. You answer in your own words ("1 and 3 yes"), in the terminal or from your phone.
-3. It records your words (`bosun ledger approve <id> --quote '1 and 3 yes'`) and makes the call. A hook lets exactly
-   that call through, once, if your words are in a prompt you typed in that session after the proposal. Tool
-   results, pasted text and anything injected never count.
+3. It records your words (`ledger approve <id> --quote '1 and 3 yes'`) and makes the call; a PermissionRequest hook
+   (`bosun guard --permission-request`) lets exactly that call through, once, if your words say yes, as far as a list
+   of phrases can tell, in a prompt you typed (or sent from your phone) in that session after the proposal. The
+   prompt holds no negation anywhere (no, not, never, wait, stop, hold, cancel, abort, later, nevermind, scratch
+   that, forget it, no way, not now, or a word ending in n't; without the apostrophe, only the words the rule lists,
+   such as dont, isnt, mustnt) and no question mark, text you put in quotation marks left out; and your words are all
+   of it holding an approving phrase (yes, yeah, yep, yup, ok, okay, sure, go ahead, do it, send it, send them, ship
+   it, lgtm, approved, confirmed) or a bare choice ("1 and 3", "all", "approve 1 and 3", "1 and 3 please"), or at
+   least 8 characters of its whole words holding an approving phrase. The item's id alone, "approve" or "fine" alone,
+   or "merge 1 and 3" is no yes. Tool results, pasted and injected text never count, and `ledger approve` refuses a
+   quote that does not count. It cannot tell what your yes answered: a "yes" to another question after the proposal
+   counts for it too, a bare number does not say which plan it picks from, and "ok for all except 2", "yes, but only
+   1", a request that holds "go ahead", someone's words you pass on without quotation marks, `yes "no"` or a yes you
+   take back in a later prompt still count.
 4. When the call has run, its proposal is settled: done on success; on failure it is open again under *Needs you*,
    and needs a new proposal and approval, since approvals are single-use.
 
@@ -146,13 +157,76 @@ instructions found there, and the guard never lets text from there run commands.
 
 | Tier | Examples | How it is enforced |
 |---|---|---|
-| Do without asking | read Slack/GitHub/Confluence, update the ledger, read and write the ontology (`bosun kg lookup`, `search`, `facts`, `context`, `add-entity`, `propose`, `supersede`, `confirm`, `reject`, `batch`; a fact in your words counts only with a quote that is in your recent prompts of that session, and confirming, rejecting or `batch apply` from a session needs one too; a terminal and the console work as before), `bosun delegate --window` (and `--update`) to a repo window already running an agent; that session then acts within its task type's rules | auto mode, plus an explicit allow list |
-| Propose, then wait | the orchestrator's own Slack posts and reactions, `gh pr merge/review/comment/edit/close/ready/update-branch`, `gh api`, `git push`, Confluence/Jira comments, and any other MCP tool whose name has a write verb (send, create, update, delete, transition, execute, forward, share, trash, push, ...) | the policy, `ask` rules in `orchestrator/settings.json`, and `bosun guard`, a PreToolUse hook that asks before every MCP write tool, including ones the rules do not list (verified: Claude Code prompts even in auto mode). A name's words split on `_`, `-` and case changes (`editJiraIssue` is edit, jira, issue; `s3Upload` is s3, upload); words that are also nouns or adjectives in reads' names (request, comment, label, order, pin, mark, resolve, patch, put, clear, drop) do not count, so reads like `get_pull_request` and `get_patch` pass. bosun adds the guard when it launches the orchestrator (and to `bosun chores --dry-run`), from the bosun that launched it, so no settings file has to carry it |
+| Do without asking | read Slack/GitHub/Confluence, update the ledger, read and write the ontology (`bosun kg lookup`, `search`, `facts`, `context`, `add-entity`, `propose`, `supersede`, `confirm`, `reject`, `batch`; a fact in your words counts only with a quote that is whole words of one of your recent prompts of that session, at least 8 characters of them, and confirming, rejecting or `batch apply` from a session needs one too; a terminal and the console work as before), `bosun delegate --window` (and `--update`) to a repo window already running an agent; that session then acts within its task type's rules (see Delegated tasks) | auto mode, plus an explicit allow list |
+| Propose, then wait | the orchestrator's own Slack posts and reactions, `gh pr merge/review/comment/edit/close/ready/update-branch/create`, `gh issue comment/create/edit/close`, `gh release create`, `gh workflow run`, `gh run rerun`, `gh api`, `git push`, Confluence/Jira comments, and any other MCP tool whose name has a write verb (send, create, update, delete, transition, execute, forward, share, trash, push, ...) | the policy, `ask` rules in `orchestrator/settings.json`, and `bosun guard`, a PreToolUse hook that asks before every MCP write tool, including ones the rules do not list (verified: Claude Code prompts even in auto mode), and before those commands in a form the rules' prefixes do not see (`git -C <dir> push`, `/usr/bin/git push`, inside `$(...)`, `bash -c` or `eval`). A name's words split on `_`, `-` and case changes (`editJiraIssue` is edit, jira, issue; `s3Upload` is s3, upload); words that are also nouns or adjectives in reads' names (request, comment, label, order, pin, mark, resolve, patch, put, clear, drop) do not count, so reads like `get_pull_request` and `get_patch` pass. bosun adds the guard when it launches the orchestrator (and to `bosun chores --dry-run`), from the bosun that launched it, so no settings file has to carry it |
 | Propose, then wait | Chrome changing a page: clicking, typing, pressing keys, filling forms, running scripts | `ask` rules in `orchestrator/settings.json` for its whole tools that change pages (`javascript_tool`, `form_input`), and `bosun guard` for `computer`, which asks for every action but a screenshot, scrolling, zooming, waiting or hovering (a new action Chrome adds asks too). Reading a page, finding on it and going to a URL pass; uploads, shortcuts and new tabs ask by their verbs |
 | Propose, then wait | starting an agent's session: in a new window (`bosun delegate ... --new`) or in a window that has none (`--start`) | the policy and chores procedure only, so you approve once in the plan without a second permission prompt |
 | Propose, then wait | accepting work someone else asked for (a task spawned from their message); changing an external ticket (transition, assign, edit) | a task is accepted only with `user:` evidence and `delegate` refuses it before; ticket changes are proposals from `ledger tickets --mismatch`, and the tracker's write tools ask (guard) |
 | Propose, then wait | applying a learning proposal (`bosun learn apply`, or `done`/`reject` for one) | the policy and the chores procedure; `ledger resolve` refuses `learn:` items, so they close only through `bosun learn`, which applies the change and closes the item together |
 | Propose, then wait (unless you asked for it) | handing an item over again while its last hand-over waits for a report (`delegate ... --again`), or moving it to another window (`delegate --update <id> --window W`) | `delegate` refuses the first without `--again`; the policy covers both |
-| Never | edit files, `gh pr merge --admin`, force pushes, `bosun uninstall` | `deny` rules (prefix matches, so best effort) plus `bosun guard`, which denies `git push` with `-f`, `--force*` or a `+refspec` and `gh pr merge --admin` anywhere in a command (verified) |
+| Never | edit files, `gh pr merge --admin`, force pushes, `bosun uninstall` | `deny` rules (prefix matches, so best effort) plus `bosun guard`, which denies `git push` with `-f`, `--force*` or a `+refspec` and `gh pr merge --admin` anywhere in a command (verified), as it reads it (below) |
 | Never | a free-text `bosun send` that names no work item; `send --new` or `send --start <msg>` instead of `delegate` | `bosun guard` denies `send` without `--id <ledger id>` or `--no-item`; updates to delegated work go through `delegate --update` |
 | Never | a command substitution the shell would run (`$(...)` or backticks, outside single quotes or in an unquoted heredoc) in `bosun delegate`, `bosun send` or `bosun ledger reach-out`, `ask`, `replied`, `propose`, `approve`, `spawn`, `link`, `unlink`, `fold` or `ticket-sync`, and in `bosun kg add-entity`, `propose`, `supersede`, `confirm`, `reject` or `batch` (whose `--quote`, `--name`, `--alias`, `--summary` and `--value` are your text or someone else's) | `bosun guard` denies it: their text often comes from Slack, PRs or a tracker, so it must never run commands |
+
+## What the guard reads, and what stays best effort
+
+`bosun guard` parses a Bash call before it runs: comments
+(a `#` where a word starts, after what the shell has joined), a backslash before a newline joining the lines,
+heredoc bodies as data (the whole delimiter word, quotes taken out; a here-string `<<<`, arithmetic `$((...))`,
+`$[...]` or `((...))` and a parameter expansion `${...}` open none); arithmetic as a number, never a command
+word, the substitutions inside it read as commands; the commands in `$(...)`, backticks (nested escaped ones too)
+and `<(...)`, with their quotes, heredocs, nesting and `case` patterns; redirections (`2>/dev/null`, `2>&1`,
+`>&2`, `&>log`, `>|out`), array literals (`a=(...)`, data until expanded) and brace expansions outside quotes
+(`{a,b}`; quoted braces are text); each command by its name (`/usr/bin/git` is `git`), past keywords,
+assignments, redirections and wrappers (`timeout`, `time` and `time -p`, `env`, `nice`, `nohup`, `xargs`, `sudo`,
+`doas`, `setsid`, `flock`, `arch`, `script`, `caffeinate`, `coproc`, `uv run`, `poetry run`, `pipx run` and the
+others in `WRAPPERS`, by name, so `/usr/bin/env` too); git's and gh's subcommand past their own options (`git -C
+<dir> push`, `gh -R acme/x pr merge`); and what `bash`, `sh`, `zsh`, `dash`, `ksh`, `csh`, `tcsh` or `fish -c`,
+`eval`, `env -S`, `script -c` and `flock -c` run, read again. It denies a force push (`-f`, `--force*`,
+`--mirror`, a `+refspec`; with `git push` or `git send-pack`) and `gh pr merge --admin` (or `--admin=...`)
+wherever the parse finds them. It asks when it cannot read a command for certain: quotes or a heredoc that never
+close; `IFS` set anywhere in the call; a command named by a substitution, ANSI-C quoting (`$'git'`), a pattern
+(`/usr/bin/g[i]t`), xargs' `{}` or a variable inside the name (`git${IFS}push`); a command named by a variable,
+unless the call made that variable a data command (below); a shell that reads its commands from its standard
+input (`... | sh`, `bash <<'EOF'`); git or gh whose subcommand is a variable (`git "$@"`), and a gated command
+given a variable or a substitution (`git push $FLAGS`, `gh pr merge "$url"`) or ANSI-C quoting or a brace
+expansion (`git push $'-f'`, `git push origin --{force,}`); an alias defined in the call (`git -c alias.p=push
+p`, `git config alias.p push`, `gh alias set`, `alias`); a forcing push refspec set in git's config (`git config
+remote.origin.push +...`, `git -c remote.origin.push=+...`); a write to GitHub through `curl`, `wget` or httpie
+(a method other than GET, or a body); inline code given to `python -c` (`-Ic` too), `perl -e` (`-we` too), `ruby
+-e`, `node -e` (`--eval=` too) or `osascript -e` that names `git push`, `gh` or a URL; and a gated command the
+`ask` rules may not see as written (its name quoted or escaped, a full path, options, a redirection or a wrapper
+before it, a backslash-newline, inside a substitution or `bash -c`).
+
+Then a taint check, the backstop for what the parse may read wrong: the call's text, its backslash-newlines
+joined and its comments left out (a `#` that starts a word outside quotes, to the end of the line, a comment
+after code too), with quotes, backslashes and parameters (`$VAR`, `${...}`) taken out and cut at blanks, commas
+and equals signs, is searched for a gated command (`git ... push`, `gh ... pr merge` and the others the gate
+lists, past their own options), a push with a force flag after it, and `pr merge` with `--admin`. What it finds
+that the parse did not explain asks. The parse explains a gated command it read as a command; everything in the
+arguments of a data command, all of them together, and in the body of its heredoc (a data command: `bosun`,
+`echo`, `printf`, `cat`, `grep`, `rg`, `jq`, or what the call makes one: a function whose whole body is data
+commands, `L() { bosun ledger "$@"; }`, or a variable whose value starts with one, `L="bosun ledger"`, `B=bosun`;
+a function that redefines a data command to do otherwise takes its name out); the arguments of a gh subcommand
+that is neither gated nor `alias` (`gh pr list --search 'git push'`); and the value of a variable only data
+commands use (`msg='git push done'; bosun ledger note x "$msg"`). An argument that starts with `#` is text, not
+a comment. So a proposal's `--run 'gh pr merge ...'`, a brief that mentions `git push`, `echo ready to git push`
+and `ls # then git push` pass, and `ssh host 'git push -f'` or `find . -exec git push -f \;` asks.
+
+What passes without a prompt, and so rests on auto mode and the policy, form by form:
+
+- a plain gated command the `ask` rule sees (`git push origin main`, `git push origin :main`, `gh repo delete
+  acme/x`): the rule asks, and with approvals on the gate does;
+- using an alias or a function that already exists: `git p` from your git config, `gh m` from `gh alias`, or an
+  alias or a function the shell has from its startup files or an earlier call, a function that redefines a data
+  command (`echo`, `cat`) to run git included (defining one in the call asks or takes the name out of the data
+  commands);
+- a script file run or sourced (`sh ./x.sh`, `. ~/x.sh`, `source ~/x.sh`), the call's own written file included
+  (`echo 'git push -f' > ~/x.sh; . ~/x.sh`);
+- a force set in git's config by an earlier call (`git config remote.origin.push +...`, then `git push origin`,
+  which asks as a push but is not denied);
+- a command put together from pieces the text never names as one: inline code that builds it
+  (`python3 -c "import os; os.system('g'+'it push origin main')"`), or a force flag that only a variable or a
+  file holds where no gated command takes it;
+- a named coprocess's later use (`coproc NAME { ...; }` is read, but what it runs later through its file
+  descriptors is not).

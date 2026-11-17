@@ -66,7 +66,10 @@ failing from then on.
   - `sensitivity`: internal, or personal for anything naming a person
   - `prevents_rework`: whether not knowing it caused rework
 - `identifiers.jsonl` (restricted, mode 0600): chat member ids, tracker account ids, code-host
-  logins, needed for mentions and routing. Never shown in context packs.
+  logins, needed for mentions and routing. Never shown in context packs, and never in the local git
+  history (`GIT_IGNORE`, `knowledge_store.PRIVATE_FILES`), whose objects git writes readable to anyone who
+  can read the folder. Nothing restores or rebuilds from that history, and the journal does not hold the
+  identifiers either: this file and the update's backups are their only copies.
 - `journal/`: every change to entities and facts, which each write appends to before it writes the
   files above, one transaction per command ([Sync and sharing](sync.md#knowledge-changes)):
   `<replica>.jsonl` for this Mac's changes, `local.jsonl` for those that never leave this Mac:
@@ -74,8 +77,11 @@ failing from then on.
   of a fact I stated (one whose sources hold my quote or name one of my sessions), whole, from the
   write that brings my words on; its records written before then stay private.
   `view.json` records the journal position the files reflect and a digest of what they hold. Both
-  are in the local git history like the other files; what a write cut short left
-  (`<file>.torn-<time>`) is not.
+  are in the local git history like the other files, but for `local.jsonl`, which holds my words and
+  what names a person; what a write cut short left (`<file>.torn-<time>`) is not either. Since
+  2026-11-16 a history that tracked `identifiers.jsonl` or `local.jsonl` untracks them at its next
+  commit; its earlier commits keep them until the history restarts (`kg forget` restarts it, or
+  delete `.git`).
 - `format.json` holds `{"format": n}`, the version of this folder's format (`KNOWLEDGE_FORMAT`; a
   folder without it is format 1). It is in the local git history, and a new knowledge base gets it
   with its first write.
@@ -336,6 +342,18 @@ Where the design was silent (plan: [ontology-mvp3](../plans/ontology-mvp3.md)):
    number the decision names, or "all" when it says all. The quote is kept in the decision's note and its
    `reviewed_by`, which keep that record in the local journal (`knowledge_changes.quotes_me`). A supersede given
    `--from-user` in any form checks it the same way; a correction with only a `--source` needs no words.
+   Since 2026-11-16 such a correction is confirmed only as the auto-confirm rules would confirm a proposal on its
+   sources (the fact it corrects not counting as a contradiction); otherwise it waits for review and the fact it
+   corrects stays open (a single-valued one closes when the correction is confirmed). Before, it was confirmed as
+   a decision, so a Slack, PR, ticket or doc source alone replaced a confirmed fact. A correction to a value or
+   object already a current fact re-observes that fact on its sources alone, as `kg propose` would, from a
+   terminal too (a rejected one stays rejected), and is a replacement by it (`--by`) in my words, typed after that
+   fact was proposed too; one to the corrected fact's own value is refused (it closed the fact as superseded by
+   itself). The fact is closed only when this supersede confirmed its replacement (`settle`'s `ignoring` keeps
+   the corrected fact from counting as a contradiction). Also since 2026-11-16 a fact proposed in my words from a session needs the same 8 characters (a verified one confirms over
+   a contradiction and revives a rejected fact, so "yes" said too little), and every quote of my words counts only
+   as whole words of the prompt (`approvals.words_in`: it never begins or ends inside a word), the matching
+   approvals use; before, any substring counted.
 4. **A pack leaves out people's own profile facts** (timezone, hours, preferences, title) and keeps facts that link
    a person to the target ("Dana reviews the invoice exporter"). Identifiers and unconfirmed facts stay out. A
    person is the target only when `--for` names them: a topic's search leaves people out (2026-11-16, a review

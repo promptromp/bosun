@@ -6,7 +6,10 @@ Status: built (2026-10-21), off by default (`BOSUN_APPROVALS_ENABLED=0`). Tracke
 ## Why
 
 The orchestrator's settings have `ask` rules for Slack sends, reactions and canvases,
-`gh pr merge|ready|edit|comment|review|close|update-branch`, `gh api` and `git push`. Other MCP tools
+`gh pr merge|ready|edit|comment|review|close|update-branch|create`, `gh issue comment|create|edit|close`,
+`gh release create`, `gh workflow run`, `gh run rerun` (gated since 2026-11-16), `gh api` and `git push`; the
+plain guard asks for those in a form the rules' prefixes do not see (`git -C <dir> push`, a full path, a
+wrapper, a substitution, `bash -c`, `eval`). Other MCP tools
 with a write verb in their name (Jira and Confluence writes, CI builds) get an `ask` from the plain
 `bosun guard` hook, which the launch adds (`guard_hook_settings`, `lib/common.sh`). Either `ask` beats auto mode, so each such call opens a Claude Code
 permission prompt.
@@ -89,9 +92,31 @@ call only when all of these hold:
   (case and punctuation count). A command: the same string, trimmed. Another MCP tool: the same
   tool name (under any server) and equal arguments.
 - **The approval is for this version.** Its hash matches the spec; a new proposal drops it.
-- **My words are mine.** The quote appears verbatim (whitespace-normalized, case-insensitive) in a
-  prompt of the calling session's transcript (`transcript_path`) made between the proposal and the
-  approval (plus two minutes). Only prompts the session received from its user count, read through
+- **My words are mine.** The quote stands in a prompt of the calling session's transcript
+  (`transcript_path`) made between the proposal and the approval (plus two minutes), and it counts only
+  to the extent a list of phrases and negations can tell a yes (`approvals.says_yes`). Both are compared
+  folded (Unicode compatibility forms, invisible format characters out, typographic apostrophes and
+  quotation marks as `'` and `"`, runs of whitespace as one space, case ignored), and text in quotation
+  marks inside the prompt ("...", '...', “...”) is someone else's words, left out first. The prompt must
+  hold no negation anywhere (no, nope, nah, not, never, wait, stop, hold, cancel, abort, later,
+  nevermind, never mind, scratch that, forget it, no way, not now, or a word ending in n't; typed
+  without the apostrophe, only the words `WITHOUT_APOSTROPHE` lists: dont, doesnt, didnt, isnt, arent,
+  wasnt, werent, cant, couldnt, wont, wouldnt, shouldnt, hasnt, havent, hadnt, aint, mustnt, neednt,
+  mightnt, shant, oughtnt, darent, and a word that list lacks is no negation to it) and no question mark
+  (? or ¿). Then the quote counts when it is all of the prompt (punctuation at either end aside) holding
+  an approving phrase or a bare choice from the plan ("1 and 3", "1, 3", "all", "both", "all of them",
+  with "approve", "send", "do", "go with" or "ship" before it and "please" after it: "approve 1 and 3",
+  "1 and 3 please"; not "merge 1 and 3", which asks again), or a run of its whole words (it begins
+  and ends at word boundaries, so `e` is not in "yes") at least 8 characters long holding an approving
+  phrase. The approving phrases are yes, yeah, yep, yup, ok, okay, sure, go ahead, do it, send it, send
+  them, ship it, lgtm, approved, confirmed (`APPROVING_PHRASES`); a bare verb (send, approve, proceed) or
+  "fine" is none, and the item's id says no yes on its own ("yes, <id>" or "ok for <id>" does, "approve
+  <id>" does not). Before 2026-11-16 any substring counted, as short as one letter; the first fix let
+  any whole prompt count ("no", an unrelated question quoted whole), the second a negation in another
+  sentence. Run from the orchestrator's session, `ledger approve` makes the same check there and refuses
+  a quote that does not count, saying what does; in an agent's session it cannot check, it refuses; from
+  a terminal it records the quote, and the guard checks it when the call is made. Only prompts the
+  session received from its user count, read through
   `claude_state.delivered_prompts`: typed, sent from the phone (Remote Control), queued while busy,
   or delivered into a running turn. Remote Control prompts appear in the transcript as ordinary
   user turns (verified on 2026-10-20 transcripts: a `queue-operation` enqueue, then a `user`
@@ -107,8 +132,22 @@ call only when all of these hold:
   The failure is recorded (`approval-failed`, section 4), so the proposal is back under *Needs
   you*.
 
-So a forged approval needs my words in my prompts: text from Slack, a PR or another session that
-reaches the orchestrator as a tool result or an injected message never counts.
+So a forged approval needs a prompt I typed after the proposal, with no negation and no question in it,
+that holds one of the approving phrases or is a bare choice: text from Slack, a PR or another session that
+reaches the orchestrator as a tool result or an injected message never counts, nor a word picked out of an
+unrelated prompt, nor someone's words I quote in quotation marks. What the check cannot prove, and what
+still counts:
+
+- what my yes answered: a "yes", "ok" or "go ahead" I typed to an unrelated question after the proposal
+  counts for every proposal pending then, and a bare number ("2") cannot say which plan it picks from;
+- a yes with a limit that is no negation: "ok for all except 2" and "yes, but only 1" count for every
+  pending proposal, the excepted one too; "yes, after lunch" and "yes, merge it once CI is green" count now;
+- a request that holds an approving phrase ("go ahead and tell me what's pending");
+- someone's words I pass on without quotation marks ("Dana wrote: ok, ship it"), and a no in quotation marks
+  (`yes "no"` counts: the quoted no is someone else's);
+- a negation spelled with look-alike letters (a Greek omicron in "no"), or typed without its apostrophe
+  and missing from the list;
+- a yes I take back in a later prompt ("yes", then "wait, no"), as the check reads each prompt alone.
 
 ## 2. Standing approvals
 

@@ -69,6 +69,12 @@ class KnowledgeWorld(unittest.TestCase):
         result = args.func(args)
         return str(result[0] if isinstance(result, tuple) else result)
 
+    def correct(self, old: str, value: str, source: str) -> None:
+        """Correct <old> on a source alone, then replace it by the correction from this terminal (my
+        review): a correction on its sources waits for one (knowledge_model.replacement_fact)."""
+        out = self.kg("supersede", old, "--value", value, "--source", source)
+        self.kg("supersede", old, "--by", out.removeprefix("ok: ").split()[0])
+
     def kb(self) -> km.KB:
         return console_kb.read_kb(self.root, self.now)
 
@@ -192,7 +198,7 @@ class EntityPageTest(KnowledgeWorld):
         old = self.fact_id("environment/staging-2", "status")
         self.kg("confirm", old)
         self.now += timedelta(days=1)
-        self.kg("supersede", old, "--value", "running", "--source", "ledger:task:2026-10-20/veembc")
+        self.correct(old, "running", "ledger:task:2026-10-20/veembc")
         caveat = self.fact_id("repo/invoice-exporter", "caveat")
         self.kg("reject", caveat)
         env = self.page("environment/staging-2")
@@ -400,14 +406,7 @@ class ReviewTest(KnowledgeWorld):
         self.assertEqual(
             dated, [{"text": "was decided on Oct 15, 2026: "}, {"value": "one sequence per year"}]
         )
-        self.kg(
-            "supersede",
-            self.fact_id("decision/numbering", "decided"),
-            "--value",
-            "one sequence per country",
-            "--source",
-            "memory:b.md",
-        )
+        self.correct(self.fact_id("decision/numbering", "decided"), "one sequence per country", "memory:b.md")
         kb = self.kb()
         undated = ck.fact_view(kb, kb.facts[self.fact_id("decision/numbering", "decided")], LEDGER)[
             "sentence"

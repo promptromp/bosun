@@ -316,7 +316,7 @@ knowledge_day_2() {
   echo "  the knowledge base"
   kg_says "her review area, confirmed" "$K_PRIYA confirmed" confirm "$K_PRIYA"
   kg_says "the product fact, corrected" "closed, superseded by" supersede "$K_CAVEAT" \
-    --value "CSV exports quote every field and write dates in UTC" --source "report:$T_PAGE"
+    --value "CSV exports quote every field and write dates in UTC" --source "report:$T_PAGE" --source "ledger:$T_PAGE"
   kg_says "a rule from a PR thread, rejected" "rejected" reject "$(fact_of repo/invoice-exporter rule)"
 }
 
@@ -334,7 +334,7 @@ knowledge_day_4() {
   kg_made K_DAY4 "$NEW_FACT_ID" "a product fact, from the task and its report" propose feature/csv-export caveat \
     --value "Large CSV exports stream page by page" --source "ledger:$T_JSON" --source "report:$T_CSV"
   kg_says "... corrected" "closed, superseded by" supersede "$K_DAY4" \
-    --value "Large CSV exports stream 500 rows at a time" --source "report:$T_CSV"
+    --value "Large CSV exports stream 500 rows at a time" --source "report:$T_CSV" --source "ledger:$T_CSV"
   kg_mints "$NEW_FACT_ID" "a rule I stated, my quote checked in the session" propose feature/csv-export rule \
     --value "A CSV export never includes draft invoices" --from-user --quote "$QUOTE_NEW" \
     --transcript "$(a_transcript "$SESSION_NEW" "and remember: $QUOTE_NEW")"

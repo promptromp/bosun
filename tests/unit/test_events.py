@@ -408,6 +408,26 @@ class QueueTest(unittest.TestCase):
                 {"recent", activity.prompt_hash("next")},
             )
 
+    def test_the_pasted_log_is_replaced_whole_never_rewritten_in_place(self) -> None:
+        """The hook, the guard and kg read it without the lock: a rewrite in place (truncate, then write)
+        let one of them read it empty or half written, and a pasted prompt count as typed by me
+        (review-runtime 7). A reader that opened it before a paste still reads it whole."""
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp)
+            events.note_pasted(state_dir, "orchestrator", "first")
+            log = events.events_dir(state_dir) / events.PASTED_FILE
+            written = log.read_text()
+            with log.open() as reader:
+                events.note_pasted(state_dir, "orchestrator", "second")
+                self.assertEqual(reader.read(), written)  # the old file, whole: a rename, not a rewrite
+            self.assertEqual(
+                events.pasted_hashes(state_dir, "orchestrator", datetime.now(UTC)),
+                {activity.prompt_hash("first"), activity.prompt_hash("second")},
+            )
+            self.assertEqual(
+                sorted(p.name for p in log.parent.iterdir()), [events.LOCK_FILE, events.PASTED_FILE]
+            )
+
     def test_config_from_the_environment(self) -> None:
         config = Config.from_env(ENV)
         self.assertEqual(config.max_per_day, 30)

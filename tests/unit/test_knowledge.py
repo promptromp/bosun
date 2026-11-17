@@ -50,6 +50,7 @@ ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = ROOT / "tests" / "fixtures" / "knowledge" / "acme-import.jsonl"
 START = datetime(2026, 10, 21, 9, 0, tzinfo=UTC)
 QUOTE = "smoke tests gate every release"
+SLACK = "slack:https://acme.slack.com/archives/C0/p1"
 
 
 def stamp(moment: datetime) -> str:
@@ -256,7 +257,7 @@ class AutoConfirmTest(KnowledgeTestCase):
                     transcript,
                 )
                 self.assertIn("proposed", out)
-                self.assertIn("not in anything you typed", out)
+                self.assertIn("not whole words of anything you typed", out)
 
     def test_two_trusted_sources_confirm_a_low_risk_fact(self) -> None:
         self.seed()
@@ -383,13 +384,29 @@ class SessionQuoteTest(KnowledgeTestCase):
         own = self.session(typed(QUOTE, START))
         self.assertIn("confirmed (your own words", self.propose_mine("--transcript", str(own)))
 
+    def test_from_a_session_a_fact_in_my_words_needs_eight_characters_of_whole_words(self) -> None:
+        """A one-word answer ("yes" to "should I record that ...?") says nothing about which fact, and a
+        verified quote confirms over a contradiction and revives a rejected fact; nor do letters picked
+        out of a prompt count."""
+        self.seed()
+        self.session(typed(f"yes, and {QUOTE}", START - timedelta(hours=1)))
+        argv = ["propose", "process/release", "gated_by", "gate/smoke-tests", "--from-user", "--quote"]
+        for quote in ("yes", "e", "  ok   th  "):
+            with self.subTest(quote=quote), self.assertRaisesRegex(KnowledgeError, "at least 8 characters"):
+                self.run_kg(*argv, quote)
+        self.assertEqual(self.kb().facts, {})
+        out = self.run_kg(*argv, "oke tests gate")  # cuts "smoke"
+        self.assertEqual(self.fact(self.f(1))["status"], km.PROPOSED)
+        self.assertIn("note: the quote is not whole words of anything you typed", out)
+
     def test_a_quote_older_than_a_day_stays_proposed(self) -> None:
         self.seed()
         self.session(typed(QUOTE, START - timedelta(hours=25)))
         out = self.propose_mine()
         self.assertEqual(self.fact(self.f(1))["status"], km.PROPOSED)
         self.assertIn(
-            "note: the quote is not in anything you typed in that session in the last 24 hours", out
+            "note: the quote is not whole words of anything you typed in that session in the last 24 hours",
+            out,
         )
 
     def test_text_bosun_pasted_into_the_window_is_not_my_words(self) -> None:
@@ -450,20 +467,190 @@ class SessionQuoteTest(KnowledgeTestCase):
         self.assertEqual(self.fact(self.f(2))["sources"][0]["quote"], "it is retired now")
         self.later(2)
         with self.assertRaisesRegex(
-            KnowledgeError, "not in anything you typed in that session in the last 24"
+            KnowledgeError, "not whole words of anything you typed in that session in the last 24"
         ):
             self.run_kg(
                 "supersede", self.f(2), "--value", "back", "--from-user", "--quote", "it is retired now"
             )
 
     def test_a_correction_from_a_source_needs_no_words_in_a_session(self) -> None:
+        """It is confirmed as a proposal on those sources would be (a profile source gives a person's
+        timezone; two trusted kinds, a low-risk fact), the fact it corrects counting as no contradiction."""
+        self.seed()
+        self.run_kg("propose", "person/dana", "timezone", "--value", "Europe/Berlin", "--source", "profile:a")
+        berlin = self.f(1)
+        self.assertEqual(self.fact(berlin)["status"], km.CONFIRMED)
+        self.session(typed("something else", START))
+        out = self.run_kg("supersede", berlin, "--value", "America/New_York", "--source", "profile:b")
+        self.assertIn(f"{berlin} superseded by {self.f(2)}", out)
+        self.assertEqual(self.fact(self.f(2))["status"], km.CONFIRMED)
+        self.assertEqual(self.fact(berlin)["superseded_by"], self.f(2))
+        caveat = self.proposed("runs nightly")
+        out = self.run_kg(
+            "supersede", caveat, "--value", "runs hourly", "--source", "memory:ci.md", "--source", "ledger:x"
+        )
+        self.assertIn(f"{caveat} closed, superseded by {self.f(4)}", out)
+        self.assertEqual(self.fact(self.f(4))["status"], km.CONFIRMED)
+
+    def test_a_correction_on_untrusted_text_alone_waits_and_leaves_the_fact_open(self) -> None:
+        """Slack, PR, ticket and doc text never confirms a fact, nor a correction's (review-stores I1): the
+        replacement waits for review and the confirmed fact holds until it is confirmed (a single-valued
+        one closes then; another says how to close it)."""
+        self.seed()
+        self.run_kg("propose", "person/dana", "timezone", "--value", "Europe/Berlin", "--source", "profile:a")
+        berlin = self.f(1)
+        self.session(typed("something else", START))
+        for n, source in enumerate(
+            [
+                "slack:https://acme.slack.com/archives/C0/p1",
+                "pr:acme/exporter#7",
+                "ticket:EXP-1",
+                "doc:wiki/tz",
+            ]
+        ):
+            with self.subTest(source=source):
+                out = self.run_kg("supersede", berlin, "--value", f"America/Zone_{n}", "--source", source)
+                fact = list(self.kb().facts)[-1]
+                self.assertIn(f"{fact} proposed as the correction of {berlin}; it waits for review", out)
+                self.assertIn(f"{berlin} stays open until then (confirming {fact} closes it)", out)
+                self.assertEqual(self.fact(fact)["status"], km.PROPOSED)
+                self.assertIsNone(self.fact(berlin)["valid_to"])
+                self.assertEqual(self.fact(berlin)["status"], km.CONFIRMED)
+        caveat = self.proposed("runs nightly")
+        out = self.run_kg("supersede", caveat, "--value", "runs hourly", "--source", "pr:acme/exporter#7")
+        hourly = list(self.kb().facts)[-1]
+        self.assertIn(f"once {hourly} is confirmed, close it: kg supersede {caveat} --by {hourly}", out)
+        self.assertIsNone(self.fact(caveat)["valid_to"])
+        self.in_session(None)  # my review, from a terminal, closes the single-valued fact it replaces
+        self.assertIn(f"{berlin} superseded by", self.run_kg("confirm", self.f(2)))
+        self.assertEqual(self.fact(berlin)["superseded_by"], self.f(2))
+
+    def test_a_correction_to_the_facts_own_value_is_refused(self) -> None:
+        """review round 1: it closed the fact "superseded by" itself, on any source."""
+        self.seed()
+        self.run_kg("propose", "person/dana", "timezone", "--value", "Europe/Berlin", "--source", "profile:a")
+        berlin = self.f(1)
+        caveat = self.proposed("runs nightly")
+        self.session(typed("something else", START))
+        for fact, value, source in [
+            (berlin, "Europe/Berlin", "slack:https://acme.slack.com/archives/C0/p2"),
+            (caveat, "runs nightly", "ledger:x"),
+        ]:
+            with self.subTest(fact=fact), self.assertRaisesRegex(KnowledgeError, f"{fact} already says that"):
+                self.run_kg("supersede", fact, "--value", value, "--source", source)
+            self.assertIsNone(self.fact(fact)["valid_to"])
+            self.assertIsNone(self.fact(fact).get("superseded_by"))
+
+    def test_a_correction_on_sources_to_a_recorded_fact_re_observes_it(self) -> None:
+        """review rounds 1 and 2: on its sources alone, a correction to a value already recorded neither
+        replaces the fact by it (that is --by, a decision) nor confirms or revives it on untrusted text: it
+        re-observes it as `kg propose` would, from a terminal too, and the fact it corrects stays open."""
+        self.seed()
+        nightly, hourly = self.proposed("runs nightly"), self.proposed("runs hourly")
+        weekly = self.proposed("runs weekly")
+        self.run_kg("confirm", nightly)
+        self.run_kg("confirm", hourly)
+        self.run_kg("reject", weekly)
+        for session in (typed("something else", START), None):
+            with self.subTest(session=session):
+                if session:
+                    self.session(session)
+                else:
+                    self.in_session(None)
+                out = self.run_kg("supersede", nightly, "--value", "runs hourly", "--source", SLACK)
+                self.assertIn(f"{hourly} says that and is confirmed already, so {nightly} stays open", out)
+                out = self.run_kg(
+                    "supersede",
+                    nightly,
+                    "--value",
+                    "runs weekly",
+                    "--source",
+                    "memory:z.md",
+                    "--source",
+                    "ledger:q",
+                )
+                self.assertIn(f"{weekly} says that and is rejected, so {nightly} stays open", out)
+                self.assertEqual(self.fact(weekly)["status"], km.REJECTED)
+                self.assertIsNone(self.fact(nightly)["valid_to"])
+
+    def test_a_correction_to_a_proposed_copy_settles_it(self) -> None:
+        """review round 2 (test_corr3): an earlier correction on Slack text left a proposed copy of the value;
+        a later one on two trusted kinds re-observes that copy and confirms it, closing the fact, from a
+        session as from a terminal; on Slack text alone it stays proposed."""
+        self.seed()
+        nightly = self.proposed("runs nightly")
+        self.run_kg("confirm", nightly)
+        self.session(typed("something else", START))
+        out = self.run_kg("supersede", nightly, "--value", "runs hourly", "--source", SLACK)
+        hourly = list(self.kb().facts)[-1]
+        self.assertIn(f"{hourly} proposed as the correction of {nightly}", out)
+        out = self.run_kg("supersede", nightly, "--value", "runs hourly", "--source", SLACK)
+        self.assertEqual(self.fact(hourly)["status"], km.PROPOSED)
+        self.assertIsNone(self.fact(nightly)["valid_to"])
+        out = self.run_kg(
+            "supersede", nightly, "--value", "runs hourly", "--source", "memory:b.md", "--source", "ledger:y"
+        )
+        self.assertIn(f"{nightly} closed, superseded by {hourly}", out)
+        self.assertEqual(self.fact(hourly)["status"], km.CONFIRMED)
+        # Single-valued: the fact it corrects is no contradiction when the copy is re-observed either
+        # (settle's ignoring, through observe), so a profile source confirms the copy and closes it.
+        self.run_kg("propose", "person/dana", "timezone", "--value", "Europe/Berlin", "--source", "profile:a")
+        berlin = list(self.kb().facts)[-1]
+        self.run_kg("supersede", berlin, "--value", "America/New_York", "--source", SLACK)
+        new_york = list(self.kb().facts)[-1]
+        self.assertEqual(self.fact(new_york)["status"], km.PROPOSED)
+        out = self.run_kg("supersede", berlin, "--value", "America/New_York", "--source", "profile:b")
+        self.assertIn(f"{berlin} superseded by {new_york}", out)
+        self.assertEqual(self.fact(new_york)["status"], km.CONFIRMED)
+
+    def test_a_correction_in_my_words_to_a_recorded_fact_is_a_replacement_by_it(self) -> None:
+        """With my words it is --by that fact, and the words must come after that fact was proposed too."""
+        self.seed()
+        nightly = self.proposed("runs nightly")
+        self.run_kg("confirm", nightly)
+        self.later(1 / 24)
+        self.session(typed("note that the exporter runs hourly now", self.now))
+        self.later(1 / 24)
+        hourly = self.proposed("runs hourly")
+        self.later(1 / 24)
+        with self.assertRaisesRegex(KnowledgeError, "since what it decides on was proposed"):
+            self.run_kg(
+                "supersede",
+                nightly,
+                "--value",
+                "runs hourly",
+                "--from-user",
+                "--quote",
+                "the exporter runs hourly now",
+            )
+        self.session(typed("note that the exporter runs hourly now", self.now))
+        self.later(1 / 24)
+        out = self.run_kg(
+            "supersede",
+            nightly,
+            "--value",
+            "runs hourly",
+            "--from-user",
+            "--quote",
+            "the exporter runs hourly now",
+        )
+        self.assertIn(f"{nightly} closed, superseded by {hourly}", out)
+        self.assertEqual(self.fact(hourly)["status"], km.CONFIRMED)
+        self.assertEqual(self.fact(hourly)["reviewed_by"]["quote"], "the exporter runs hourly now")
+
+    def test_a_correction_on_untrusted_text_from_a_terminal_waits_too(self) -> None:
+        """review round 2 (test_corr3): from a terminal, a Slack-only correction neither confirms a proposed
+        copy nor closes the fact."""
         self.seed()
         self.run_kg("propose", "environment/staging-2", "status", "--value", "active", "--source", "memory:a")
-        self.session(typed("something else", START))
-        out = self.run_kg(
-            "supersede", self.f(1), "--value", "retired", "--source", "ledger:task:2026-10-21/1"
-        )
-        self.assertIn(f"{self.f(1)} closed, superseded by {self.f(2)}", out)
+        active = self.f(1)
+        self.run_kg("confirm", active)
+        self.run_kg("propose", "environment/staging-2", "status", "--value", "retired", "--source", SLACK)
+        retired = self.f(2)
+        out = self.run_kg("supersede", active, "--value", "retired", "--source", SLACK)
+        self.assertIn(f"{active} stays open", out)
+        self.assertEqual(self.fact(retired)["status"], km.PROPOSED)
+        self.assertIsNone(self.fact(active)["valid_to"])
 
     def test_closing_or_replacing_by_another_fact_from_a_session_needs_my_words(self) -> None:
         self.seed()
@@ -477,7 +664,7 @@ class SessionQuoteTest(KnowledgeTestCase):
                     KnowledgeError, "from a session, supersede with --from-user --quote"
                 ):
                     self.run_kg("supersede", old, *form)
-                with self.assertRaisesRegex(KnowledgeError, "not in anything you typed"):
+                with self.assertRaisesRegex(KnowledgeError, "not whole words of anything you typed"):
                     self.run_kg("supersede", old, *form, "--from-user", "--quote", "it runs hourly instead")
                 self.assertIsNone(self.fact(old)["valid_to"])
         out = self.run_kg("supersede", old, "--close", "--from-user", "--quote", "no longer runs nightly")
@@ -490,7 +677,7 @@ class SessionQuoteTest(KnowledgeTestCase):
         self.seed()
         first, second = self.proposed("runs nightly"), self.proposed("runs weekly")
         transcript = self.transcript(typed("it does not run nightly", START))
-        with self.assertRaisesRegex(KnowledgeError, "not in anything you typed"):
+        with self.assertRaisesRegex(KnowledgeError, "not whole words of anything you typed"):
             self.run_kg(
                 "supersede",
                 first,
@@ -523,7 +710,7 @@ class SessionQuoteTest(KnowledgeTestCase):
         self.later(1 / 12)
         with self.assertRaisesRegex(KnowledgeError, "from a session, confirm with --from-user --quote"):
             self.run_kg("confirm", first)
-        with self.assertRaisesRegex(KnowledgeError, "not in anything you typed in that session"):
+        with self.assertRaisesRegex(KnowledgeError, "not whole words of anything you typed in that session"):
             self.run_kg("confirm", first, "--from-user", "--quote", "words I never typed")
         self.assertEqual(self.fact(first)["status"], km.PROPOSED)
         self.assertIn(
@@ -693,6 +880,10 @@ class TimelineTest(KnowledgeTestCase):
         out = self.run_kg(
             "supersede", self.f(1), "--value", "retired", "--source", "ledger:task:2026-10-02/3"
         )
+        # One trusted source confirms no high-risk fact, a correction's neither: it waits for my review.
+        self.assertIn(f"{self.f(2)} proposed as the correction of {self.f(1)}", out)
+        self.assertIsNone(self.fact(self.f(1))["valid_to"])
+        out = self.run_kg("confirm", self.f(2))
         self.assertIn(f"{self.f(1)} superseded by {self.f(2)}", out)
         old, new = self.fact(self.f(1)), self.fact(self.f(2))
         self.assertEqual(old["superseded_by"], self.f(2))
@@ -721,7 +912,7 @@ class TimelineTest(KnowledgeTestCase):
         self.seed()
         self.run_kg("propose", "environment/staging-2", "status", "--value", "active", "--source", "memory:a")
         transcript = self.transcript(typed("other words", START))
-        with self.assertRaisesRegex(KnowledgeError, "not in anything you typed"):
+        with self.assertRaisesRegex(KnowledgeError, "not whole words of anything you typed"):
             self.run_kg(
                 "supersede",
                 self.f(1),
@@ -1759,6 +1950,36 @@ class GitHistoryTest(KnowledgeTestCase):
         self.assertNotIn("secret.key", tracked)
         self.assertIn("entities.jsonl", tracked)
 
+    def test_peoples_ids_and_the_local_journal_never_enter_the_history(self) -> None:
+        """identifiers.jsonl (mode 0600, which git does not keep) and journal/local.jsonl (what names a
+        person, my words) stay on this Mac's disk only (review-stores M1)."""
+        self.seed()
+        self.run_kg("identify", "person/dana", "slack", "U00000000DA")
+        self.assertTrue((self.root / "journal" / "local.jsonl").exists())
+        self.assertEqual((self.root / "identifiers.jsonl").stat().st_mode & 0o777, 0o600)
+        tracked = self.git_out(self.root, "ls-files").split()
+        self.assertNotIn("identifiers.jsonl", tracked)
+        self.assertNotIn("journal/local.jsonl", tracked)
+        self.assertIn("entities.jsonl", tracked)
+        self.assertNotIn("U00000000DA", self.git_out(self.root, "log", "-p", "--all"))
+
+    def test_a_history_that_tracked_them_untracks_them_at_its_next_commit(self) -> None:
+        """A history made before 2026-11-16 committed both: the next write's commit takes them out of
+        the tree (its earlier commits keep them until the history restarts) and leaves the files."""
+        self.seed()
+        self.run_kg("identify", "person/dana", "slack", "U00000000DA")
+        (self.root / ".gitignore").write_text("knowledge.lock\n*.tmp\nbatch.json\n")  # an older one
+        self.git_out(self.root, "add", "-f", ".gitignore", "identifiers.jsonl", "journal/local.jsonl")
+        self.git_out(self.root, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "old")
+        self.assertIn("identifiers.jsonl", self.git_out(self.root, "ls-files").split())
+        self.run_kg("add-entity", "repo/other")
+        tracked = self.git_out(self.root, "ls-files").split()
+        self.assertNotIn("identifiers.jsonl", tracked)
+        self.assertNotIn("journal/local.jsonl", tracked)
+        self.assertIn("identifiers.jsonl", (self.root / ".gitignore").read_text().splitlines())
+        self.assertIn("u00000000da", (self.root / "identifiers.jsonl").read_text().casefold())
+        self.assertTrue((self.root / "journal" / "local.jsonl").exists())
+
     def test_one_commit_per_change_and_forget_restarts_history(self) -> None:
         self.seed()
         self.run_kg("propose", "person/dana", "reviews", "exporter", "--source", "ledger:a")
@@ -1940,7 +2161,8 @@ class GitHistoryTest(KnowledgeTestCase):
         ):
             self.assertEqual(knowledge.main(), 0)
         self.assertEqual(self.processes_naming(token), [])
-        self.assertIn("warning: git commit failed: git add ran past 0.5 s and was stopped\n", said.getvalue())
+        # the commit's first git command (untracking the restricted files) ran past its time
+        self.assertIn("warning: git commit failed: git rm ran past 0.5 s and was stopped\n", said.getvalue())
         self.assertIn("repo/other", self.kb().entities)
         go.touch()
         time.sleep(1)  # the grandchild, if it were still there, would have written the mark by now

@@ -468,7 +468,7 @@ one_replica() { # both stores write this Mac's changes under the one id in repli
   return 1
 }
 key_made() { [ -s "$KNOWLEDGE/secret.key" ] && [ "$(stat -f %Lp "$KNOWLEDGE/secret.key")" = 600 ]; }
-not_in_history() { ! git -C "$KNOWLEDGE" ls-files | grep -E 'secret\.key|torn'; }
+not_in_history() { ! git -C "$KNOWLEDGE" ls-files | grep -E 'secret\.key|torn|identifiers\.jsonl|local\.jsonl'; }
 lists_fact() { bosun kg facts "$1" --status all --closed --json | jq -e --arg id "$2" 'any(.[]; .id == $id)'; }
 
 the_first_knowledge_write() {
@@ -484,7 +484,7 @@ the_first_knowledge_write() {
   kg_says "... and an old proposal is confirmed by its id" "confirmed" confirm "$(fact_of environment/staging-2 status)"
   kg_made K_FIRST "$NEW_FACT_ID" "a new fact gets a minted id" propose feature/csv-export caveat \
     --value "The CSV header row stays in English" --source "ledger:$T_FIRST" --source "report:$T_FIRST"
-  check "the key is not in the knowledge history, nor any torn file" not_in_history
+  check "the key is not in the knowledge history, nor any torn file, nor the ids the release's history tracked" not_in_history
   kg_valid
 }
 

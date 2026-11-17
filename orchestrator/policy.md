@@ -295,7 +295,8 @@ goes out, not against a report or an earlier draft:
 ### Outward calls: propose the exact call, record my approval
 
 A Slack message, reaction or canvas, a Jira or Confluence change, `gh pr
-merge|ready|edit|comment|review|close|update-branch`, `gh api` and `git push` are outward calls:
+merge|ready|edit|comment|review|close|update-branch|create`, `gh issue comment|create|edit|close`,
+`gh release create`, `gh workflow run`, `gh run rerun`, `gh api` and `git push` are outward calls:
 - Propose each with the exact call: `bosun ledger propose '<id>' --send slack --channel
   '<channel id>' [--thread '<ts>'] --text - <<'EOF'` (the exact text in the heredoc), `--run '<the
   exact command>'` for a command, or `--tool <tool name> --args-json - <<'EOF'` (its arguments as
@@ -305,7 +306,11 @@ merge|ready|edit|comment|review|close|update-branch`, `gh api` and `git push` ar
   with its exact call: my approval only counts for proposals recorded before I answer, so a draft
   kept only in chat or a scratch file cannot be approved and costs me a second answer.
 - When I approve ("1 and 3 yes"), first record it on each item I approved: `bosun ledger
-  approve '<id>' --quote '<my words, copied exactly>'`. Then make exactly the proposed call, once.
+  approve '<id>' --quote '<my words, copied exactly>'`: all of my reply when it is short, else at
+  least 8 characters of it, whole words, that hold my yes (yes, ok, go ahead, send it, lgtm, ...);
+  the item's id alone is no yes. A reply with a no, wait, later or don't anywhere in it, or a
+  question, approves nothing: ask me. `approve` refuses a quote that does not count, saying why.
+  Then make exactly the proposed call, once.
   An approved command runs as a Bash call of its own, exactly as proposed: no `timeout`, `cd`,
   pipe or other step around it (an approval matches the exact command only); check the result
   with a separate call. A changed text or command is a new proposal that needs my approval again. Once the call
