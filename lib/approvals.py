@@ -173,7 +173,7 @@ APPROVING_PHRASES = (
     "confirmed",
 )
 # Words that take a yes back, put it off or hold it: any of them anywhere in the prompt, or a word ending in
-# n't (don't, isn't, with the apostrophe or without), means it approves nothing.
+# n't (don't, isn't; without the apostrophe, one that WITHOUT_APOSTROPHE lists), means it approves nothing.
 NEGATING_PHRASES = (
     "no",
     "nope",
@@ -220,8 +220,9 @@ LEFT_OUT = " ... "
 QUOTE_RULE = (
     "a quote counts only from a prompt typed (or sent from the phone) in this session after the proposal "
     "that holds no negation and no question: no, not, never, wait, stop, hold, cancel, abort, later, "
-    "nevermind, never mind, scratch that, forget it, no way, not now or a word ending in n't (with the "
-    "apostrophe or without), anywhere in it, nor a question mark; text in quotation marks in it is someone "
+    "nevermind, never mind, scratch that, forget it, no way, not now or a word ending in n't (typed without "
+    "the apostrophe, only those it lists, such as dont, isnt, mustnt), anywhere in it, nor a question mark; "
+    "text in quotation marks in it is someone "
     "else's and left out. And it counts only when it says yes: all of that prompt holding an approving "
     f'phrase ({", ".join(APPROVING_PHRASES)}) or a bare choice ("1 and 3", "all", "approve 1 and 3", "1 '
     'and 3 please"), or at least '
