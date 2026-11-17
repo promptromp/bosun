@@ -1650,20 +1650,21 @@ stamp_job_loaded() { # <label>
   fi
 }
 
-# The times of day a job's plist runs it at, its Hour and Minute pairs, one a line: what a reload compares.
-job_times() { # <plist>
-  grep -o '<key>Hour</key><integer>[0-9]*</integer><key>Minute</key><integer>[0-9]*</integer>' "$1" 2>/dev/null | sort -u
+# When a job's plist runs it: every entry of its calendar (launchd_calendar_xml's: the weekday, if it names one, and
+# the hour and minute), one a line, in order: what a reload compares.
+job_calendar() { # <plist>
+  grep -oE '<dict>(<key>Weekday</key><integer>[0-9]+</integer>)?<key>Hour</key><integer>[0-9]+</integer><key>Minute</key><integer>[0-9]+</integer></dict>' "$1" 2>/dev/null | sort
 }
 
 # Job <label> unloaded, then, from the plist <rendered> (checked already; empty: the job is no longer
 # wanted), written as <installed> and loaded again; or its plist removed. A fresh load, or one that moves the job's
-# time, is stamped (stamp_job_loaded): launchd runs no time that passed before it. A job that was loaded at its
-# time already and keeps it (its days, the log folder or a template changed; a put-back) keeps its stamp, so the
-# run due today stays owed.
+# calendar (its time or its days), is stamped (stamp_job_loaded): launchd runs no time that passed before it. A
+# job that was loaded on its calendar already and keeps it (the log folder or a template changed; a put-back)
+# keeps its stamp, so the run due today stays owed.
 reload_job() { # <label> <rendered> <installed>
   local kept=0 before after
-  before="$(job_times "$3")" after="$(job_times "$2")"
-  # kept only for times both plists say, and alike: one it cannot read counts as moved, and is stamped
+  before="$(job_calendar "$3")" after="$(job_calendar "$2")"
+  # kept only for a calendar both plists say, and alike: one it cannot read counts as moved, and is stamped
   if [ -n "$before" ] && [ "$before" = "$after" ] && job_loaded "$1"; then kept=1; fi
   launchctl bootout "gui/$(id -u)/$1" 2>/dev/null
   if [ ! -s "$2" ]; then

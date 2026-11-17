@@ -16,7 +16,7 @@
 #      otherwise it refuses, saying why. A refusal, or a sudo that is refused, is a warning, never a failed install
 #   4. link `bosun` into ~/.local/bin
 #   5. run `bosun doctor`
-# A job it loads fresh, or whose time it moves, leaves the time it was loaded ($BOSUN_STATE_DIR/loaded-<morning|learn|
+# A job it loads fresh, or whose time or days it moves, leaves the time it was loaded ($BOSUN_STATE_DIR/loaded-<morning|learn|
 # watchdog>, reload_job in lib/common.sh): the watchdog owes no run that was due before then, which launchd would
 # not run.
 # Exit status: 0 done; 1 a step failed (its ERROR line says which), and the steps after it were not made; 2 bad
