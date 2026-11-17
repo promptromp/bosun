@@ -16,43 +16,63 @@
 **What the guard reads, and what stays best effort.** `bosun guard` parses a Bash call before it runs: comments
 (a `#` where a word starts, after what the shell has joined), a backslash before a newline joining the lines,
 heredoc bodies as data (the whole delimiter word, quotes taken out; a here-string `<<<`, arithmetic `$((...))`,
-`$[...]` or `((...))` and a parameter expansion `${...}` open none, and arithmetic is a number, never a command);
-the commands in `$(...)`, backticks (nested escaped ones too) and `<(...)`, with their quotes, heredocs, nesting
-and `case` patterns; redirections (`2>/dev/null`, `2>&1`, `>&2`, `&>log`, `>|out`) and array literals
-(`a=(...)`, data until expanded); each command by its name (`/usr/bin/git` is `git`), past keywords, assignments,
-redirections and wrappers (`timeout`, `time` and `time -p`, `env`, `nice`, `nohup`, `xargs`, `sudo`, `doas`,
-`setsid`, `flock`, `arch`, `script`, `caffeinate`, `coproc`, `uv run`, `poetry run`, `pipx run` and the others in
-`WRAPPERS`, by name, so `/usr/bin/env` too); git's and gh's subcommand past their own options (`git -C <dir>
-push`, `gh -R acme/x pr merge`); and what `bash`, `sh`, `zsh`, `dash`, `ksh`, `csh`, `tcsh` or `fish -c`, `eval`,
-`env -S`, `script -c` and `flock -c` run, read again. It denies a force push (`-f`, `--force*`, `--mirror`, a
-`+refspec`) and `gh pr merge --admin` (or `--admin=...`) wherever the parse finds them. It asks when it cannot
-read a command for certain: quotes or a heredoc that never close; a command named by a substitution, ANSI-C
-quoting (`$'git'`), a pattern (`/usr/bin/g[i]t`) or a variable inside the name (`git${IFS}push`); a command a
-wrapper runs named by a variable; a gated command whose arguments use ANSI-C quoting or braces (`git push $'-f'`,
-`git push origin --{force,}`); inline code given to `python -c` (`-Ic` too), `perl -e` (`-we` too), `ruby -e`,
-`node -e` (`--eval=` too) or `osascript -e` that names `git push`, `gh` or a URL; and a gated command the `ask`
-rules may not see as written (its name quoted or escaped, a full path, options, a redirection or a wrapper before
-it, a backslash-newline, inside a substitution or `bash -c`).
+`$[...]` or `((...))` and a parameter expansion `${...}` open none); arithmetic as a number, never a command
+word, the substitutions inside it read as commands; the commands in `$(...)`, backticks (nested escaped ones too)
+and `<(...)`, with their quotes, heredocs, nesting and `case` patterns; redirections (`2>/dev/null`, `2>&1`,
+`>&2`, `&>log`, `>|out`), array literals (`a=(...)`, data until expanded) and brace expansions outside quotes
+(`{a,b}`; quoted braces are text); each command by its name (`/usr/bin/git` is `git`), past keywords,
+assignments, redirections and wrappers (`timeout`, `time` and `time -p`, `env`, `nice`, `nohup`, `xargs`, `sudo`,
+`doas`, `setsid`, `flock`, `arch`, `script`, `caffeinate`, `coproc`, `uv run`, `poetry run`, `pipx run` and the
+others in `WRAPPERS`, by name, so `/usr/bin/env` too); git's and gh's subcommand past their own options (`git -C
+<dir> push`, `gh -R acme/x pr merge`); and what `bash`, `sh`, `zsh`, `dash`, `ksh`, `csh`, `tcsh` or `fish -c`,
+`eval`, `env -S`, `script -c` and `flock -c` run, read again. It denies a force push (`-f`, `--force*`,
+`--mirror`, a `+refspec`; with `git push` or `git send-pack`) and `gh pr merge --admin` (or `--admin=...`)
+wherever the parse finds them. It asks when it cannot read a command for certain: quotes or a heredoc that never
+close; `IFS` set anywhere in the call; a command named by a substitution, ANSI-C quoting (`$'git'`), a pattern
+(`/usr/bin/g[i]t`), xargs' `{}` or a variable inside the name (`git${IFS}push`); a command named by a variable,
+unless the call made that variable a data command (below); a shell that reads its commands from its standard
+input (`... | sh`, `bash <<'EOF'`); git or gh whose subcommand is a variable (`git "$@"`), and a gated command
+given a variable or a substitution (`git push $FLAGS`, `gh pr merge "$url"`) or ANSI-C quoting or a brace
+expansion (`git push $'-f'`, `git push origin --{force,}`); an alias defined in the call (`git -c alias.p=push
+p`, `git config alias.p push`, `gh alias set`, `alias`); a forcing push refspec set in git's config (`git config
+remote.origin.push +...`, `git -c remote.origin.push=+...`); a write to GitHub through `curl`, `wget` or httpie
+(a method other than GET, or a body); inline code given to `python -c` (`-Ic` too), `perl -e` (`-we` too), `ruby
+-e`, `node -e` (`--eval=` too) or `osascript -e` that names `git push`, `gh` or a URL; and a gated command the
+`ask` rules may not see as written (its name quoted or escaped, a full path, options, a redirection or a wrapper
+before it, a backslash-newline, inside a substitution or `bash -c`).
 
-Then a taint check, the backstop for what the parse may read wrong: the call's text, with quotes, backslashes
-and parameters (`$VAR`, `${...}`) taken out and cut at blanks, commas and equals signs (lines that are only a
-comment left out), is searched for a gated command (`git ... push`, `gh ... pr merge` and the others the gate
+Then a taint check, the backstop for what the parse may read wrong: the call's text, its backslash-newlines
+joined and its comments left out (a `#` that starts a word outside quotes, to the end of the line, a comment
+after code too), with quotes, backslashes and parameters (`$VAR`, `${...}`) taken out and cut at blanks, commas
+and equals signs, is searched for a gated command (`git ... push`, `gh ... pr merge` and the others the gate
 lists, past their own options), a push with a force flag after it, and `pr merge` with `--admin`. What it finds
-that the parse did not explain asks: the parse explains a gated command it read as a command, and anything in
-the arguments of a data command (`bosun`, `echo`, `printf`, `cat`, `grep`, `jq`, or a function or variable this
-call makes one: `L() { bosun ledger "$@"; }`, `L="bosun ledger"`) or in the body of its quoted heredoc. So a
-proposal's `--run 'gh pr merge ...'` and a brief that mentions `git push` pass, and `ssh host 'git push -f'`, `find
-. -exec git push -f \;` or a comment after code that names one asks.
+that the parse did not explain asks. The parse explains a gated command it read as a command; everything in the
+arguments of a data command, all of them together, and in the body of its heredoc (a data command: `bosun`,
+`echo`, `printf`, `cat`, `grep`, `rg`, `jq`, or what the call makes one: a function whose whole body is data
+commands, `L() { bosun ledger "$@"; }`, or a variable whose value starts with one, `L="bosun ledger"`, `B=bosun`;
+a function that redefines a data command to do otherwise takes its name out); the arguments of a gh subcommand
+that is neither gated nor `alias` (`gh pr list --search 'git push'`); and the value of a variable only data
+commands use (`msg='git push done'; bosun ledger note x "$msg"`). An argument that starts with `#` is text, not
+a comment. So a proposal's `--run 'gh pr merge ...'`, a brief that mentions `git push`, `echo ready to git push`
+and `ls # then git push` pass, and `ssh host 'git push -f'` or `find . -exec git push -f \;` asks.
 
-What passes without a prompt, and so rests on auto mode and the policy: a plain gated command the `ask` rule
-sees (`git push origin main`; the rule asks, and with approvals on the gate does); a command fed to a shell on
-its standard input or in a script file, a data command's output or quoted heredoc piped to a shell included
-(`echo 'git push origin main' | sh`, `cat <<'EOF' | sh`); a command put together at run time whose words the
-text never names (`x=gi; $x"t" push origin main`, a script or inline code that builds `git push` from pieces);
-a force flag held in a variable (`git push $FLAGS`, which still asks as a push); git aliases (`git p` from your
-git config, or `git -c alias.p=push p`) and gh aliases (`gh alias set m 'pr merge --admin'`); an alias or a
-function from the shell's startup files; and a named coprocess's body (`coproc NAME { ...; }` is read, but a
-command it runs later through its file descriptors is not).
+What passes without a prompt, and so rests on auto mode and the policy, form by form:
+
+- a plain gated command the `ask` rule sees (`git push origin main`, `git push origin :main`, `gh repo delete
+  acme/x`): the rule asks, and with approvals on the gate does;
+- using an alias or a function that already exists: `git p` from your git config, `gh m` from `gh alias`, or an
+  alias or a function the shell has from its startup files or an earlier call, a function that redefines a data
+  command (`echo`, `cat`) to run git included (defining one in the call asks or takes the name out of the data
+  commands);
+- a script file run or sourced (`sh ./x.sh`, `. ~/x.sh`, `source ~/x.sh`), the call's own written file included
+  (`echo 'git push -f' > ~/x.sh; . ~/x.sh`);
+- a force set in git's config by an earlier call (`git config remote.origin.push +...`, then `git push origin`,
+  which asks as a push but is not denied);
+- a command put together from pieces the text never names as one: inline code that builds it
+  (`python3 -c "import os; os.system('g'+'it push origin main')"`), or a force flag that only a variable or a
+  file holds where no gated command takes it;
+- a named coprocess's later use (`coproc NAME { ...; }` is read, but what it runs later through its file
+  descriptors is not).
 
 ## What each window can reach
 
@@ -101,15 +121,16 @@ the orchestrator's next start; design: [docs/design/approvals.md](design/approva
   call through, once, if your words say yes, as far as a list of phrases can tell, in a prompt you typed
   (or sent from your phone) in that session after the proposal. The prompt holds no negation anywhere
   (no, not, never, wait, stop, hold, cancel, abort, later, nevermind, scratch that, forget it, no way, not
-  now, or a word ending in n't, with or without the apostrophe) and no question mark, text you put in
-  quotation marks left out; and your words are all of it holding an approving phrase (yes, yeah, yep,
-  yup, ok, okay, sure, go ahead, do it, send it, send them, ship it, lgtm, approved, confirmed) or a bare
-  choice ("1 and 3", "all"), or at least 8 characters of its whole words holding an approving phrase. The
-  item's id alone, "approve 2" or "fine" is no yes. Tool results, pasted and injected text never count,
-  and `ledger approve` refuses a quote that does not count. It cannot tell what your yes answered: a "yes"
-  to another question after the proposal counts for it too, a bare number does not say which plan it picks
-  from, and a request that holds "go ahead", someone's words you pass on without quotation marks or a yes
-  you take back in a later prompt still count.
+  now, or a word ending in n't; without the apostrophe, only the words the rule lists, such as dont, isnt,
+  mustnt) and no question mark, text you put in quotation marks left out; and your words are all of it
+  holding an approving phrase (yes, yeah, yep, yup, ok, okay, sure, go ahead, do it, send it, send them, ship
+  it, lgtm, approved, confirmed) or a bare choice ("1 and 3", "all", "approve 1 and 3", "1 and 3 please"), or
+  at least 8 characters of its whole words holding an approving phrase. The item's id alone, "approve" or
+  "fine" alone, or "merge 1 and 3" is no yes. Tool results, pasted and injected text never count, and `ledger
+  approve` refuses a quote that does not count. It cannot tell what your yes answered: a "yes" to another
+  question after the proposal counts for it too, a bare number does not say which plan it picks from, and "ok
+  for all except 2", "yes, but only 1", a request that holds "go ahead", someone's words you pass on without
+  quotation marks, `yes "no"` or a yes you take back in a later prompt still count.
 - A tool call whose arguments hold a decimal number (`{"story_points": 2.5}`) cannot be proposed:
   the ledger's journal holds whole numbers and text only, so `propose` refuses it, naming the
   field. Make such a call yourself, or set `BOSUN_APPROVALS_DENY_UNAPPROVED=0` so that it asks at

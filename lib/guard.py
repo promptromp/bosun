@@ -307,17 +307,21 @@ MAX_NESTING = 5
 SUBSTITUTED = "$__substitution__"
 PARAMETER = "$__parameter__"
 ANSI_C = "$__ansi_c__"
+BRACE = "$__brace__"  # before a brace expansion outside quotes ({a,b}, {1..3}): the shell makes several words
+BRACE_EXPANSION = re.compile(r"\{[^\s{}'\"$`\\]*(?:,|\.\.)[^\s{}'\"$`\\]*\}")
 ARITHMETIC_WORD = "0"
+ARITHMETIC_OPENING = re.compile(r"\$\(\(|\(\(|\$\[")
 ARRAY = "$__array__"
 ARRAY_ASSIGNMENT = re.compile(r"(?:^|[\s;&|()])[A-Za-z_][A-Za-z0-9_]*(?:\[[^]]*\])?\+?=$")
 DYNAMIC = "$"
+VARIABLE_WORD = re.compile(r"\$(?:[A-Za-z_@*#?!0-9-]|\{)")  # $VAR, $@, ${...}, and what stands for one
 # A command named by a pattern, a brace expansion, a substitution, ANSI-C quoting or a variable inside the
 # name: the shell decides what runs (`/usr/bin/g[i]t`, `$(echo git)`, `$'git'`, `git${IFS}push`). `[` and
 # `[[` are tests; a name that is a variable (`$L` for `L="bosun ledger"`) asks only inside a wrapper.
-OPAQUE_NAME = re.compile(r"[*?\[]|\{[^}]*(?:,|\.\.)|" + re.escape(SUBSTITUTED) + "|" + re.escape(ANSI_C))
+OPAQUE_NAME = re.compile("|".join([r"[*?\[]", *(re.escape(mark) for mark in (SUBSTITUTED, ANSI_C, BRACE))]))
 TESTS = frozenset({"[", "[["})
 # An argument the shell expands in a way the guard does not read: ANSI-C quoting, a brace expansion.
-EXPANDED_WORD = re.compile(r"\{[^}]*(?:,|\.\.)[^}]*\}|" + re.escape(ANSI_C))
+EXPANDED_WORD = re.compile(re.escape(BRACE) + "|" + re.escape(ANSI_C))
 # Where a word starts (a # there starts a comment), and where it ends.
 WORD_BREAKS = " \t\n;&|()<>"
 METACHARACTERS = " \t\n;&|<>()"
@@ -330,14 +334,34 @@ TAINT_WORD = re.compile(r"[;&|()<>`\n]|[^\s;&|()<>`,=]+")
 TAINT_SEPARATORS = frozenset(";&|()<>`\n")
 # Commands whose arguments, and the bodies of their quoted heredocs, are data the guard knows they never run
 # (a proposal's --run text, a brief): a gated command named there is explained.
-DATA_COMMANDS = frozenset({"bosun", "echo", "printf", "cat", "grep", "jq"})
-DATA_ALIAS = re.compile(
-    r"(?:^|[\s;&|])(?:function\s+(?P<keyword>[A-Za-z_][\w-]*)\s*(?:\(\s*\))?\s*\{"
-    r"|(?P<function>[A-Za-z_][\w-]*)\s*\(\s*\)\s*\{|(?P<variable>[A-Za-z_]\w*)=[\"']?)\s*(?P<first>\S+)",
+DATA_COMMANDS = frozenset({"bosun", "echo", "printf", "cat", "grep", "rg", "jq"})
+# How a call names a data command: a function whose whole body is data commands (`L() { bosun ledger
+# "$@"; }`), a variable whose value starts with one (`L="bosun ledger"`, run as $L). One defined otherwise
+# anywhere in the call is none, and a data command's own name that a function redefines is no longer.
+FUNCTION_DEF = re.compile(
+    r"(?:^|[\s;&|(])(?:function\s+([A-Za-z_][\w-]*)\s*(?:\(\s*\))?|([A-Za-z_][\w-]*)\s*\(\s*\))\s*\{",
     re.MULTILINE,
 )
-COMMENT_LINE = re.compile(r"(?m)(?<!\\\n)^[ \t]*#.*$")
+VARIABLE_DEF = re.compile(
+    r"(?:^|[\s;&|(])([A-Za-z_]\w*)=(?:\"([^\"]*)\"|'([^']*)'|([^\s;&|]*))", re.MULTILINE
+)
+SETS_IFS = re.compile(r"(?:^|[\s;&|(])(?:(?:export|local|declare|readonly|typeset)\s+)?IFS=")
+# Writes to GitHub that bypass gh (curl -X PUT https://api.github.com/...): a non-GET method or a body.
+HTTP_CLIENTS = frozenset({"curl", "wget", "http", "https", "xh"})
+READ_METHODS = frozenset({"GET", "HEAD"})
+WRITE_METHODS = frozenset({"PUT", "POST", "PATCH", "DELETE"})
+# The options that send a body: curl's, and wget's (whose -d is its debug flag).
+HTTP_BODY_OPTIONS = {
+    "curl": ("-d", "-F", "-T", "--data", "--form", "--json", "--upload-file"),
+    "wget": ("--post-data", "--post-file", "--body-data", "--body-file"),
+}
+GITHUB_HOST = re.compile(r"(?:^|[/@.])github\.com(?:[/:]|$)")
+# What makes git push force without saying so (remote.<name>.push +refspec) or defines an alias inline.
+FORCING_PUSH_SETTING = re.compile(r"^(?:-c)?remote\..+\.push=\+")
+REMOTE_PUSH_KEY = re.compile(r"^remote\..+\.push$")
+ALIAS_SETTING = re.compile(r"^(?:-c)?alias\.[^=]+(?:=|$)")
 FORCE_PUSH = "a force push"
+PUSHES = ("push", "send-pack")  # git's commands that update a remote's refs
 ADMIN_MERGE = "gh pr merge --admin"
 
 
@@ -530,7 +554,7 @@ class Parsed:
 
 def arithmetic_end(text: str, position: int, unquoted: bool) -> int | None:
     """Where arithmetic that starts at <position> ends: $((...)), $[...], and, <unquoted>, a ((...)) command,
-    nested parentheses counted; None when none starts there, or it holds a substitution (read as one)."""
+    nested parentheses counted; None when none starts there. A substitution inside is the caller's to read."""
     if text.startswith("$[", position):
         end = matching(text, position + 2, "[", "]")
     elif text.startswith("$((", position) or (unquoted and text.startswith("((", position)):
@@ -539,8 +563,7 @@ def arithmetic_end(text: str, position: int, unquoted: bool) -> int | None:
         end = end if text[end - 1 : end + 1] == "))" else -1
     else:
         return None
-    inner = text[position:end]
-    return None if end < 0 or "$(" in inner[2:] or "`" in inner else end + 1
+    return None if end < 0 else end + 1
 
 
 def matching(text: str, start: int, opening: str, closing: str) -> int:
@@ -714,6 +737,8 @@ class ShellReader:
 
     text: str
     body: bool = False
+    names: frozenset[str] = DATA_COMMANDS  # the data commands and the call's names for them (data_names)
+    scanning: bool = False  # arithmetic's text: read only for the substitutions in it, from its first $((
     quotes: QuoteState = field(default_factory=QuoteState)
     kept: list[str] = field(default_factory=list)
     raw: list[str] = field(default_factory=list)
@@ -743,7 +768,8 @@ class ShellReader:
         self.raw.append(text if raw is None else raw)
 
     def read(self) -> ShellReader:
-        position = 0
+        opening = ARITHMETIC_OPENING.match(self.text) if self.scanning else None
+        position = opening.end() if opening else 0
         while position < len(self.text):
             position = self.step(position)
         self.unclosed = self.unclosed or bool(self.pending)
@@ -767,6 +793,7 @@ class ShellReader:
         text = self.text
         arithmetic = arithmetic_end(text, position, unquoted=not (self.quotes.open or self.body))
         if arithmetic is not None:
+            self.held += ShellReader(text[position:arithmetic], body=True, scanning=True).read().held
             self.emit(ARITHMETIC_WORD, text[position:arithmetic])
             return arithmetic
         if text.startswith("${", position):
@@ -801,9 +828,13 @@ class ShellReader:
         return self.bodies(position + 1) if char == "\n" and self.pending else position + 1
 
     def special(self, position: int) -> int | None:
-        """Past a redirection that duplicates or clobbers, a process substitution or a heredoc operator at
-        <position>; None for none."""
+        """Past a redirection that duplicates or clobbers, a brace expansion (BRACE before it), a process
+        substitution, an array literal or a heredoc operator at <position>; None for none."""
         text = self.text
+        brace = BRACE_EXPANSION.match(text, position)
+        if brace:
+            self.emit(BRACE + brace.group(), brace.group())
+            return brace.end()
         duplicate = REDIRECTION_DUP.match(text, position) if self.before in ("", *WORD_BREAKS) else None
         if duplicate:
             self.emit(duplicate.group().replace("&", "").replace("|", ""), duplicate.group())
@@ -829,7 +860,8 @@ class ShellReader:
         if self.text[position + 1] == '"':
             return position + 1  # the "..." is read next, as a double-quoted string
         end = ansi_c_end(self.text, position + 2)
-        self.emit(ANSI_C, self.text[position:end])
+        inner = self.text[position + 2 : end - 1].replace("'", " ")
+        self.emit(f"{ANSI_C}'{inner}'", self.text[position:end])  # what it holds, as text (for data)
         return end
 
     def bodies(self, position: int) -> int:
@@ -838,7 +870,7 @@ class ShellReader:
             self.unclosed = self.unclosed or not closed
             body = self.text[position:end]
             self.expanding += [] if quoted else [body]
-            self.data += [body] if quoted and command in DATA_COMMANDS else []
+            self.data += [body] if command in self.names else []
             position = end
         self.pending = []
         return position
@@ -944,60 +976,150 @@ def opaque_name(name: str) -> bool:
     return name not in TESTS and (OPAQUE_NAME.search(name) is not None or DYNAMIC in name[1:])
 
 
-def unreadable_words(words: list[str], wrapper: str) -> str:
-    """Why the guard cannot tell what the simple command <words> does, or "": named by a pattern, a brace
-    expansion, a substitution, ANSI-C quoting or a variable inside the name; inside a wrapper (<wrapper>:
-    bash -c, eval), named by a variable; a gated command whose arguments the shell expands unread; inline
-    code that names an outward call."""
+def named_unreadably(words: list[str], wrapper: str, names: frozenset[str]) -> str:
+    """Why the guard cannot tell what runs as <words>' command, or "": a name made by a pattern, a brace
+    expansion, a substitution, ANSI-C quoting or a variable inside it; a variable, unless the call made it a
+    data command (<names>, data_names) outside a wrapper (<wrapper>: bash -c, eval)."""
     name = words[0]
-    if opaque_name(name):
-        return "named by a pattern, a substitution, ANSI-C quoting or a variable"
-    if wrapper and name.startswith(DYNAMIC):
+    if opaque_name(name) or "{}" in name:
+        return "named by a pattern, a substitution, ANSI-C quoting, a variable or xargs' {}"
+    if name.startswith(DYNAMIC) and (wrapper or name not in names):
         return "named by a variable"
-    if gate_of(words, GATED_COMMANDS) and any(EXPANDED_WORD.search(word) for word in words[1:]):
-        return "its arguments are expanded by ANSI-C quoting or braces"
-    code = inline_code(words)
-    if code is not None and OUTWARD_CODE.search(code):
-        return "inline code that names git push, gh or a URL"
-    return ""
+    if command_name(name) in SHELLS and reads_stdin(words):
+        return "a shell that reads its commands from its standard input"
+    return "it defines an alias" if command_name(name) == "alias" and len(words) > 1 else ""
 
 
-def unreadable(wrapper: str, command: str, read: ShellReader, closed: bool, commands: list[list[str]]) -> str:
+def reads_stdin(words: list[str]) -> bool:
+    """Whether a shell runs what its standard input holds: no -c, and no script among its arguments (its
+    redirections and options aside)."""
+    arguments = [word for word in words[1:] if not REDIRECTION.match(word)]
+    return shell_command_at(words) is None and all(word.startswith(("-", "+")) for word in arguments)
+
+
+def git_or_gh_unreadable(words: list[str]) -> str:
+    """Why the guard cannot tell what a git or gh command does, or "": its subcommand a variable (git "$@"),
+    a gated one given a variable or a substitution ("$@", $FLAGS, ${...}, $(...)), its arguments expanded by
+    ANSI-C quoting or a brace expansion, an alias defined inline (git -c alias.p=push, gh alias set), a
+    forcing push refspec set in git's config."""
+    seen = compared(words)
+    if seen[0] not in GLOBAL_VALUE_OPTIONS:
+        return ""
+    gated = gate_of(words, GATED_COMMANDS) is not None
+    if variable_in(seen[1:2]) or (gated and variable_in(words[1:])):
+        return "its subcommand or arguments are a variable or a substitution"
+    if gated and any(map(EXPANDED_WORD.search, words[1:])):
+        return "its arguments use ANSI-C quoting or a brace expansion"
+    if defines_alias(words, seen):
+        return "it defines an alias"
+    return "it sets a forcing push refspec in git's config" if forces_by_config(words, seen) else ""
+
+
+def variable_in(words: list[str]) -> bool:
+    """Whether any of <words> holds a variable or a substitution (VARIABLE_WORD)."""
+    return any(map(VARIABLE_WORD.search, words))
+
+
+def defines_alias(words: list[str], seen: list[str]) -> bool:
+    """Whether a git or gh command defines an alias: git -c alias.x=..., git config alias.x ..., gh alias
+    set or import."""
+    return seen[:3] in (["gh", "alias", "set"], ["gh", "alias", "import"]) or any(
+        map(ALIAS_SETTING.match, words)
+    )
+
+
+def forces_by_config(words: list[str], seen: list[str]) -> bool:
+    """Whether a git command sets remote.<name>.push to a +refspec: with -c, or with git config."""
+    if any(map(FORCING_PUSH_SETTING.match, words)):
+        return True
+    keys = [index for index, word in enumerate(seen) if REMOTE_PUSH_KEY.match(word)]
+    return seen[1:2] == ["config"] and any(word.startswith("+") for i in keys for word in seen[i + 1 :])
+
+
+def writes_to_github(words: list[str]) -> str:
+    """Why an HTTP client's call writes to GitHub, or "": curl, wget or httpie with a method other than GET
+    or HEAD, or a body, to github.com or api.github.com."""
+    name = command_name(words[0])
+    if name not in HTTP_CLIENTS or not any(GITHUB_HOST.search(word) for word in words[1:]):
+        return ""
+    return (
+        "a write to GitHub without gh"
+        if any(writes(name, words, index) for index in range(1, len(words)))
+        else ""
+    )
+
+
+def writes(name: str, words: list[str], index: int) -> bool:
+    """Whether words[index] makes <name>'s call a write: a method (-X PUT, --request=POST, --method=PATCH, an
+    httpie method word) or a body option."""
+    word = words[index]
+    method = option_value(words, index, "-X") or option_value(words, index, "--request")
+    method = method or option_value(words, index, "--method")
+    if method:
+        return method[0].upper() not in READ_METHODS
+    body = word.startswith(HTTP_BODY_OPTIONS.get(name, ()))
+    return body or (name not in HTTP_BODY_OPTIONS and word.upper() in WRITE_METHODS)
+
+
+def unreadable_words(words: list[str], wrapper: str, names: frozenset[str] = DATA_COMMANDS) -> str:
+    """Why the guard cannot tell what the simple command <words> does, or "" (named_unreadably,
+    git_or_gh_unreadable, writes_to_github, and inline code that names an outward call)."""
+    why = named_unreadably(words, wrapper, names) or git_or_gh_unreadable(words) or writes_to_github(words)
+    code = inline_code(words) if not why else None
+    return "inline code that names git push, gh or a URL" if code and OUTWARD_CODE.search(code) else why
+
+
+def unreadable(
+    wrapper: str,
+    command: str,
+    read: ShellReader,
+    closed: bool,
+    commands: list[list[str]],
+    names: frozenset[str] = DATA_COMMANDS,
+) -> str:
     """Why the guard cannot read all that <command> runs, or "" (the command line itself, or what the
-    wrapper <wrapper> runs): a heredoc that never closes, quotes that do not close (unreadable_words)."""
+    wrapper <wrapper> runs): a heredoc that never closes, quotes that do not close, IFS set (which changes
+    how the shell splits words), unreadable_words."""
     who = wrapper or "this"
-    if read.unclosed or not closed:
-        why = "a heredoc that never closes" if read.unclosed else "quotes that do not close"
+    if read.unclosed or not closed or SETS_IFS.search(command):
+        why = (
+            "a heredoc that never closes"
+            if read.unclosed
+            else "quotes that do not close"
+            if not closed
+            else "IFS set"
+        )
         return f"{who} runs a command bosun guard cannot read ({why}: {shown(command)})"
     for words in commands:
-        why = unreadable_words(words, wrapper)
+        why = unreadable_words(words, wrapper, names)
         if why:
             return f"{who} runs a command bosun guard cannot read ({why}: {shown(' '.join(words))})"
     return ""
 
 
-def parse(command: str, wrapper: str = "", depth: int = 0) -> Parsed:
+def parse(command: str, wrapper: str = "", depth: int = 0, names: frozenset[str] | None = None) -> Parsed:
     """What a Bash command line runs (Parsed): its own simple commands, and those its substitutions and
     wrappers run, read again as far as MAX_NESTING. <wrapper>: the wrapper (eval, bash -c) whose argument
-    <command> is."""
+    <command> is; <names>: the data commands and the call's names for them (data_names of the whole call)."""
     if depth > MAX_NESTING:
         return Parsed([], [], f"commands nested more than {MAX_NESTING} deep")
-    read = ShellReader(command).read()
+    names = data_names(command) if names is None else names
+    read = ShellReader(command, names=names).read()
     held = [
         *read.held,
         *(inner for body in read.expanding for inner in ShellReader(body, body=True).read().held),
     ]
     found, closed = split_simple(read.words)
     commands = [words for words in map(without_prefix, found) if words]
-    reason = unreadable(wrapper, command, read, closed, commands)
+    reason = unreadable(wrapper, command, read, closed, commands, names)
     written = split_simple(naive_comments_out("".join(read.raw)), posix=False)[0]
     parsed = Parsed([Part(command, commands)], written, reason, tuple(read.data))
     for inner in held:
-        parsed = parsed.with_inner(parse(inner, depth=depth + 1))
+        parsed = parsed.with_inner(parse(inner, depth=depth + 1, names=names))
     for words in commands:
         argument = wrapped(words)
         if argument is not None:
-            parsed = parsed.with_inner(parse(argument, command_name(words[0]), depth + 1))
+            parsed = parsed.with_inner(parse(argument, command_name(words[0]), depth + 1, names))
     return parsed
 
 
@@ -1086,8 +1208,8 @@ def text_command_risk(words: list[str], command: str) -> str | None:
 
 def force_push(words: list[str]) -> str | None:
     words = compared(words)
-    pushes = words[0] == "git" and "push" in words[1:]
-    if pushes and any(is_force_flag(arg) for arg in words[words.index("push") + 1 :]):
+    verb = next((word for word in words[1:] if word in PUSHES), None) if words[0] == "git" else None
+    if verb and any(is_force_flag(arg) for arg in words[words.index(verb) + 1 :]):
         return "git push with force (-f, --force*, --mirror, or a +refspec) is never allowed"
     return None
 
@@ -1138,24 +1260,69 @@ def unseen_gate(parsed: Parsed) -> str | None:
 # ---- the taint check: what the parse does not explain asks -------------------------------------------
 
 
-def taint_words(text: str) -> list[str]:
-    """<text> as the taint check reads it (TAINT_PARAMETER, TAINT_WORD): lines that are only a comment left
-    out (a # first on a line no backslash continues: a comment in every shell, or data), backslash-newlines
-    joined, parameters ($VAR, ${...}) as a blank, quotes and backslashes taken out, cut at blanks, commas and
-    equals signs, the shell's separators words of their own."""
-    text = COMMENT_LINE.sub("", text).replace("\\\n", "")
+def taint_words(text: str, comments: bool = True) -> list[str]:
+    """<text> as the taint check reads it (TAINT_PARAMETER, TAINT_WORD): <comments>, the whole call, its
+    backslash-newlines joined and its comments left out (without_comments); parameters ($VAR, ${...}) as a
+    blank, quotes and backslashes taken out, cut at blanks, commas and equals signs, the shell's separators
+    words of their own. A single argument (<comments> False) keeps all its text: `#12` starts no comment."""
+    text = without_comments(text.replace("\\\n", "")) if comments else text
     return TAINT_WORD.findall(re.sub(r"[\"'\\]", "", TAINT_PARAMETER.sub(" ", text)))
 
 
+def without_comments(text: str) -> str:
+    """<text> without its comments: a # that starts a word outside quotes, to the end of its line."""
+    quotes = QuoteState()
+    kept: list[str] = []
+    position = 0
+    while position < len(text):
+        char = text[position]
+        end = None if quotes.open else comment_end(text, position, text[position - 1 : position])
+        if end is not None:
+            position = end
+            continue
+        step = 2 if char == "\\" and not quotes.single else 1
+        if step == 1:
+            quotes.toggle(char)
+        kept.append(text[position : position + step])
+        position += step
+    return "".join(kept)
+
+
 def data_names(command: str) -> frozenset[str]:
-    """The data commands (DATA_COMMANDS) and the names this call gives them: a function whose body starts
-    with one (`L() { bosun ledger "$@"; }`) or a variable that holds one (`L="bosun ledger"`, run as $L)."""
-    defined = {
-        found["keyword"] or found["function"] or found["variable"]
-        for found in DATA_ALIAS.finditer(command)
-        if command_name(found["first"]) in DATA_COMMANDS
-    }
-    return DATA_COMMANDS | defined | {f"${name}" for name in defined} | {f"${{{name}}}" for name in defined}
+    """The data commands (DATA_COMMANDS) and the names this call gives them (FUNCTION_DEF, VARIABLE_DEF): a
+    function whose whole body is data commands (`L() { bosun ledger "$@"; }`), a variable whose value
+    starts with one (`L="bosun ledger"`, `B=bosun`, run as $L, ${L}). A name the call also defines otherwise
+    is none, and a function that redefines a data command to do otherwise takes that name out."""
+    data, other = defined_functions(command)
+    variables, other_variables = defined_variables(command)
+    usable = variables - other_variables
+    return frozenset(
+        ((DATA_COMMANDS | data) - other)
+        | {f"${name}" for name in usable}
+        | {f"${{{name}}}" for name in usable}
+    )
+
+
+def defined_functions(command: str) -> tuple[set[str], set[str]]:
+    """The functions <command> defines as data commands (a body of data commands only), and the others."""
+    data: set[str] = set()
+    other: set[str] = set()
+    for found in FUNCTION_DEF.finditer(command):
+        end = matching(command, found.end(), "{", "}")
+        body = command[found.end() : end if end >= 0 else len(command)]
+        names = [command_name(words[0]) for words in map(without_prefix, split_simple(body)[0]) if words]
+        (data if names and all(name in DATA_COMMANDS for name in names) else other).add(found[1] or found[2])
+    return data, other
+
+
+def defined_variables(command: str) -> tuple[set[str], set[str]]:
+    """The variables <command> sets to a data command (its value's first word), and the others."""
+    data: set[str] = set()
+    other: set[str] = set()
+    for found in VARIABLE_DEF.finditer(command):
+        value = next((part for part in found.groups()[1:] if part is not None), "").split()
+        (data if value and command_name(value[0]) in DATA_COMMANDS else other).add(found[1])
+    return data, other
 
 
 def arguments_after(words: list[str], index: int) -> list[str]:
@@ -1174,29 +1341,54 @@ def occurrences(words: list[str]) -> Counter[str]:
         if gate:
             found[gate[1]] += 1
         after = arguments_after(words, index)
-        if word == "push" and any(map(is_force_flag, after)):
+        if word in PUSHES and any(map(is_force_flag, after)):
             found[FORCE_PUSH] += 1
         if words[index : index + 2] == ["pr", "merge"] and any(map(is_admin_flag, after)):
             found[ADMIN_MERGE] += 1
     return found
 
 
-def explained(parsed: Parsed, data: frozenset[str] = DATA_COMMANDS) -> Counter[str]:
-    """What the parse accounts for: each gated command it read (the guard judges those), and whatever the
-    arguments of a data command (<data>: a proposal's --run text) or the body of its quoted heredoc names."""
+def is_data(words: list[str], names: frozenset[str]) -> bool:
+    """Whether a simple command's arguments are data it never runs: a data command (<names>), or gh with a
+    subcommand that is neither gated nor `alias` (gh pr list --search 'git push')."""
+    if command_name(words[0]) in names or words[0] in names:
+        return True
+    seen = compared(words)
+    return seen[0] == "gh" and seen[1:2] != ["alias"] and gate_of(words, GATED_COMMANDS) is None
+
+
+def explained(parsed: Parsed, names: frozenset[str] = DATA_COMMANDS, command: str = "") -> Counter[str]:
+    """What the parse accounts for: each gated command it read (the guard judges those); whatever the
+    arguments of a data command name (is_data: all its arguments together, `echo ready to git push`), or the
+    body of its heredoc; and the value of a variable <command> sets that only data commands use."""
     found: Counter[str] = Counter()
     for words in parsed.commands:
-        if command_name(words[0]) in data or words[0] in data:
-            found += sum((occurrences(taint_words(arg)) for arg in words[1:]), Counter())
+        if is_data(words, names):
+            found += occurrences(taint_words(" ".join(words[1:]), comments=False))
         elif gate := gate_of(words, GATED_COMMANDS):
             found[gate[1]] += 1
-    return found + sum((occurrences(taint_words(body)) for body in parsed.data), Counter())
+    found += sum((occurrences(taint_words(body, comments=False)) for body in parsed.data), Counter())
+    return found + data_values(parsed, names, command)
+
+
+def data_values(parsed: Parsed, names: frozenset[str], command: str) -> Counter[str]:
+    """What the values of the variables <command> sets name, for each variable no command but a data one uses
+    (`msg='git push done'; bosun ledger note x "$msg"`). One used as a command asks before (named_unreadably);
+    a parameter expansion (${...}) the guard cannot tie to a name counts as a use by its command."""
+    found: Counter[str] = Counter()
+    for variable in VARIABLE_DEF.finditer(command):
+        use = re.compile(r"\$" + variable[1] + r"(?!\w)|" + re.escape(PARAMETER))
+        users = [words for words in parsed.commands if any(use.search(word) for word in words)]
+        if all(is_data(words, names) for words in users):
+            value = next((part for part in variable.groups()[1:] if part is not None), "")
+            found += occurrences(taint_words(value, comments=False))
+    return found
 
 
 def taint(command: str, parsed: Parsed) -> str | None:
     """What <command> names that the parse does not explain (an outward command, a force push, an admin
     merge in a form the guard does not read for certain), or None."""
-    unexplained = occurrences(taint_words(command)) - explained(parsed, data_names(command))
+    unexplained = occurrences(taint_words(command)) - explained(parsed, data_names(command), command)
     return next(iter(unexplained), None)
 
 
@@ -1286,8 +1478,17 @@ GATED_COMMANDS = (
     (("gh", "release", "create"), "a new release"),
     (("gh", "workflow", "run"), "starting a workflow"),
     (("gh", "run", "rerun"), "running a workflow run again"),
+    (("gh", "repo", "delete"), "deleting a repository"),
+    (("gh", "repo", "edit"), "a repository edit"),
+    (("gh", "secret", "set"), "setting a secret"),
+    (("gh", "secret", "delete"), "deleting a secret"),
+    (("gh", "variable", "set"), "setting a variable"),
+    (("gh", "variable", "delete"), "deleting a variable"),
+    (("gh", "release", "upload"), "a release upload"),
+    (("gh", "release", "delete"), "deleting a release"),
     (("gh", "api"), "a GitHub API call"),
     (("git", "push"), "a push"),
+    (("git", "send-pack"), "a push (send-pack)"),
 )
 HOOK_PRE_TOOL_USE = "PreToolUse"
 HOOK_PERMISSION_REQUEST = "PermissionRequest"

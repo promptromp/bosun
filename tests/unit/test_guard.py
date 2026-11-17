@@ -338,7 +338,7 @@ class ReadAsTheShellReadsTest(unittest.TestCase):
         # 5a. a # inside a word
         ("echo x#; git push -f", "deny"),
         ("echo a#b && gh pr merge 5 --admin", "deny"),
-        ("echo hi # git push -f", "ask"),  # a comment after code: the taint check cannot tell
+        ("echo hi # git push -f", None),  # a comment after code
         ("# git push -f, never\ngit status", None),  # a line that is only a comment
         # 5b. heredoc detection
         ("cat <<< x\ngit push -f", "deny"),
@@ -411,7 +411,7 @@ class ReadAsTheShellReadsTest(unittest.TestCase):
     def test_what_it_cannot_read_it_says(self) -> None:
         said = guard.decide({"tool_name": "Bash", "tool_input": {"command": "$(echo git) push -f"}}) or {}
         self.assertIn(
-            "named by a pattern, a substitution, ANSI-C quoting or a variable",
+            "named by a pattern, a substitution, ANSI-C quoting, a variable or xargs' {}",
             said.get("permissionDecisionReason", ""),
         )
         said = (

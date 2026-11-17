@@ -5,6 +5,7 @@ mis = "mis"                 # as in "mis-" prefixes split over a line
 unparseable = "unparseable" # a fine spelling
 duplicat = "duplicat"       # a word stem in a test's pattern
 skipp = "skipp"             # a word cut short in a fixture's quoted text
+admi = "admi"               # --admi\n, a guard probe's escaped --admin
 
 # rough.js, vendored as published (its minified names are not words)
 [files]
