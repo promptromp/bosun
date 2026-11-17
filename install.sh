@@ -100,7 +100,7 @@ log "the morning run at $BOSUN_START_TIME on $BOSUN_DAYS; bosun watchdog every $
 if [ "$WITH_WAKE" = "1" ]; then
   set_wake
 elif [ "$CANCEL_WAKE" = "1" ]; then
-  cancel_wake || log "WARN: bosun's repeating wake was not cancelled (bosun doctor says so); run: sudo pmset repeat cancel"
+  cancel_wake || log "WARN: bosun's repeating wake was not cancelled (see above; bosun doctor says what is set)"
 elif [ "$BOSUN_WAKE" != "1" ]; then
   log "the Mac's repeating wake is not bosun's to set (BOSUN_WAKE=0): pmset is left as it is"
 elif [ "$(wake_owner "")" = ours ]; then # "": pmset is asked

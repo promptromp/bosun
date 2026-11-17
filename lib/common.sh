@@ -1894,9 +1894,30 @@ wake_owner() { # <schedule>
     --set "BOSUN_WAKE_DELAY_MINUTES=$BOSUN_WAKE_DELAY_MINUTES" --set "BOSUN_WAKE=$BOSUN_WAKE"
 }
 
-# Bosun's own repeating wake cancelled, after a no to the wake (`bosun init` asks for it only while bosun's is the
-# only repeating event: pmset cancels them all). Fails, saying so, when sudo or pmset does.
+# How many repeating events <schedule> (`pmset -g sched`) holds: the lines under "Repeating power events", as
+# lib/init_detect.py's repeating_events reads them.
+repeating_event_count() { # <schedule>
+  awk '/^Repeating power events/ { on = 1; next } on && /^[^ \t]/ { on = 0 } on && NF { n++ } END { print n + 0 }' <<<"$1"
+}
+
+# Bosun's own repeating wake cancelled, after a no to the wake. `pmset repeat cancel` cancels every repeating event,
+# and bosun init's plan was made when it started (another app may add one while the wizard is open; install.sh
+# --cancel-wake can be run by hand), so it looks again first: it refuses, saying why, unless pmset has exactly one
+# repeating event and it is bosun's own left from before (wake_owner: leftover, which BOSUN_WAKE=0 makes it).
+# Fails, saying so, when it refuses or sudo or pmset fails.
 cancel_wake() {
+  local schedule owner count
+  schedule="$(pmset -g sched)"
+  owner="$(wake_owner "$schedule")" || owner="unknown"
+  count="$(repeating_event_count "$schedule")"
+  if [ "$owner" != leftover ]; then
+    log "not cancelling the repeating wake: it is not bosun's own left from before (whose: $owner; BOSUN_WAKE=$BOSUN_WAKE)" >&2
+    return 1
+  fi
+  if [ "$count" != 1 ]; then
+    log "not cancelling the repeating wake: pmset has $count repeating events, and cancelling takes them all" >&2
+    return 1
+  fi
   log "cancelling bosun's repeating wake: sudo pmset repeat cancel"
   sudo pmset repeat cancel
 }
