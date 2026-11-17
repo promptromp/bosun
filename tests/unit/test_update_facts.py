@@ -90,6 +90,9 @@ class PlanForTest(World):
         for step in ("failed", "released"):
             self.record(step, carried=update_state.as_object(last))
             self.assertEqual(self.plan().owed, (("api", "restart"),), step)
+        for step in ("agents", "done"):  # it took them over already: nothing more is owed from the last
+            self.record(step, carried=update_state.as_object(last))
+            self.assertEqual(self.plan().owed, (), step)
 
     def test_the_plan_says_whether_the_console_job_will_be_restarted(self) -> None:
         self.assertFalse(self.plan().console_job)

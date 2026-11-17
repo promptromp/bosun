@@ -505,25 +505,58 @@ class TakeOverTest(unittest.TestCase):
         self.assertEqual(update_agents.take_over({}, {}, (), last), ({}, (), ()))
         self.assertEqual(update_agents.take_over({}, {}, (), None), ({}, (), ()))
 
-    def test_the_last_update_is_finished_naming_each_window_carried_into_the_next(self) -> None:
-        last = self.last({"api": ("repo", "wait until idle")})
+    def test_the_last_update_is_finished_naming_what_became_of_each_window(self) -> None:
+        """Only a window the next update took over is carried into it; one closed since is closed; one
+        neither gives anything is left alone by the next update."""
+        last = self.last(dict.fromkeys(("api", "docs", "gone"), ("repo", "wait until idle")))
         last = update_state.advanced(
             last, "agents", windows={**last.windows, "web": ("repo", "restart", "restarted", "answered")}
         )
-        finished = update_agents.carried_into(last)
+        finished = update_agents.carried_into(last, taken=("api",), open_windows=("api", "docs", "web"))
         self.assertEqual((finished.step, finished.pending), ("done", ()))
         outcome = dict(update_agents.outcomes(finished, MemoryNotes()))
         self.assertEqual(outcome["api"], "carried into the next update")
+        self.assertEqual(outcome["gone"], "closed")
+        self.assertEqual(
+            outcome["docs"],
+            "left alone by the next update: nothing it was launched with differs from the newest version",
+        )
+        self.assertEqual(outcome["web"], "restarted")  # answered before: as it was
 
     def test_the_new_summary_says_which_windows_the_last_update_owed_too(self) -> None:
-        last = self.last({"api": ("repo", "wait until idle")})
+        """By what it took over (taken_over), never the carried record's whole list."""
+        last = self.last({"api": ("repo", "wait until idle"), "docs": ("repo", "restart")})
         state = dataclasses.replace(
-            bringing({"api": ("repo", Treatment.RESTART)}), carried=update_state.as_object(last)
+            bringing({"api": ("repo", Treatment.RESTART), "docs": ("repo", Treatment.RESTART)}),
+            carried=update_state.as_object(last),
+            taken_over=("api",),
         )
         self.assertEqual(
             update_agents.outcomes(state, MemoryNotes()),
-            [("api", "nothing yet; still waited for (owed by the last update too)")],
+            [
+                ("api", "nothing yet; still waited for (owed by the last update too)"),
+                ("docs", "nothing yet; still waited for"),
+            ],
         )
+
+    def test_a_turn_gives_way_between_windows_when_an_update_waits(self) -> None:
+        """Decision 5: the check-in loop's turn stops after the window it is on once an update waits for
+        the lock; the rest stay pending for that update to take over."""
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        update_state.write(
+            tmp, bringing({"api": ("repo", Treatment.RESTART), "web": ("repo", Treatment.RESTART)})
+        )
+        act = FakeActions()
+        asked: list[int] = []
+
+        def give_way() -> bool:
+            asked.append(1)
+            return True
+
+        pending = update_agents.advance(tmp, lambda: {"api": "idle", "web": "idle"}, act, give_way=give_way)
+        self.assertEqual([w for w, _ in act.made("restart")], ["api"])
+        self.assertEqual((pending, len(asked)), (["api", "web"], 1))
 
 
 class PlanWindowsTest(unittest.TestCase):

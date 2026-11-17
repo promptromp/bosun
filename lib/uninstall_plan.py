@@ -78,6 +78,8 @@ STATE_FILES = (
     (".quit.json.*", WORKING),  # what writing it left, cut short
     ("login-reload", WORKING),  # a reload of the jobs, so the login job's run is not taken for a login
     ("loaded-*", WORKING),  # when its morning, learning and watchdog jobs were last loaded (reload_job)
+    # the update's notes, own-work mark and prompt files, and who holds update.lock (`run`, `turn`:
+    # lib/update_state.py)
     ("update", WORKING),
     (".*.restoring", WORKING),  # what an update's restore was writing, cut short (lib/update_backups.py)
     ("agent-changes.json", WORKING),

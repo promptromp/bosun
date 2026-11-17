@@ -67,6 +67,11 @@ FREEZE_STEPS = ("marked", "backed-up", "migrated", "switched")
 HOLD_STEPS = STEPS[STEPS.index("holding") : STEPS.index("released")]
 # An update that ended with bosun as it was: cut short before anything changed, or put back.
 PUT_BACK = ("failed", "restored")
+BEFORE_FREEZE = ("planned", "rehearsed", "holding")  # nothing had changed but the hold
+# Who holds update.lock, each in a file of its own in UPDATE_DIR naming its pid (marking): an update, from
+# before it waits for the lock until it ends, and the check-in loop's turn at the windows an update left.
+RUN_MARKER = "run"
+TURN_MARKER = "turn"
 # The most an update waits for update.lock while the check-in loop takes its turn at the windows: a turn
 # restarts a window or two (each a stop, a launch and its start) and lets go.
 TURN_SECONDS = 180.0
@@ -89,6 +94,21 @@ class UpdateRunning(Exception):
         self.started_at = started_at
         self.from_commit = from_commit
         self.to_commit = to_commit
+
+
+class LoopTurnRunning(UpdateRunning):
+    """The check-in loop's turn at the windows an update left it holds update.lock, past the wait."""
+
+    def __init__(self, waited: float) -> None:
+        super().__init__("", "", "")
+        said = (
+            f"the check-in loop's turn at the windows the last update left it (bosun update advance) still "
+            f"holds update.lock after {round(waited)} s; run bosun update again once it is done"
+        )
+        self.args = (said,)
+
+    def __str__(self) -> str:
+        return str(self.args[0])
 
 
 @dataclass(frozen=True)
@@ -132,6 +152,9 @@ class UpdateState:
     # switched, and its summary finished then. Put back as the record if this one fails or is put back
     # before that (carried_back), so they stay the check-in loop's.
     carried: Mapping[str, Any] = dataclasses.field(default_factory=dict)
+    # Which of the carried record's windows this update took over (update_agents.take_over): the others
+    # had closed, or neither update gives them anything; an older record has none.
+    taken_over: tuple[str, ...] = ()
 
 
 _TUPLES = (
@@ -144,6 +167,7 @@ _TUPLES = (
     "config_changed",
     "reloaded",
     "doctor_before",
+    "taken_over",
 )
 _MAPPINGS = ("windows",)  # of window names to lists of strings
 _OBJECTS = ("plan", "carried")  # JSON objects, read as they are (their reader checks their parts)
@@ -316,6 +340,8 @@ def one_update(state_dir: Path, wait: float = 0.0) -> Iterator[None]:
     fd = os.open(state_dir / LOCK_FILE, os.O_RDWR | os.O_CREAT, 0o644)
     try:
         if not _taken(fd, max(wait, PROBE_SECONDS)):
+            if marked(state_dir, TURN_MARKER):
+                raise LoopTurnRunning(wait)
             other = read(state_dir)
             raise UpdateRunning(
                 other.started_at if other else "",
@@ -347,15 +373,18 @@ def stuck(state_dir: Path, now: float) -> str:
     return ""
 
 
-def owing(state: UpdateState | None) -> UpdateState | None:
+def owing(state: UpdateState | None, abandoned: bool = False) -> UpdateState | None:
     """The record of the update that still waits for windows, as <state> tells it: <state> itself at
     `agents` with windows pending; the record it carried (carried) when <state> failed or was put back
-    before it took them over; else None."""
+    before it took them over, or stopped before its freeze with nothing carrying it on (<abandoned>: a
+    takeover killed while it planned or held, which the check-in loop then ends and gives them back);
+    else None."""
     if state is None:
         return None
     if state.step == "agents":
         return state if state.pending else None
-    if state.step in PUT_BACK and state.carried:
+    ended = state.step in PUT_BACK or (abandoned and state.step in BEFORE_FREEZE)
+    if ended and state.carried:
         return owing(from_object(state.carried))
     return None
 
@@ -364,8 +393,9 @@ def carried_back(state_dir: Path) -> UpdateState | None:
     """For a caller that holds update.lock: an update that failed or was put back before it took over
     the windows the last one still waited for (its `carried` record) gives them back, the last
     record written again as it was, so the check-in loop carries on with them; the record as it is
-    then (None where there is none)."""
-    state = read(state_dir)
+    then (None where there is none). One stopped before its freeze is recorded `failed` first
+    (end_abandoned)."""
+    state = end_abandoned(state_dir)
     if state is None or state.step not in PUT_BACK or not state.carried:
         return state
     last = from_object(state.carried)
@@ -375,16 +405,22 @@ def carried_back(state_dir: Path) -> UpdateState | None:
     return last
 
 
+def end_abandoned(state_dir: Path) -> UpdateState | None:
+    """For a caller that holds update.lock: an update stopped before its freeze that no process carries
+    on (no live RUN_MARKER) recorded `failed`, as nothing had changed but the hold, which lapsed; the
+    record as it is then."""
+    state = read(state_dir)
+    if state is None or state.step not in BEFORE_FREEZE or marked(state_dir, RUN_MARKER):
+        return state
+    failed = advanced(state, "failed", error=f"cut short at step {state.step}; nothing had changed")
+    write(state_dir, failed)
+    return failed
+
+
 def windows_pending(state_dir: Path) -> bool:
     """Whether an update is bringing windows along and some are still waited for (owing): the
     check-in loop then takes a turn at them (`bosun update advance`)."""
-    return owing(read(state_dir)) is not None
-
-
-def loop_turn(state: UpdateState | None) -> bool:
-    """Whether update.lock, held while <state> is the record, is held by the check-in loop's turn at the
-    windows (or a run settling them): the update's own run stopped waiting and handed them over."""
-    return state is not None and state.step == "agents" and bool(state.handed_over)
+    return owing(read(state_dir), abandoned=abandoned(state_dir)) is not None
 
 
 def handed(state: UpdateState) -> UpdateState:
@@ -394,24 +430,71 @@ def handed(state: UpdateState) -> UpdateState:
     return dataclasses.replace(state, handed_over=datetime.now(UTC).isoformat(timespec="seconds"))
 
 
-def hand_over(state_dir: Path) -> None:
-    """For a caller that holds update.lock, so no update's own run does: a record at `agents` that does not
-    say its windows were handed over (an older bosun's, or one whose update died while it waited) says so."""
-    state = read(state_dir)
-    if state is not None and state.step == "agents" and not state.handed_over:
-        write(state_dir, handed(state))
+# ---- who holds update.lock: each holder says so in a marker of its own ----------------------------
+
+
+def _marker(state_dir: Path, name: str) -> Path:
+    return state_dir / UPDATE_DIR / name
+
+
+def marked(state_dir: Path, name: str) -> bool:
+    """Whether marker <name> (RUN_MARKER, TURN_MARKER) names a process that is alive; a marker whose
+    process is gone (a crash), or that cannot be read, counts as absent."""
+    try:
+        pid = int(_marker(state_dir, name).read_text().strip())
+    except (OSError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # alive, someone else's
+    return True
+
+
+@contextlib.contextmanager
+def marking(state_dir: Path, name: str) -> Iterator[None]:
+    """Marker <name> naming this process, from now until the block ends (removed then, if it is still
+    this process's): RUN_MARKER from before an update waits for update.lock until it ends, TURN_MARKER
+    around the check-in loop's turn. Another live process's marker is left as it is (a second update, to
+    be refused, never takes the first one's marker away)."""
+    path = _marker(state_dir, name)
+    if marked(state_dir, name):
+        yield
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{name}.{os.getpid()}.tmp")
+    tmp.write_text(f"{os.getpid()}\n")
+    tmp.replace(path)
+    try:
+        yield
+    finally:
+        with contextlib.suppress(OSError, ValueError):
+            if int(path.read_text().strip()) == os.getpid():
+                path.unlink()
 
 
 def update_runs(state_dir: Path) -> bool:
-    """Whether an update's own run holds update.lock now: the lock held (running), and not by the
-    check-in loop's turn at the windows an update handed over (loop_turn)."""
-    return running(state_dir) and not loop_turn(read(state_dir))
+    """Whether an update runs now, as the holders of update.lock say (decision: never guessed from the
+    record): an update's marker naming a live process (it waits for the lock or holds it), or the lock
+    held with no live marker of the check-in loop's turn (a writer putting back a freeze, an older bosun)."""
+    return marked(state_dir, RUN_MARKER) or (running(state_dir) and not marked(state_dir, TURN_MARKER))
+
+
+def abandoned(state_dir: Path) -> bool:
+    """Whether nothing carries on the update the record names: no process holds update.lock, and no
+    update waits for it (a live RUN_MARKER)."""
+    return not running(state_dir) and not marked(state_dir, RUN_MARKER)
 
 
 def lock_wait(state_dir: Path) -> float:
-    """How long an update waits for update.lock: TURN_SECONDS while the check-in loop may be taking
-    its turn at the windows (loop_turn), which ends by itself; else no longer than one_update's least."""
-    return TURN_SECONDS if loop_turn(read(state_dir)) else 0.0
+    """How long an update waits for update.lock: TURN_SECONDS while the check-in loop takes its turn at
+    the windows (a live TURN_MARKER), which gives way between windows once the update's own marker is
+    there; else no longer than one_update's least."""
+    return TURN_SECONDS if marked(state_dir, TURN_MARKER) else 0.0
 
 
 def main(argv: list[str]) -> int:

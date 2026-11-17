@@ -274,9 +274,11 @@ def owed_windows(state_dir: Path) -> tuple[tuple[str, str], ...]:
     owed (update_agents.owed): from the record at `agents` (an answered window, by its own status note
     or one written by hand, settled first: `bosun update` settles it before it plans), or the one an
     update that ended with bosun as it was carried (update_state.owing); or, while an update runs, the
-    one it carried (its plan made again after the switch)."""
+    one it carried (its plan made again after the switch, at a step before `agents`; never one past
+    them, which took them over already)."""
     state = update_state.read(state_dir)
-    if state is not None and state.step not in ("agents", *update_state.PUT_BACK) and state.carried:
+    before_agents = update_state.STEPS[: update_state.STEPS.index("agents")]
+    if state is not None and state.step in before_agents and state.carried:
         state = update_state.from_object(state.carried)
     last = update_state.owing(state)
     if last is None:

@@ -824,7 +824,8 @@ Decided while building it:
 - **The update's record**, `update.json`: the update's id, both versions' folders and commits, its
   step, when it started, when its hold ends, the backup and what of it a put-back restores, the
   windows still to bring along, when the update's own run handed them to the check-in loop
-  (`handed_over`), the last update's record whose windows it took over (`carried`), the changes to my own
+  (`handed_over`), the last update's record whose windows it took over (`carried`) and which of them it
+  took (`taken_over`), the changes to my own
   files, how long writes were paused
   (`freeze_ms`, from the stores' locks taken to their release), the error, and the findings after the switch (`bosun doctor`'s, and a job that
   could not be reloaded); and for the summary, the plan, the migrations that ran, what changed in
@@ -866,9 +867,15 @@ Decided while building it:
   update's own wait (a turn every 5 s) and, once it handed them over, the check-in loop's turn (`bosun
   update advance`, each tick while windows are pending), which take `update.lock` in turn, never repeat
   one; the loop's turn does nothing while an update runs. Once the update's own run handed them over, it
-  records when (`handed_over`), so the status does not take the loop's turn, which holds the lock for a
-  while each tick, for an update running (`update_state.update_runs`), and the next update waits for
-  that turn to end (`TURN_SECONDS`) rather than being refused.
+  records when (`handed_over`). Who holds `update.lock` is never guessed from the record: each holder says
+  so in a marker of its own, its pid in `update/run` (an update, from before it waits for the lock until it
+  ends) or `update/turn` (the check-in loop's turn, around it), removed as it ends; a marker whose process
+  is gone counts as absent. An update runs (`update_state.update_runs`) while its marker is live, or while
+  the lock is held with no live turn marker (a writer putting back a freeze); so the status calls neither
+  the loop's turn an update running nor a takeover planning before it writes its record none. The next
+  update waits for the loop's turn (`TURN_SECONDS`), which gives way after the window it is on once the
+  update's marker is there, leaving the rest pending for it to take over; if it still times out, its
+  refusal says the check-in loop's turn holds the lock.
 - **The turn's cases.** A restart that refresh leaves running (busy again, someone typing: exit 3) or that
   fails otherwise (a split window, an agent that would not stop) is tried at the next turn; a prompt `bosun
   send` could not deliver is sent again. A restart whose launch failed is final: once refresh started a
@@ -936,11 +943,17 @@ Decided while building it:
   is kept (asked to take stock, the list it saved, which is passed back at its restart), unless the last
   update had restarted it already, which the new update's restart replaces; one the new plan leaves alone
   still gets what the last update began, or its answer is still waited for; an orchestrator owed a re-read
-  re-reads both updates' files. The last update's summary is then finished and saved next to its backup,
-  each of those windows carried into the next update. An update that fails, or is put back, before that
-  gives them back: the last record is written again as it was (`update_state.carried_back`, by the next
-  `bosun update` or the check-in loop's turn), so they stay the loop's. `update.lock` is still taken in
-  turn by the update and the loop's `bosun update advance`.
+  re-reads both updates' files. A window the last update asked to take stock, which the new plan only asks
+  to re-read, never gets its saved list back: accepted, as nothing restarts it, so its background work was
+  never ended. The new record keeps which windows it took over (`taken_over`), and the last update's
+  summary is then finished and saved next to its backup: each of those carried into the next update, one
+  closed since closed, and any other "left alone by the next update: nothing it was launched with differs
+  from the newest version". The new summary says "owed by the last update too" of those it took over. An
+  update that fails, or is put back, before that gives them back: the last record is written again as it
+  was (`update_state.carried_back`, by the next `bosun update` or the check-in loop's turn), so they stay
+  the loop's; so does one killed before its freeze (`planned`, `rehearsed`, `holding`) once nothing holds
+  the lock and no update's marker is live, which the loop's turn records `failed` first. `update.lock` is
+  still taken in turn by the update and the loop's `bosun update advance`.
 
 Left to the builder:
 

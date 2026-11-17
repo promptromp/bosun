@@ -33,6 +33,7 @@ import knowledge_store
 import ledger
 import migrations
 import update
+import update_agents
 import update_backups
 import update_facts
 import update_gate
@@ -739,7 +740,7 @@ class ThroughTest(World):
         )
         given: list[update_plan.Plan] = []
 
-        def bring_along(state: UpdateState, plan: update_plan.Plan, say: Any) -> UpdateState:
+        def bring_along(state: UpdateState, plan: update_plan.Plan, say: Any, **_: Any) -> UpdateState:
             given.append(plan)
             return update_state.advanced(state, "done")
 
@@ -787,7 +788,7 @@ class ResumeTest(World):
     def brought_along(self) -> Iterator[mock.MagicMock]:
         """bring_along, recording done, over a plan made again from the two versions."""
 
-        def bring_along(state: UpdateState, plan: update_plan.Plan, say: Any) -> UpdateState:
+        def bring_along(state: UpdateState, plan: update_plan.Plan, say: Any, **_: Any) -> UpdateState:
             done = update_state.advanced(state, "done")
             update_state.write(self.state, done)
             return done
@@ -857,21 +858,49 @@ class ResumeTest(World):
         self.assertEqual(update_state.read(self.state), done)
 
     def test_a_released_update_finishes_the_last_one_whose_windows_it_took_over(self) -> None:
-        """Decision 3: the last update's summary is saved next to its backup once the new one switched,
-        each window it still waited for named as carried into the next; the new one brings them along."""
+        """Decision 3: once the new update switched and recorded which windows it took over, the last
+        update's summary is saved next to its backup: a window taken over is carried into the next update,
+        one closed since is closed, one neither update gives anything is left alone by the next; the new
+        summary says "owed by the last update too" only of those it took over."""
         backup = self.backup()
         last = self.record(
-            "agents", backup=str(backup), pending=("api",), windows={"api": ("repo", "wait until idle")}
+            "agents",
+            backup=str(backup),
+            pending=("api", "docs", "gone"),
+            windows={
+                **dict.fromkeys(("api", "docs", "gone"), ("repo", "wait until idle")),
+                "web": ("repo", "restart", "restarted", "answered"),
+            },
         )
+        update_notes.note(self.state, "web", "status", "resumed: waiting on CI")
         self.record("released", carried=update_state.as_object(last))
+        plan = dataclasses.replace(
+            a_plan(),
+            windows=(("api", update_plan.Treatment.WAIT), ("docs", update_plan.Treatment.LEAVE)),
+            kinds=(("api", "repo"), ("docs", "repo")),
+        )
         out = io.StringIO()
-        with self.brought_along() as bring, contextlib.redirect_stdout(out):
-            update.resume(self.state)
-        bring.assert_called_once()
+        with (
+            mock.patch.object(update_facts, "plan_for", return_value=plan),
+            mock.patch.object(update_facts, "knowledge_on", return_value=False),
+            mock.patch.object(update_windows, "turn", return_value={}),
+            contextlib.redirect_stdout(out),
+        ):
+            done = update.resume(self.state)
+        assert done is not None
+        self.assertEqual((done.step, done.taken_over), ("done", ("api",)))
         summary = (backup / "summary.md").read_text()
         self.assertRegex(summary, r"\n  api +carried into the next update\n")
+        self.assertRegex(summary, r"\n  gone +closed\n")
+        self.assertRegex(
+            summary, r"\n  web +restarted; resumed: waiting on CI\n"
+        )  # answered before the notes go
+        left = "left alone by the next update: nothing it was launched with differs from the newest version"
+        self.assertRegex(summary, rf"\n  docs +{left}\n")
         took = f"took over api from the last update ({FROM[:7]} -> {TO[:7]})"
         self.assertIn(f"{took}; its summary: {backup / 'summary.md'}", out.getvalue())
+        outcomes = dict(update_agents.outcomes(done, update_notes.Files(self.state)))
+        self.assertTrue(outcomes["api"].endswith("(owed by the last update too)"))
 
     def test_an_update_that_failed_before_taking_them_over_gives_them_back(self) -> None:
         """Cut short before its freeze, or put back: the last update's windows are the check-in loop's
@@ -880,10 +909,8 @@ class ResumeTest(World):
         for step in ("holding", "failed", "restored"):
             self.record(step, carried=update_state.as_object(last))
             back = update.resume(self.state)
-            assert back is not None
-            self.assertEqual(dataclasses.replace(back, handed_over=""), last, step)
-            self.assertTrue(back.handed_over)  # no update's own run holds them: the loop's turns do
-            self.assertEqual(update_state.read(self.state), back, step)
+            self.assertEqual(back, last, step)
+            self.assertEqual(update_state.read(self.state), last, step)
 
     def test_a_newer_bosuns_step_is_refused(self) -> None:
         state = self.record("checked")
@@ -1268,7 +1295,7 @@ class AgentsCommandTest(World):
         backup = self.backup()
         self.record("agents", backup=str(backup), pending=("api",), windows={"api": ("repo", "restart")})
 
-        def last_answer(state_dir: Path, say: Any) -> list[str]:
+        def last_answer(state_dir: Path, say: Any, **_: Any) -> list[str]:
             state = update_state.read(state_dir)
             assert state is not None
             update_state.write(state_dir, update_state.advanced(state, "done", pending=()))
@@ -1319,19 +1346,24 @@ class AgentsCommandTest(World):
         with mock.patch.object(update_windows, "turn", return_value={"api": "busy"}) as turn:
             self.assertEqual(self.main("advance")[0], 0)
         turn.assert_called_once()
-        back = update_state.read(self.state)
-        assert back is not None
-        self.assertEqual(dataclasses.replace(back, handed_over=""), last)
+        self.assertEqual(update_state.read(self.state), last)
 
-    def test_advance_says_an_older_record_s_windows_were_handed_over(self) -> None:
-        """An older bosun's record, or one whose update died while it waited, says nothing of a hand-over:
-        the loop's turn, holding the lock, records it, so the status no longer calls its turns an update."""
+    def test_advance_marks_its_turn_and_gives_way_to_an_update(self) -> None:
+        """Decision 2 and 5: the loop's turn says so in its marker while it holds the lock, and gives way
+        between windows once an update's marker says one waits."""
         self.record("agents", pending=("api",), windows={"api": ("repo", "restart")})
-        with mock.patch.object(update_windows, "turn", return_value={"api": "busy"}):
+        seen: list[tuple[bool, bool]] = []
+
+        def turn(state_dir: Path, say: Any, give_way: Any) -> dict[str, str]:
+            seen.append((update_state.marked(state_dir, update_state.TURN_MARKER), give_way()))
+            with update_state.marking(state_dir, update_state.RUN_MARKER):
+                seen.append((update_state.update_runs(state_dir), give_way()))
+            return {"api": "busy"}
+
+        with mock.patch.object(update_windows, "turn", side_effect=turn):
             self.main("advance")
-        after = update_state.read(self.state)
-        assert after is not None
-        self.assertTrue(after.handed_over)
+        self.assertEqual(seen, [(True, False), (True, True)])
+        self.assertFalse(update_state.marked(self.state, update_state.TURN_MARKER))
 
     def test_advance_with_nothing_pending_does_nothing(self) -> None:
         for step in ("done", "released"):
@@ -1410,7 +1442,7 @@ class ConvertTest(World):
         stack.enter_context(mock.patch.object(update_windows, "bring_along", side_effect=self.brought_along))
         self.addCleanup(setattr, update.Output, "to_stderr", False)
 
-    def brought_along(self, state: UpdateState, plan: update_plan.Plan, say: Any) -> UpdateState:
+    def brought_along(self, state: UpdateState, plan: update_plan.Plan, say: Any, **_: Any) -> UpdateState:
         return update._step(self.state, state, "done")
 
     def on_the_real_stores(self, fake: Callable[..., Any], real: Callable[..., Any]) -> Callable[..., Any]:

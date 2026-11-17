@@ -155,8 +155,10 @@ def update_facts(state_dir: Path) -> tuple[bool, tuple[str, ...]]:
     if not update_state.update_runs(state_dir):
         return False, ()
     record = update_state.read(state_dir)
-    waiting = record.pending if record is not None and record.step == "agents" else ()
-    return True, tuple(waiting)
+    # its own wait's windows: a record at agents that was handed over is the last update's, which the
+    # running one has yet to take over (it plans, or asks first)
+    own = record is not None and record.step == "agents" and not record.handed_over
+    return True, tuple(record.pending) if own and record is not None else ()
 
 
 def update_owed(state_dir: Path) -> tuple[tuple[str, str], ...]:
@@ -164,7 +166,7 @@ def update_owed(state_dir: Path) -> tuple[tuple[str, str], ...]:
     each with what it is owed (update_agents.Owed's value); none while an update runs."""
     if update_state.update_runs(state_dir):
         return ()
-    last = update_state.owing(update_state.read(state_dir))
+    last = update_state.owing(update_state.read(state_dir), abandoned=update_state.abandoned(state_dir))
     if last is None:
         return ()
     return tuple((window, update_agents.owed(last, window).value) for window in last.pending)

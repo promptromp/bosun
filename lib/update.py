@@ -86,7 +86,7 @@ ROOT = Path(__file__).resolve().parents[1]  # the version this updates to
 SHORT = update_gate.SHORT
 FINISHED = ("done", "failed", "restored")
 ENDED = ("done", "agents")  # past its release: done, or its windows left to the check-in loop
-BEFORE_FREEZE = ("planned", "rehearsed", "holding")
+BEFORE_FREEZE = update_state.BEFORE_FREEZE
 CONTRACT = 1  # the shape of --json's object, which the menu bar app reads; it only grows
 BLOCKED = 1
 USAGE = 2
@@ -423,24 +423,25 @@ def _windows_brought_along(state: UpdateState) -> UpdateState:
     plan = update_facts.plan_for(
         Path(state.from_root), Path(state.to_root), where.state_dir, where.config_dir
     )
-    _last_finished(where.state_dir, state)
-    return update_windows.bring_along(state, plan, say=Output.say)
+    open_windows = {name for name, _how in plan.windows}
+
+    def finish_last(state: UpdateState, last: UpdateState) -> None:
+        _last_finished(where.state_dir, state, last, open_windows)
+
+    return update_windows.bring_along(state, plan, say=Output.say, then=finish_last)
 
 
-def _last_finished(state_dir: Path, state: UpdateState) -> None:
-    """The last update, whose windows still waited for <state>'s took over (its `carried` record),
-    finished: its summary saved next to its backup, each of those windows carried into this update."""
-    last = update_windows.carried_record(state_dir, state)
-    if last is None or not last.pending:
+def _last_finished(state_dir: Path, state: UpdateState, last: UpdateState, open_windows: set[str]) -> None:
+    """The last update (<last>, settled), whose windows still waited for <state>'s took over (those
+    `taken_over`, recorded as it started bringing windows along), finished: its summary saved next to its
+    backup, each window carried into this update, closed, or left alone by it (carried_into)."""
+    if not last.pending:
         return
-    taken = ", ".join(last.pending)
-    last = update_agents.carried_into(last)
-    saved = _saved(last, _text(last, summary_of(state_dir, last)), Output.say)
+    finished = update_agents.carried_into(last, state.taken_over, open_windows)
+    saved = _saved(finished, _text(finished, summary_of(state_dir, finished)), Output.say)
     versions_ = f"{_short(last.from_commit)} -> {_short(last.to_commit)}"
-    Output.say(
-        f"  took over {taken} from the last update ({versions_})"
-        + (f"; its summary: {saved}" if saved else "")
-    )
+    taken = f"took over {', '.join(state.taken_over)}" if state.taken_over else "took over no window"
+    Output.say(f"  {taken} from the last update ({versions_})" + (f"; its summary: {saved}" if saved else ""))
 
 
 def _brought_along(state: UpdateState) -> UpdateState:
@@ -479,8 +480,6 @@ def _settled(state_dir: Path, state: UpdateState) -> UpdateState:
     or one written by hand) no longer waited for, and `done` once none is; the rest are the check-in
     loop's, never acted on here."""
     after = update_agents.settled(state, update_notes.Files(state_dir))
-    if after.step == "agents":  # its own run is over: whoever holds the lock now is the loop's turn
-        after = update_state.handed(after)
     return _record(state_dir, after) if after != state else after
 
 
@@ -518,7 +517,7 @@ def _give_back(state_dir: Path) -> UpdateState | None:
     """For a caller that holds update.lock: an update that ended with bosun as it was, before it took
     over the windows the last one still waited for, gives them back to it (update_state.carried_back),
     settled; that record, or None when there was nothing to give back."""
-    state = update_state.read(state_dir)
+    state = update_state.end_abandoned(state_dir)
     if state is None or state.step not in update_state.PUT_BACK or not state.carried:
         return None
     back = update_state.carried_back(state_dir)
@@ -1049,7 +1048,7 @@ def _said_recorded(state_dir: Path) -> bool:
     """For a dry run, what the update's record shows first: an update running is refused, one cut short
     said (and True: bosun is then not called up to date), one still bringing windows along said."""
     recorded = update_state.read(state_dir)
-    if update_state.running(state_dir):
+    if update_state.update_runs(state_dir):  # not the check-in loop's turn at the windows
         raise update_state.UpdateRunning(*_who(recorded))
     stopped = recorded is not None and recorded.step not in (*FINISHED, "agents")
     if recorded is not None and stopped:
@@ -1101,6 +1100,12 @@ def _carried_on(state_dir: Path, said: Said) -> bool:
 def _for_real(where: Folders, args: argparse.Namespace, said: Said) -> int:
     """An update cut short carried on first; then, under update.lock (an update running is refused
     here, whatever its step, before anything is called up to date), up to date or the update."""
+    with update_state.marking(where.state_dir, update_state.RUN_MARKER):
+        return _marked_run(where, args, said)
+
+
+def _marked_run(where: Folders, args: argparse.Namespace, said: Said) -> int:
+    """_for_real, while the update's marker says an update runs (update_state.update_runs)."""
     if not _carried_on(where.state_dir, said):
         return 0
     with update_state.one_update(where.state_dir, update_state.lock_wait(where.state_dir)):
@@ -1190,15 +1195,20 @@ def _advance(state_dir: Path) -> int:
     them, under update.lock; quietly nothing while the update itself still runs (and holds it). The
     turn that takes the last answer ends the update: its summary is saved next to the backup."""
     try:
-        with update_state.one_update(state_dir):
+        with update_state.marking(state_dir, update_state.TURN_MARKER), update_state.one_update(state_dir):
             _give_back(state_dir)  # an update that ended with bosun as it was, before it took them over
             if update_state.windows_pending(state_dir):
-                update_state.hand_over(state_dir)  # an older or crashed update's record says none
-                update_windows.turn(state_dir, _say_advance)
+                update_windows.turn(state_dir, _say_advance, give_way=lambda: _update_waits(state_dir))
                 _finished_by_the_loop(state_dir)
     except update_state.UpdateRunning:
         pass  # the update brings them along itself
     return 0
+
+
+def _update_waits(state_dir: Path) -> bool:
+    """Whether an update waits for the check-in loop's turn to end (its live marker): the turn gives way
+    after the window it is on, and the update takes the rest over."""
+    return update_state.marked(state_dir, update_state.RUN_MARKER)
 
 
 def _finished_by_the_loop(state_dir: Path) -> None:

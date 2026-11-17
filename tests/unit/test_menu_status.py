@@ -1088,9 +1088,9 @@ class GatherTestCase(unittest.TestCase):
         self.assertEqual(after.update_last, menu_status.LastUpdate("u1", "2026-11-11T09:00:00", "agents"))
 
     def test_the_check_in_loop_s_turn_at_handed_over_windows_is_no_update_running(self) -> None:
-        """Decision 2: the update's own run handed its windows over; the loop's turn holds the lock for a
-        while each tick, which the menu must not show as an update running (it would grey Check for
-        Updates); the windows are told as owed instead."""
+        """Decision 2: the loop's turn holds the lock for a while each tick, which its marker says, so the
+        menu does not show it as an update running (it would grey Check for Updates); the windows are told
+        as owed instead."""
         record = update_state.UpdateState(
             id="u1",
             from_root="/a",
@@ -1105,11 +1105,17 @@ class GatherTestCase(unittest.TestCase):
             handed_over="2026-11-11T09:05:00+00:00",
         )
         update_state.write(self.state, record)
-        with update_state.one_update(self.state):
+        with update_state.marking(self.state, update_state.TURN_MARKER), update_state.one_update(self.state):
             found = self.gather()
         self.assertEqual((found.update_running, found.update_waiting_for), (False, ()))
         self.assertEqual(found.update_owed, (("exporter", "restart"),))
         self.assertEqual(self.gather().update_owed, (("exporter", "restart"),))
+        # a takeover planning (its marker, the lock perhaps not yet taken, the record still the last one's):
+        # an update runs, and names no window of the last one as handed over, nor as its own wait's
+        with update_state.marking(self.state, update_state.RUN_MARKER):
+            planning = self.gather()
+        self.assertEqual(planning.update_running, True)
+        self.assertEqual((planning.update_waiting_for, planning.update_owed), ((), ()))
 
     def test_no_record_or_one_that_cannot_be_read_tells_no_last_update(self) -> None:
         self.assertIsNone(self.gather().update_last)

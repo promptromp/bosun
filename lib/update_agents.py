@@ -39,7 +39,7 @@ finished (carried_into), each of those windows named as carried into the next.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -69,9 +69,11 @@ ANSWERED = "answered"
 CLOSED = "closed"
 DID_NOT_START = "did not start"  # recorded with the launch's reason after it: "did not start: <why>"
 CARRIED = "carried into the next update"  # what the last update's summary says of a window taken over
+# ... of one it still waited for that the next update did not take over: the newest version gives it nothing
+LEFT_BY_NEXT = "left alone by the next update: nothing it was launched with differs from the newest version"
 # After any of these a window only has to answer.
 STARTED = (ASKED_REREAD, RESTARTED, RELAUNCHED, NEXT_CONVERSATION)
-FINISHED = (ANSWERED, CLOSED, CARRIED)  # and DID_NOT_START with its reason: finished()
+FINISHED = (ANSWERED, CLOSED, CARRIED, LEFT_BY_NEXT)  # and DID_NOT_START with its reason: finished()
 WAITING = "waiting"  # the status of a window at a permission prompt or a question, waiting for me
 # Left as they are (one bosun did not start among them), and the checkin window, whose loop is the release's.
 NOT_PENDING = (Treatment.LEAVE, Treatment.NOT_STARTED_BY_BOSUN, Treatment.RESTART_LOOP)
@@ -364,19 +366,26 @@ def settled(state: UpdateState, notes: Notes) -> UpdateState:
     return update_state.advanced(state, "done" if not pending else state.step, pending=pending)
 
 
-def advance(state_dir: Path, statuses: Callable[[], Mapping[str, str]], act: Actions) -> list[str]:
+def advance(
+    state_dir: Path,
+    statuses: Callable[[], Mapping[str, str]],
+    act: Actions,
+    give_way: Callable[[], bool] = lambda: False,
+) -> list[str]:
     """A turn at each window the update in <state_dir> still waits for (the caller holds update.lock):
     each decided again from its status now (<statuses>: by window name, as `bosun sessions` lists
-    them) and acted on (<act>) at most once per step. Windows that answered are no longer pending,
-    and the record says `done` once none is. Returns the windows still waited for. A listing with no
-    window in it (the session's windows could not be listed) changes nothing."""
+    them) and acted on (<act>) at most once per step; before each window after the first, it stops if
+    <give_way> says so (an update waits for the lock: it takes the rest over). Windows that answered
+    are no longer pending, and the record says `done` once none is. Returns the windows still waited
+    for. A listing with no window in it (the session's windows could not be listed) changes nothing."""
     state = update_state.read(state_dir)
     if state is None or state.step != "agents":
         return []
     now = statuses()
-    if now:
-        for window in state.pending:
-            state = _bring(_Window(state_dir, state, window, act), now.get(window, GONE))
+    for at, window in enumerate(state.pending if now else ()):
+        if at and give_way():
+            break
+        state = _bring(_Window(state_dir, state, window, act), now.get(window, GONE))
     after = settled(state, act.notes)
     if after != state:
         update_state.write(state_dir, after)
@@ -450,18 +459,20 @@ def _taken_entry(
     return (kind, planned, *done) if done or planned == Treatment.REREAD.value else None
 
 
-def carried_into(last: UpdateState) -> UpdateState:
-    """The <last> update finished as the next one takes over the windows it still waited for: `done`,
-    each of those named as carried into the next update."""
+def carried_into(last: UpdateState, taken: Collection[str], open_windows: Collection[str]) -> UpdateState:
+    """The <last> update (settled) finished as the next one takes over the windows it still waited for:
+    `done`, each of those the next took over (<taken>, take_over's) named as carried into it, one no
+    longer open (not in <open_windows>, the next plan's) as closed, and any other as left alone by the
+    next update (the newest version gives it nothing)."""
     for window in last.pending:
-        last = _with(last, window, CARRIED)
+        what = CARRIED if window in taken else CLOSED if window not in open_windows else LEFT_BY_NEXT
+        last = _with(last, window, what)
     return update_state.advanced(last, "done", pending=())
 
 
 def _carried(state: UpdateState) -> frozenset[str]:
-    """The windows <state>'s update took over from the last one (its `carried` record's pending)."""
-    last = update_state.from_object(state.carried) if state.carried else None
-    return frozenset(last.pending) if last is not None else frozenset()
+    """The windows <state>'s update took over from the last one (`taken_over`)."""
+    return frozenset(state.taken_over)
 
 
 # ---- what came of each window ------------------------------------------------------------------

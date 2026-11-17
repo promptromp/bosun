@@ -140,15 +140,18 @@ def _news(before: UpdateState, after: UpdateState, state_dir: Path) -> list[str]
     return lines
 
 
-def turn(state_dir: Path, say: Callable[[str], None]) -> dict[str, str]:
+def turn(
+    state_dir: Path, say: Callable[[str], None], give_way: Callable[[], bool] = lambda: False
+) -> dict[str, str]:
     """One turn at the windows the update in <state_dir> still waits for, by bosun's own commands (the
-    caller holds update.lock), each thing done said; the windows still waited for, each with its status
-    as the turn listed it ("" when the listing did not name it)."""
+    caller holds update.lock), each thing done said, giving way between windows when <give_way> says
+    so (update_agents.advance); the windows still waited for, each with its status as the turn listed
+    it ("" when the listing did not name it)."""
     before = update_state.read(state_dir)
     if before is None:
         return {}
     commands = Commands(Path(before.to_root), state_dir, say)
-    waiting = update_agents.advance(state_dir, commands.statuses, commands)
+    waiting = update_agents.advance(state_dir, commands.statuses, commands, give_way)
     after = update_state.read(state_dir)
     for line in _news(before, after, state_dir) if after else []:
         say(line)
@@ -267,13 +270,21 @@ def carried_record(state_dir: Path, state: UpdateState) -> UpdateState | None:
     return update_agents.settled(last, update_notes.Files(state_dir)) if last is not None else None
 
 
-def bring_along(state: UpdateState, plan: Plan, say: Callable[[str], None] = print) -> UpdateState:
+def bring_along(
+    state: UpdateState,
+    plan: Plan,
+    say: Callable[[str], None] = print,
+    then: Callable[[UpdateState, UpdateState], None] | None = None,
+) -> UpdateState:
     """After the release: `agents` recorded with each window the plan gives something to do pending
     (with the kind the plan lists for it), and those the last update still waited for taken over
     (update_agents.take_over, from <state>'s `carried`; notes an earlier update left cleared first, but
     what those windows gave it), then a turn every POLL_SECONDS until each answered (`done`). Once only
     windows waiting for me are left, or at Ctrl-C, the wait ends and leaves the windows still waited
-    for, at `agents`, to the check-in loop or `bosun update advance` (_handed_over)."""
+    for, at `agents`, to the check-in loop or `bosun update advance` (_handed_over). <then>, given the
+    record about to be written at `agents` and the last update's (settled), runs first, when there is a
+    last one, while the notes its windows answered with are still there (lib/update.py finishes it there;
+    cut short, the record still at `released`, it runs again)."""
     state_dir = update_facts.folders().state_dir
     root = Path(state.to_root)
     last = carried_record(state_dir, state)
@@ -283,8 +294,12 @@ def bring_along(state: UpdateState, plan: Plan, say: Callable[[str], None] = pri
         _reread_files(plan, root),
         last,
     )
+    state = update_state.advanced(
+        state, "agents", pending=tuple(windows), windows=windows, reread=reread, taken_over=kept
+    )
+    if then is not None and last is not None:
+        then(state, last)  # before the notes go: the last update's answers are in them
     update_notes.clear_notes(state_dir, keep=kept)
-    state = update_state.advanced(state, "agents", pending=tuple(windows), windows=windows, reread=reread)
     update_state.write(state_dir, state)
     waiting, for_you = _waited(state_dir, list(state.pending), say)
     if waiting:
