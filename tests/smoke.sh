@@ -1740,6 +1740,13 @@ check "doctor says once that the windows' agents could not be asked, and why, an
   [ "$(grep -c "FAIL  could not ask the windows.* agents whether they trust their folders" <<<"$1")" = 1 ] &&
     grep -q "(lib/agent_state.py windows): acme: agent_state could not start$" <<<"$1" &&
     ! grep -qE "does not trust|no session with this exact name" <<<"$1"' _ "$out_unasked"
+# ... and one that answers too few lines and says nothing on stderr is told by what it did.
+printf '#!/bin/sh\ncase "$1 $2" in */agent_state.py\\ windows) exit 0 ;; esac\nexec "%s" "$@"\n' "$(command -v python3)" >"$HOME/.local/bin/python3"
+chmod +x "$HOME/.local/bin/python3"
+out_unasked="$("$BOSUN" doctor 2>&1)"
+rm -f "$HOME/.local/bin/python3"
+check "... with what it did for a reason when it said nothing" contains "$out_unasked" \
+  "(lib/agent_state.py windows): it exited 0 with 0 line(s) for 3 window(s)"
 # The window list is read once, its stdout only: what it says on stderr while it works (here the orchestrator's
 # check-in loop reading a word where the minutes go) is no window of the connectors' or the models' lines.
 check "doctor's window list is the list's stdout: its stderr is no window" bash -c '
@@ -1758,15 +1765,21 @@ chmod +x "$WORK/hang-claude"
 rm -f "$WORK/hang-claude.pids"
 BOSUN_CLAUDE_BIN="$WORK/hang-claude" "$BOSUN" doctor >/dev/null 2>&1 &
 hung_doctor=$!
-wait_for 30 test -s "$WORK/hang-claude.pids"
+# Both askers hang (preflight's and the login check's), so neither is about to start its claude while doctor stops it.
+wait_for 30 bash -c '[ "$(wc -l <"$1")" -ge 2 ]' _ "$WORK/hang-claude.pids"
+# Its checks (its own children: a shell each), then a second TERM while it stops them, as an impatient Ctrl-C does:
+# it is ignored, so no check is left frozen.
+ps -Ao pid=,ppid= | awk -v doctor="$hung_doctor" '$2 == doctor { print $1 }' >>"$WORK/hang-claude.pids"
 kill -TERM "$hung_doctor"
+sleep 0.1
+kill -TERM "$hung_doctor" 2>/dev/null
 wait "$hung_doctor" 2>/dev/null
-none_left() { # <pid file>: none of the pids in it runs
-  local pid
-  while read -r pid; do ! kill -0 "$pid" 2>/dev/null || return 1; done <"$1"
-}
-check "doctor cut short leaves nothing its checks started running" wait_for 5 none_left "$WORK/hang-claude.pids"
-while read -r hung; do kill "$hung" 2>/dev/null; done <"$WORK/hang-claude.pids"
+# Within 5 s none of those runs; if one does, it is named.
+check "doctor cut short, twice, leaves nothing its checks started running, nor a check of its own" bash -c '
+  left() { while read -r pid; do kill -0 "$pid" 2>/dev/null && ps -o pid=,ppid=,stat=,command= -p "$pid"; done <"$1"; }
+  for _ in $(seq 1 25); do [ -z "$(left "$1")" ] && exit 0; sleep 0.2; done
+  left "$1"; exit 1' _ "$WORK/hang-claude.pids"
+while read -r hung; do kill "$hung" 2>/dev/null && kill -CONT "$hung" 2>/dev/null; done <"$WORK/hang-claude.pids"
 rm -f "$BOSUN_CONFIG_DIR/bosun.env"
 mkdir -p "$HOME/.claude"
 echo '{"allowedMcpServers": [{"serverName": "acme-local"}]}' >"$HOME/.claude/settings.json"

@@ -116,7 +116,7 @@ check_config_keys() {
 }
 
 check_config() {
-  local name dir kind harness queries="" fact answer answered=1 i=0
+  local name dir kind harness queries="" fact answer answered=0 reason i=0
   local -a names=() facts=()
   if [ -f "$BOSUN_CONFIG_DIR/bosun.env" ]; then ok "bosun.env"; else warn "no bosun.env; using defaults"; fi
   check_config_keys
@@ -133,13 +133,14 @@ check_config() {
     queries+="$harness"$'\t'"$dir"$'\t'"${names[$i]}"$'\n'
     i=$((i + 1))
   done <<<"$SPECS"
-  answer="$(printf '%s' "$queries" | agent_state windows 2>/dev/null)" || answered=0
+  answer="$(printf '%s' "$queries" | agent_state windows 2>/dev/null)" || answered=$?
   if [ -n "$answer" ]; then
     while IFS= read -r fact; do facts+=("$fact"); done <<<"$answer"
   fi
-  if [ "$answered" = 0 ] || [ "${#facts[@]}" -ne "$i" ]; then
-    # Asked again for its reason: it only reads.
-    fail "could not ask the windows' agents whether they trust their folders and which session each resumes (lib/agent_state.py windows): $(printf '%s' "$queries" | agent_state windows 2>&1 >/dev/null | tail -n 1)"
+  if [ "$answered" != 0 ] || [ "${#facts[@]}" -ne "$i" ]; then
+    # Asked again for its reason (it only reads); one that says nothing is told by what it did.
+    reason="$(printf '%s' "$queries" | agent_state windows 2>&1 >/dev/null | tail -n 1)"
+    fail "could not ask the windows' agents whether they trust their folders and which session each resumes (lib/agent_state.py windows): ${reason:-it exited $answered with ${#facts[@]} line(s) for $i window(s)}"
     return
   fi
   i=0
@@ -668,9 +669,11 @@ show_part() { # <check>
 }
 # What still runs when doctor ends early (a check's die, Ctrl-C, a TERM) is stopped by pid, never by a pattern:
 # each check that has not been shown is frozen, so that it starts nothing more, then whatever it runs, however
-# deep (descendants), and the check itself are told to stop, and it is reaped quietly.
+# deep (descendants), and the check itself are told to stop, and it is reaped quietly. A second Ctrl-C or TERM
+# meanwhile is ignored (the exit is already under way), so it never leaves a check frozen.
 end_parts() {
   local pid
+  trap '' INT TERM
   for pid in ${part_pids[@]+"${part_pids[@]}"}; do
     if [ -z "$pid" ] || ! kill -STOP "$pid" 2>/dev/null; then continue; fi
     # shellcheck disable=SC2046  # a pid each
