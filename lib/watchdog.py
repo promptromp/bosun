@@ -1924,7 +1924,8 @@ def probe_if_due(inputs: Inputs, state: State) -> dict[str, str] | None:
     ):
         return state.limit_probe
     result = inputs.probe(inputs.config.claude_bin)
-    log(f"usage-limit probe: {result.outcome}")
+    why = f" ({result.code})" if result.outcome != claude_state.PROBE_OK and result.code else ""
+    log(f"usage-limit probe: {result.outcome}{why}")
     return {"at": stamp(inputs.now), "outcome": result.outcome}
 
 

@@ -193,18 +193,39 @@ class CommandTest(PluginsCase):
 
 
 class HeadlessTest(PluginsCase):
-    """bosun's own headless calls (learning's analysis, the Slack watcher's) load none of my plugins."""
+    """bosun's own headless calls (learning's analysis, the Slack watcher's call, the login check, the alert's
+    DM) load none of my plugins."""
 
-    def settings(self, keep: tuple[str, ...] = ()) -> tuple[dict[str, Any], str]:
+    def settings(self, keep: tuple[str, ...] = (), reads_settings: bool = True) -> tuple[dict[str, Any], str]:
         with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
-            settings = plugins_claude.headless_settings(self.repo, keep, who="the call")
+            settings = plugins_claude.headless_settings(self.repo, keep, "the call", reads_settings)
         return settings, err.getvalue()
 
     def test_none_of_mine(self) -> None:
-        """A plugin my settings enable and one installed that no scope names; one already off stays out."""
+        """A plugin my settings enable, one installed that no scope names, and one my settings switch off: a
+        call with `--setting-sources ""` never reads that `false`, and one more changes nothing for others."""
         self.switches(self.home_settings, {PROBE: True, "off@acme-market": False})
         write(self.installed, {"plugins": {HELPER: [{"scope": "user"}]}})
-        self.assertEqual(self.settings(), ({"enabledPlugins": {HELPER: False, PROBE: False}}, ""))
+        expected = {"enabledPlugins": {HELPER: False, "off@acme-market": False, PROBE: False}}
+        for reads_settings in (True, False):
+            with self.subTest(reads_settings=reads_settings):
+                self.assertEqual(self.settings(reads_settings=reads_settings), (expected, ""))
+
+    def test_an_installed_plugin_my_settings_switch_off_still_gets_its_false(self) -> None:
+        """What a window's plan leaves out (it is off for a window), a headless call switches off."""
+        write(self.installed, {"plugins": {"x@m": [], "y@m": []}})
+        self.switches(self.home_settings, {"x@m": False})
+        self.assertEqual(
+            self.settings(reads_settings=False), ({"enabledPlugins": {"x@m": False, "y@m": False}}, "")
+        )
+
+    def test_a_scope_that_does_not_parse_is_said_only_by_a_call_that_reads_it(self) -> None:
+        self.home_settings.parent.mkdir(parents=True)
+        self.home_settings.write_text("{not json")
+        write(self.installed, {"plugins": {HELPER: []}})
+        unread = f"plugins: {self.home_settings} does not parse, so what it says of plugins is not read\n"
+        self.assertEqual(self.settings(), ({"enabledPlugins": {HELPER: False}}, unread))
+        self.assertEqual(self.settings(reads_settings=False), ({"enabledPlugins": {HELPER: False}}, ""))
 
     def test_a_plugin_it_keeps_stays_on_by_its_bare_name(self) -> None:
         self.switches(self.home_settings, {PROBE: True, SLACK: True})

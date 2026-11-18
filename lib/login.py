@@ -384,13 +384,13 @@ def probe_due(probe: Probe | None, now: datetime) -> bool:
 
 
 def probe(claude_bin: str) -> ProbeResult:
-    """The login check request (claude_state.probe), loading none of my plugins (a `false` for each that a
-    call in its folder would load: plugins_claude.headless_settings), whose hooks could hold it up or answer
-    in its place. An installed_plugins.json that does not parse makes no request: the check could not tell,
-    saying why (unknown, as for a request that could not start)."""
+    """The login check request (claude_state.probe), loading none of my plugins (a `false` for each
+    installed or named by my settings, on or off there: plugins_claude.headless_settings), whose hooks could
+    hold it up or answer in its place. An installed_plugins.json that does not parse makes no request: the
+    check could not tell, saying why (unknown, as for a request that could not start)."""
 
     def none_of_mine(folder: Path) -> dict[str, Any]:
-        return plugins_claude.headless_settings(folder, who="the login check")
+        return plugins_claude.headless_settings(folder, who="the login check", reads_settings=False)
 
     try:
         return claude_state.probe(claude_bin, none_of_mine)

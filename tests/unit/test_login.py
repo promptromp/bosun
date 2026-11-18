@@ -426,6 +426,19 @@ class LoginProbeTest(unittest.TestCase):
         )
         self.assertTrue(Path(self.calls[-1][1]).name.startswith("bosun-login-"), "in a folder of its own")
 
+    def test_a_plugin_my_settings_switch_off_still_gets_its_false(self) -> None:
+        """The request reads no settings file, so it never sees that `false`: it sends its own."""
+        self.settings.write_text(json.dumps({"enabledPlugins": {"acme-helper@acme-market": False}}))
+        self.installed.write_text(json.dumps({"plugins": {"acme-helper@acme-market": []}}))
+        _outcome, command = self.run_probe()
+        self.assertEqual(self.settings_of(command), {"enabledPlugins": {"acme-helper@acme-market": False}})
+
+    def test_a_settings_file_that_does_not_parse_is_not_said_as_the_request_reads_none(self) -> None:
+        self.settings.write_text("{not json")
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            self.run_probe()
+        self.assertEqual(err.getvalue(), "")
+
     def test_an_installed_plugins_file_that_does_not_parse_makes_no_request_and_says_why(self) -> None:
         self.installed.write_text("{not json")
         outcome, _command = self.run_probe()

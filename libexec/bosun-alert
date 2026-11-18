@@ -56,14 +56,18 @@ result="$result_dir/last.json"
 # mine, whose hook or skill could stop it before it sends: a `false` for each but the Slack plugin
 # (lib/plugins_claude.py --headless). An installed_plugins.json that does not parse cannot say which: the
 # notification above has gone out, and the DM is still tried as before (its timeout bounds a plugin that holds
-# it up, and Claude Code reads such a file as no plugins), with a line in the log saying why.
+# it up), with a line in the log saying which step failed, after every line the step said.
 plugin_settings=()
-if limit="$(python3 "$BOSUN_ROOT/lib/plugins_claude.py" --headless "bosun alert" --keep "$SLACK_PLUGIN" \
-  --cwd "$BOSUN_STATE_DIR" 2>"$result_dir/plugins.err")" && plugin_settings_valid "" "$limit"; then
-  plugin_settings=(--settings "$limit")
-  while IFS= read -r line; do log "$line"; done <"$result_dir/plugins.err" >&2
+limit="$(python3 "$BOSUN_ROOT/lib/plugins_claude.py" --headless "bosun alert" --keep "$SLACK_PLUGIN" \
+  --cwd "$BOSUN_STATE_DIR" 2>"$result_dir/plugins.err")"
+code=$?
+while IFS= read -r line; do log "$line"; done <"$result_dir/plugins.err" >&2
+if [ "$code" != 0 ]; then
+  log "warning: the Slack DM loads your plugins: lib/plugins_claude.py exited $code (its lines above)" >&2
+elif ! plugin_settings_valid "" "$limit"; then
+  log "warning: the Slack DM loads your plugins: lib/plugins_claude.py printed settings that are not valid" >&2
 else
-  log "warning: the Slack DM loads your plugins: $(tail -n 1 "$result_dir/plugins.err")" >&2
+  plugin_settings=(--settings "$limit")
 fi
 prompt="Load a slack_send_message tool with ToolSearch, then call it once with channel_id \"$BOSUN_ALERT_SLACK_USER\" and this exact message text, unchanged (given here as a JSON string): $(jq -Rn --arg m "$TEXT" '$m'). Then reply with only the message link."
 # shellcheck disable=SC2086  # SLACK_SEND_TOOLS is a list of tool names

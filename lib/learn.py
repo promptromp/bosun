@@ -549,9 +549,10 @@ def prompt_text(config: Config) -> str:
 
 
 def call_settings(config: Config, run_dir: Path) -> dict[str, Any]:
-    """The analysis call's one --settings: its effort, and none of my plugins (a `false` for each that a call
-    in <run_dir> would load: plugins_claude.headless_settings), so that no hook or skill of mine can stop it
-    at a question or before its JSON. LearnError when installed_plugins.json does not parse."""
+    """The analysis call's one --settings: its effort, and none of my plugins (a `false` for each installed
+    or named by a settings scope of <run_dir>: plugins_claude.headless_settings), so that no hook or skill of
+    mine can stop it at a question or before its JSON. LearnError when installed_plugins.json does not
+    parse."""
     try:
         plugin_settings = plugins_claude.headless_settings(run_dir, who="the analysis")
     except ConnectorsError as exc:

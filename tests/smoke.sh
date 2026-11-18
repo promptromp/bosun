@@ -2560,8 +2560,7 @@ check "the call gets only Slack's read tools, no built-in tools and no settings"
   done
   ! grep -qE "Bash|--dangerously" <<<"$args"' _ "$WORK/slack-claude.args"
 # My plugins: one my settings enable, and the Slack plugin installed with its server. The call loads none of them
-# (no settings file is read, but an installed plugin can be on without one), but the Slack plugin when the server
-# is its own.
+# (it reads no settings file, and bosun does not rely on that), but the Slack plugin when the server is its own.
 mkdir -p "$HOME/.claude/plugins" "$WORK/slack-plugin"
 echo '{"enabledPlugins": {"probe@local": true}}' >"$HOME/.claude/settings.json"
 printf '{"plugins": {"slack@acme-market": [{"scope": "user", "installPath": "%s"}]}}\n' "$WORK/slack-plugin" >"$HOME/.claude/plugins/installed_plugins.json"
@@ -2640,9 +2639,29 @@ check "the DM switches off each plugin of mine but the Slack plugin, in one --se
 echo '[not an object]' >"$HOME/.claude/plugins/installed_plugins.json"
 out="$(BOSUN_CLAUDE_BIN="$WORK/alert-claude" "$BOSUN" alert "plugins check" 2>&1)"
 check "with an installed_plugins.json that does not parse, the DM is still sent" contains "$out" "alert sent as a Slack DM"
-check "... saying in the log why it loads my plugins" contains "$out" \
-  "warning: the Slack DM loads your plugins: plugins: $HOME/.claude/plugins/installed_plugins.json does not parse, so bosun cannot tell which plugins to switch off"
+check "... logging what the plugins step said, and which step failed" bash -c '
+  grep -qF "[alert] plugins: $2 does not parse, so bosun cannot tell which plugins to switch off" <<<"$1" &&
+    grep -qF "[alert] warning: the Slack DM loads your plugins: lib/plugins_claude.py exited 2 (its lines above)" <<<"$1"' \
+  _ "$out" "$HOME/.claude/plugins/installed_plugins.json"
 check "... and without a --settings" bash -c '! grep -qx -- --settings "$1"' _ "$WORK/alert-claude.args"
+# Settings that are not what the step should print (a plugin left on): said so, every line of the step logged, sent.
+# A python3 stand-in answers for lib/plugins_claude.py only, in the fixture HOME's ~/.local/bin, which bosun puts
+# first on its PATH; it goes again right after the one run.
+real_python="$(command -v python3)"
+cat >"$HOME/.local/bin/python3" <<FAKE
+#!/bin/bash
+case "\$1" in
+  */plugins_claude.py) echo '{"enabledPlugins": {"x@y": true}}' && echo "plugins: a line of the step" >&2 ;;
+  *) exec "$real_python" "\$@" ;;
+esac
+FAKE
+chmod +x "$HOME/.local/bin/python3"
+out="$(BOSUN_CLAUDE_BIN="$WORK/alert-claude" "$BOSUN" alert "plugins check" 2>&1)"
+rm -f "$HOME/.local/bin/python3"
+check "settings that are not valid are said, with the step's lines, and the DM still sent" bash -c '
+  grep -qF "[alert] plugins: a line of the step" <<<"$1" &&
+    grep -qF "[alert] warning: the Slack DM loads your plugins: lib/plugins_claude.py printed settings that are not valid" <<<"$1" &&
+    grep -qF "alert sent as a Slack DM" <<<"$1" && ! grep -qx -- --settings "$2" || { echo "$1"; exit 1; }' _ "$out" "$WORK/alert-claude.args"
 rm -rf "$HOME/.claude/settings.json" "$HOME/.claude/plugins"
 check "a bad member id is refused" fails_with "must be a Slack member id" env BOSUN_ALERT_SLACK_USER='U1"; x' "$BOSUN" alert hi
 check "without a member id, only a notification" contains "$(BOSUN_ALERT_SLACK_USER='' "$BOSUN" alert hi 2>&1)" "notification only"

@@ -113,7 +113,7 @@ class WatchTestCase(unittest.TestCase):
         self.reply: CallResult | Exception = CallResult(tools, result(), cost=0.04)
 
     def fake_call(
-        self, _config: Config, _document: dict[str, Any], since: datetime, _workdir: Path
+        self, _config: Config, _document: dict[str, Any], since: datetime, _workdir: Path, _settings: Any
     ) -> CallResult:
         self.calls.append(since)
         if isinstance(self.reply, Exception):
@@ -323,9 +323,9 @@ class CommandTest(WatchTestCase):
         self.assertEqual(self.call_settings(self.command()), {**helper, "enabledPlugins": {PLUGIN: False}})
 
     def test_it_loads_none_of_my_plugins_but_the_slack_plugin_its_server_comes_from(self) -> None:
-        """A `false` for a plugin my settings enable and for one installed that no scope names (no settings
-        file is read, but an installed plugin can be on without one); the Slack plugin stays on when the
-        server is its own, and goes with the rest when a site's MCP config holds it."""
+        """A `false` for a plugin my settings enable and for one installed that no scope names (the call reads
+        no settings file, and bosun does not rely on that); the Slack plugin stays on when the server is its
+        own, and goes with the rest when a site's MCP config holds it."""
         write(self.home_settings, {"enabledPlugins": {PLUGIN: True}})
         write(self.installed, {"plugins": {"acme-helper@acme-market": [], SLACK_PLUGIN: []}})
         site = self.call_settings(self.command())
@@ -335,20 +335,31 @@ class CommandTest(WatchTestCase):
         own = self.call_settings(self.command(replace(self.config, mcp_config="")))
         self.assertEqual(own, {"enabledPlugins": {"acme-helper@acme-market": False, PLUGIN: False}})
 
+    def test_a_plugin_my_settings_switch_off_still_gets_its_false(self) -> None:
+        """The call reads no settings file, so it never sees that `false`: it sends its own."""
+        write(self.home_settings, {"enabledPlugins": {"acme-helper@acme-market": False}})
+        write(self.installed, {"plugins": {"acme-helper@acme-market": []}})
+        self.assertEqual(
+            self.call_settings(self.command()), {"enabledPlugins": {"acme-helper@acme-market": False}}
+        )
+
     def test_an_installed_plugins_file_that_does_not_parse_stops_the_call_in_one_line(self) -> None:
         self.installed.parent.mkdir(parents=True)
         self.installed.write_text("{not json")
-        with (
-            unittest.mock.patch("subprocess.run") as run,
-            self.assertRaises(slack_watch.WatchError) as caught,
-        ):
-            slack_watch.call(self.config, SERVER, NOW, self.state_dir)
-        self.assertEqual(
-            str(caught.exception),
+        error = (
             f"the watch call was not started: {self.installed} does not parse, so bosun cannot tell which "
-            "plugins to switch off",
+            "plugins to switch off"
         )
-        run.assert_not_called()
+        # with a site's MCP config, and with the Slack plugin's server, whose lookup reads the same file
+        for config in (self.config, replace(self.config, mcp_config="")):
+            with (
+                self.subTest(mcp_config=config.mcp_config),
+                unittest.mock.patch("subprocess.run") as run,
+                self.assertRaises(slack_watch.WatchError) as caught,
+            ):
+                slack_watch.watch(config, NOW, self.state_dir)
+            self.assertEqual(str(caught.exception), error)
+            run.assert_not_called()
 
     def test_a_call_that_could_see_a_write_tool_or_another_tool_is_refused(self) -> None:
         self.assertIsNone(

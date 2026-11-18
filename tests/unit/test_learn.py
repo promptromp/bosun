@@ -316,6 +316,18 @@ class RunTest(LearnCase):
             },
         )
 
+    def test_a_plugin_my_settings_switch_off_gets_its_false_too(self) -> None:
+        self.home_settings.parent.mkdir(parents=True)
+        self.home_settings.write_text(json.dumps({"enabledPlugins": {"acme-helper@acme-market": False}}))
+        self.installed.parent.mkdir(parents=True)
+        self.installed.write_text(json.dumps({"plugins": {"acme-helper@acme-market": []}}))
+        self.analysis_returns(STALL)
+        self.assertEqual(self.run_learn("--dry-run", "--out", str(self.base / "out"))[0], 0)
+        self.assertEqual(
+            self.analysis_settings(),
+            {"effortLevel": "medium", "enabledPlugins": {"acme-helper@acme-market": False}},
+        )
+
     def test_with_no_plugins_its_table_is_empty(self) -> None:
         self.analysis_returns(STALL)
         self.assertEqual(self.run_learn("--dry-run", "--out", str(self.base / "out"))[0], 0)

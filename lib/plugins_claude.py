@@ -82,17 +82,19 @@ def launch_settings(plan: plugins.PluginPlan) -> dict[str, Any]:
     return {claude_state.ENABLED_PLUGINS: dict.fromkeys(plan.off, False)}
 
 
-def headless_settings(cwd: Path, keep: Sequence[str] = (), who: str = "this call") -> dict[str, Any]:
+def headless_settings(
+    cwd: Path, keep: Sequence[str] = (), who: str = "this call", reads_settings: bool = True
+) -> dict[str, Any]:
     """Claude Code's settings for one of bosun's own headless calls (learning's analysis, the Slack watcher's
     call, the login check, the alert's Slack DM), which load none of my plugins: an `enabledPlugins` with a
-    `false` for each plugin a call started in <cwd> would load, but those <keep> names (a plugin id, or a bare
-    name from any marketplace): the empty list's plan, with no connectors; an empty one when there is none. A
-    plugin managed settings force on stays on, as no setting can switch it off; that, and a settings scope
-    that does not parse, are said on stderr, of <who>. A name of <keep> that no plugin has is bosun's own
-    rule finding nothing (the alert keeps the Slack plugin, whose server may come from a connector instead),
-    so it is not said. ConnectorsError when installed_plugins.json is there but does not parse."""
-    plan = plugins.plan(Allowed(tuple(keep)), Allowed(), facts(cwd))
-    say_plan(replace(plan, not_found=()), who)
+    `false` for every plugin installed or named by a settings scope of <cwd> (plugins.headless_plan: also one
+    my settings switch off, which a call that reads no settings file may load), but those <keep> names (a
+    plugin id, or a bare name from any marketplace); an empty one when there is none. A plugin managed
+    settings force on stays on, as no setting can switch it off, and is said on stderr, of <who>; so is a
+    settings scope that does not parse, but only by a call that reads them (<reads_settings>: not with
+    `--setting-sources ""`). ConnectorsError when installed_plugins.json is there but does not parse."""
+    plan = plugins.headless_plan(Allowed(tuple(keep)), facts(cwd))
+    say_plan(plan if reads_settings else replace(plan, unread=()), who)
     return launch_settings(plan)
 
 
