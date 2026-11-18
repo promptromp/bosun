@@ -9,8 +9,10 @@ defines, and in a helper it calls (the shared setup's or its own, all the way):
 - `"$BOSUN" ledger`, `bosun-ledger`, or `bosun ledger` where a command starts (the patterns the selection
   reads, smoke_select.SHELL_CALL), anywhere in the code (comments aside);
 - `"$1" ledger` (`$1`, `"${1}"`, any digit) inside a `bash -c '...'` whose arguments after its `_` pass bosun
-  at that place (`"$BOSUN"`, or a path that ends in `/bin/bosun`);
-- a helper that runs `"$BOSUN" "$@"` (`dkg kg import`): the word after it.
+  at that place, and `"${@:2}" ledger` (any number) where they pass it at that place or after (bosun:
+  `"$BOSUN"`, or a path that ends in `bin/bosun`);
+- a helper that runs `"$BOSUN" "$@"`, or a path that ends in `bin/bosun` with `"$@"` (`dkg kg import`,
+  `bb ledger list`): the word after it.
 
 A helper counts as called where a command starts, or as the command check, fails_with, fails_with_status,
 refused_quietly, wait_for or exits_0_saying_nothing runs; a call in another shape (an alias, another runner, a
@@ -42,13 +44,16 @@ RUNNER = (
     r"|fails_with_status\s+\S+\s+\"(?:[^\"\\]|\\.)*\"\s+|wait_for\s+\S+\s+|exits_0_saying_nothing\s+)"
 )
 COMMAND_START = rf"(?:^|[;&|({{`!]|\$\(|\b(?:then|do|else|elif|if|while|until|time)\b)\s*{RUNNER}?"
-BOSUN_RUNNER = re.compile(r"\"\$\{?BOSUN\w*\}?\"\s+\"\$@\"")  # a helper whose arguments are a bosun command's
+# A helper whose arguments are a bosun command's: it runs `"$BOSUN" "$@"`, or a path ending in bin/bosun so.
+BOSUN_RUNNER = re.compile(r"\"(?:\$\{?BOSUN\w*\}?|[^\"\s]*bin/bosun)\"\s+\"\$@\"")
 # `bash -c '<script>' _ <arguments>` (the script's quotes as the suite writes them: '\'' inside).
 BASH_C = re.compile(r"\bbash\s+-c\s+'(?P<script>(?:[^']|'\\'')*)'\s+_(?P<args>[^\n]*)")
 # The arguments, up to the first unquoted `;`, `|`, `&`, `)`, `<` or `>`.
 ARGUMENTS = re.compile(r"^(?:\s+(?:\"(?:[^\"\\]|\\.)*\"|'[^']*'|[^\s;&|)<>\"']+))*")
 ARGUMENT = re.compile(r"\"(?:[^\"\\]|\\.)*\"|'[^']*'|\S+")
-IS_BOSUN = re.compile(r"^\"?(?:\$\{?BOSUN\}?|\S*/bin/bosun)\"?$")
+IS_BOSUN = re.compile(r"^\"?(?:\$\{?BOSUN\}?|[^\"\s]*bin/bosun)\"?$")
+# `"${@:2}" <cmd>`: the arguments from the second on, bosun among them when it is passed at 2 or after.
+SLICE_RUN = re.compile(r"(?<![\w$=])\"\$\{@:(?P<start>\d+)\}\"\s+(?P<cmd>[a-z][a-z0-9-]*)")
 # (command, the whole line without its indent): where the patterns read a run that is not one, and why.
 ALLOWED: dict[tuple[str, str], str] = {
     (
@@ -187,12 +192,13 @@ class SuiteRuns:
         return found
 
     def passed_in(self, code: Code, match: re.Match[str]) -> list[tuple[str, int]]:
-        """The commands a `bash -c` runs through bosun passed in as a positional parameter."""
-        runs = (
-            run
-            for place in bosun_places(match["args"])
-            for run in re.finditer(positional_run(place), match["script"])
-        )
+        """The commands a `bash -c` runs through bosun passed in as a positional parameter (`"$2" <cmd>`), or
+        among those a `"${@:N}"` expands to."""
+        places = bosun_places(match["args"])
+        runs = [run for place in places for run in re.finditer(positional_run(place), match["script"])]
+        runs += [
+            run for run in SLICE_RUN.finditer(match["script"]) if places and int(run["start"]) <= max(places)
+        ]
         return [
             (self.commands[run["cmd"]], code.line_at(match.start("script") + run.start()))
             for run in runs
@@ -210,21 +216,21 @@ class SuiteRuns:
         ]
 
 
-def positional_run(place: str) -> str:
+def positional_run(place: int) -> str:
     """`"$1" <cmd>` (or `$1`, `"${1}"`), not an assignment's value (`want="$1" status`)."""
     quoted = rf'(?<![\w$=])"\$\{{?{place}\}}?"'
     bare = rf'(?<![\w$="])\$\{{?{place}\}}?(?![\w"}}])'
     return rf"(?:{quoted}|{bare})\s+(?P<cmd>[a-z][a-z0-9-]*)"
 
 
-def bosun_places(args: str) -> list[str]:
+def bosun_places(args: str) -> list[int]:
     """The positional parameters (1, 2, ...) a `bash -c`'s arguments after `_` pass bosun at, up to the first
     unquoted `;`, `|`, `&`, `)`, `<` or `>`."""
     places = []
     prefix = ARGUMENTS.match(args)
     for place, argument in enumerate(ARGUMENT.findall(prefix.group(0) if prefix else ""), 1):
         if IS_BOSUN.match(argument):
-            places.append(str(place))
+            places.append(place)
     return places
 
 
@@ -299,6 +305,11 @@ section four "four" covers 'x'
 helper4() { :; }
 always_run
 helper4
+section five "five" covers 'x'
+lb() { "${L_ENV[@]}" "$L_LINK/bin/bosun" "$@"; }
+lb ledger list
+check "slice" bash -c 'cd "$1" && "${@:2}" launch alpha' _ "$REPO" "${ENV[@]}" "$BOSUN"
+check "a slice past bosun's place" bash -c '"${@:3}" doctor' _ "$BOSUN" x y
 """
 
     def test_runs_direct_through_a_helper_a_bosun_runner_and_a_bash_c(self) -> None:
@@ -314,13 +325,14 @@ helper4
             ["libexec/bosun-init", "libexec/bosun-quit", "libexec/bosun-sessions", "libexec/bosun-watchdog"],
         )
         self.assertEqual(sorted(n for c, n in runs.runs("three") if c == "libexec/bosun-sessions"), [15])
+        self.assertEqual(commands("five"), ["libexec/bosun-launch", "libexec/bosun-ledger"])  # (no doctor)
 
     def test_the_shared_setup_calling_a_section_s_helper_is_found(self) -> None:
         self.assertEqual(SuiteRuns(self.SUITE).shared_calls_to_sections(), ["line 20: helper4"])
 
     def test_bosun_s_places_in_a_bash_c_s_arguments(self) -> None:
-        self.assertEqual(bosun_places(' "$ROOT" "$BOSUN" 2>&1'), ["2"])
-        self.assertEqual(bosun_places(' "$WORK/u/bin/bosun" x'), ["1"])
+        self.assertEqual(bosun_places(' "$ROOT" "$BOSUN" 2>&1'), [2])
+        self.assertEqual(bosun_places(' "$WORK/u/bin/bosun" x'), [1])
         self.assertEqual(bosun_places(' "$ROOT"; echo "$BOSUN"'), [])  # (after the `;`: another command's)
 
 

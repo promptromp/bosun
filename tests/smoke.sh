@@ -6698,7 +6698,7 @@ HAND
     [ "$1" = 1 ] && cmp -s "$2.plist" "$3/morning.plist" && cmp -s "$2.watchdog.plist" "$3/watchdog.plist" && [ "$4" = "$5" ]' \
     _ "$rc" "$u_jobs" "$U" "$bootouts" "$(u_bootouts)"
 
-  section update-back "bosun update --back: one step back, what it restores and what it keeps (fake launchctl)" needs update-upstream covers 'tests/sandbox/update_patch.sh,lib/update_back*.py,lib/update.py,lib/update_state.py,lib/update_backups.py,lib/update_summary.py,lib/update_lookup.py,lib/migrations.py,libexec/bosun-update'
+  section update-back "bosun update --back: one step back, what it restores and what it keeps (fake launchctl)" needs update-upstream covers 'tests/sandbox/update_patch.sh,lib/update_back*.py,lib/update.py,lib/update_state.py,lib/update_backups.py,lib/update_summary.py,lib/update_lookup.py,lib/migrations.py,libexec/bosun-update,libexec/bosun-ledger,libexec/bosun-kg'
   # An install of its own at the origin's v1 (its ledger at format 1, its common.sh without the
   # connector keys), following upstream's branch b-main: at v2 first (the ledger's format 2, and the kept keys
   # the update writes to bosun.env), then at v3 (a line of the readme: nothing a version reads the data by).
@@ -6803,7 +6803,7 @@ HAND
   check "... and its summary is saved beside the backup of the update it went back over" grep -q "^bosun went back: ${U_V3_COMMIT:0:7} -> ${U_V2_COMMIT:0:7}" "$b_over_backup/back-summary.md"
   check "the data passes its checks on v2 after it" test "$(bb ledger validate --journal 2>&1)" = "ledger is valid"
 
-  section update-branch "bosun update --branch: following a branch of the origin, and main again (fake launchctl)" needs update-upstream covers 'tests/sandbox/update_patch.sh,libexec/bosun-update,libexec/bosun-settings,lib/update_back*.py,lib/update_facts.py,lib/update_lookup.py,lib/update_check.py,lib/settings.py'
+  section update-branch "bosun update --branch: following a branch of the origin, and main again (fake launchctl)" needs update-upstream covers 'tests/sandbox/update_patch.sh,libexec/bosun-update,libexec/bosun-settings,lib/update_back*.py,lib/update_facts.py,lib/update_lookup.py,lib/update_check.py,lib/settings.py,libexec/bosun-ledger'
   # An install of its own at v2, on the releases channel (bosun.env says so), its data v2's (the ledger at
   # format 2, rules 1). Upstream's branches: try-x at v3, old-x at v1 (the ledger at format 1, older than the
   # data). (A branch older than the data in a store's rules goes through the same target-check as old-x does:
