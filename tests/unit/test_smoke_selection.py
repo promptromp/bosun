@@ -21,6 +21,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
+import selection as sel  # noqa: E402
 import smoke_select as ss  # noqa: E402
 import test_smoke_select as selection_tests  # noqa: E402
 
@@ -83,7 +84,7 @@ class SelectionRulesTest(unittest.TestCase):
             f"{section.id}: {glob}"
             for section in self.sections
             for glob in section.covers
-            if not any(ss.matches(path, glob) for path in self.files)
+            if not any(sel.matches(path, glob) for path in self.files)
         ]
         self.assertEqual(
             dead,
@@ -96,7 +97,7 @@ class SelectionRulesTest(unittest.TestCase):
         dead = [
             glob
             for glob in (*self.rules.everything, *self.rules.ignore)
-            if not any(ss.matches(path, glob) for path in self.files)
+            if not any(sel.matches(path, glob) for path in self.files)
         ]
         self.assertEqual(dead, [], "\n\nThese rules of tests/smoke_selection.txt match no file. Remove them:")
 
@@ -129,7 +130,7 @@ class SelectionRulesTest(unittest.TestCase):
 
     def suite_plan(self, new: str) -> ss.Plan:
         old = (ROOT / "tests" / "smoke.sh").read_text()
-        change = ss.SuiteChange(old, selection_tests.diff_hunks(old, new))
+        change = sel.FileChange(old, selection_tests.diff_hunks(old, new))
         return ss.plan_for([ss.SUITE], ss.parse_sections(new), self.rules, self.graph, ss.Suite(new), change)
 
     # The structural edits of tests/smoke.sh that move lines they leave alone into another region: both

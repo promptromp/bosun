@@ -33,6 +33,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
+import selection as sel  # noqa: E402
 import smoke_select as ss  # noqa: E402
 
 
@@ -246,7 +247,7 @@ class CoversTest(unittest.TestCase):
             f"{section.id}: {command} (line {number}, run by {where})"
             for section in self.runs.suite.sections
             for (command, number), where in sorted(self.runs.runs(section.id).items())
-            if not any(ss.matches(command, glob) for glob in section.covers)
+            if not any(sel.matches(command, glob) for glob in section.covers)
             and (command, self.runs.line(number)) not in ALLOWED
         ]
         self.assertEqual(
