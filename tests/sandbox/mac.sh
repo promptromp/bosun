@@ -11,11 +11,11 @@
 #   run     on a clone of the developer's Mac: this checkout's installer on the default releases (its origin
 #           has a release tag), real launchd, the console's job, `bosun quit`, an update to the next release,
 #           a real wake schedule and uninstall (tests/install_e2e.sh). --from-nothing: on the new Mac instead
-#   work    on a clone of the developer's Mac: a week of real work that installs the release (--base,
-#           default the last bosun from before versions and the knowledge base's journal), converts it to
-#           this checkout by running get.sh again, updates mid-afternoon to the next version on a year of
-#           data, goes back and forward again, and keeps working with the clock moved, writers racing and
-#           writes cut short (tests/work_e2e.sh)
+#   work    on a clone of the developer's Mac: a week of real work on this checkout, installed by its
+#           get.sh with its versions side by side, an update mid-afternoon to the next version on a year of
+#           data, back and forward again, then the clock moved, writers racing, writes cut short and the
+#           knowledge files changed outside their journal, one of them by an older bosun's forget (--base,
+#           default the last bosun from before the knowledge base's journal) (tests/work_e2e.sh)
 #   app     on a clone of the developer's Mac, with its desktop session: bosun.app driven through every state and
 #           choice of its menu by its test hooks, and through a reboot (tests/app_e2e.sh). --from build (the
 #           default): the app is built here with app/build.sh, ad hoc signed, and copied in; --from release:
@@ -56,10 +56,10 @@ TREE_BRANCH="sandbox-mac-tree"
 HOMEBREW_INSTALLER="https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
 BOOT_SECONDS=240
 WORK="$(mktemp -d)"
-# The release `work` starts from: the last bosun from before versions side by side and the knowledge
-# base's journal (#17), so its first update converts its checkout, and its knowledge base starts a journal.
+# The older bosun `work` runs beside the install, from a checkout of its own: the last from before the
+# knowledge base's journal (#17), whose forget in the same knowledge folder the installed bosun takes in.
 # (A commit id, not a secret.)
-RELEASE="95545b0ba6a0e3729e980aa9468876e1228c1874" # pragma: allowlist secret
+OLDER_BOSUN="95545b0ba6a0e3729e980aa9468876e1228c1874" # pragma: allowlist secret
 # The release `run` makes in its origin (the next one, v2026.11.02, is tests/install_e2e.sh's).
 RUN_RELEASE="v2026.11.01"
 VM_PID=""
@@ -299,26 +299,22 @@ app() { # [--from build|release]
   return "$status"
 }
 
-# The release (<ref>) installed by its own get.sh, then this checkout as its upgrade: two bundles of the
-# same branch, the second a descendant of the first, as a branch's next head is. This checkout's get.sh,
-# run then, converts the release's checkout, fetching the head from its origin (~/repo.bundle).
+# This checkout, installed by its own get.sh from its origin (~/repo.bundle, which the suite makes from
+# ~/repo-tree.bundle), and the older bosun (<ref>, an ancestor of this checkout) as a bundle of its own.
 work() { # [--base <git ref>]
-  local base="$RELEASE"
+  local base="$OLDER_BOSUN"
   case "$#:${1:-}" in
     0:) ;;
     2:--base) base="$2" ;;
     *) die "usage: tests/sandbox.sh mac work [--base <git ref>]" ;;
   esac
   git -C "$ROOT" merge-base --is-ancestor "$base" HEAD ||
-    die "$base is not an ancestor of this checkout, as a release is of the branch's next head"
+    die "$base is not an ancestor of this checkout: the older bosun is one of this branch's"
   prepare_clone "$DEV_MAC"
-  say "booting a clone of $DEV_MAC, for a week of work from $base to this checkout"
+  say "booting a clone of $DEV_MAC, for a week of work on this checkout (the older bosun: $base)"
   boot "$CLONE" --no-graphics
   bundle_ref "$base" "$WORK/repo-base.bundle" || die "could not bundle $base"
   to_vm "$CLONE" "$WORK/repo-base.bundle" repo-base.bundle || die "could not copy $base"
-  # The release's own installer, as a user ran it then: it installs the release as that release did.
-  git -C "$ROOT" show "$base:get.sh" >"$WORK/release-get.sh" || die "$base has no get.sh"
-  to_vm "$CLONE" "$WORK/release-get.sh" release-get.sh || die "could not copy the release's get.sh"
   copy_checkout repo-tree.bundle
   # shellcheck disable=SC2016 # expands in the VM
   in_vm "$CLONE" 'BOSUN_REPO="$HOME/repo.bundle" BOSUN_BRANCH='"$TREE_BRANCH"' e2e/tests/work_e2e.sh'
