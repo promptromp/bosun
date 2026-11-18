@@ -678,33 +678,33 @@ class PrePushTest(ScratchSuite):
         self.assertEqual(result.returncode, 1)
         self.assertIn("FAIL  beta one", result.stdout)
 
-    def test_sections_the_hook_would_take_longer_than_the_threshold_on_are_left_to_the_merge_queue(
-        self,
-    ) -> None:
-        """The time the hook would take: the selection's serial weight over the shards it runs (--jobs)."""
-        self.write("tests/smoke_weights.txt", "beta 600\nalpha 10\n")
+    def test_sections_the_hook_would_take_too_long_on_are_left_to_the_merge_queue(self) -> None:
+        """The time the hook would take: the longest of the shards it runs them as (--jobs), by weight."""
+        self.write("tests/smoke_weights.txt", "beta 300\nalpha 100\ngamma 200\n")
         self.commit("weights")
         self.write("extra/deep/er/file.txt", "changed\n")  # beta covers it
+        self.write("templates/job.plist", "<plist>changed</plist>\n")  # gamma, which needs alpha
         result = self.run_suite("--pre-push", BOSUN_SMOKE_BASE="HEAD")
         self.assertEqual((result.returncode, self.ran(result)), (0, []), result.stdout)
         self.assertIn(
-            "those sections would take this hook about 600 s (600 s by smoke_weights.txt, as 1 shard(s) side "
-            "by side), more than BOSUN_SMOKE_DEFER_SECONDS (180), so the merge queue runs them; "
-            "tests/smoke.sh --changed HEAD runs them here",
+            "those sections would take this hook about 600 s by smoke_weights.txt (as one run), more than "
+            "BOSUN_SMOKE_DEFER_SECONDS (180), so the merge queue runs them; tests/smoke.sh --changed HEAD "
+            "runs them",
             result.stdout,
         )
         as_three = self.run_suite("--pre-push", "--jobs", "3", BOSUN_SMOKE_BASE="HEAD")
         self.assertEqual(self.ran(as_three), [], as_three.stdout)
-        self.assertIn("about 200 s (600 s by smoke_weights.txt, as 3 shard(s) side by side)", as_three.stdout)
-        self.assertIn("tests/smoke.sh --changed HEAD --jobs 3 runs them here", as_three.stdout)
-        raised = self.run_suite(
-            "--pre-push", "--jobs", "3", BOSUN_SMOKE_BASE="HEAD", BOSUN_SMOKE_DEFER_SECONDS="250"
+        self.assertIn(
+            "about 300 s by smoke_weights.txt (the longest of 3 shards side by side)", as_three.stdout
         )
-        self.assertEqual(self.ran(raised), ["beta"], raised.stdout)  # 200 s as three shards: under 250
-        serial = self.run_suite("--pre-push", BOSUN_SMOKE_BASE="HEAD", BOSUN_SMOKE_DEFER_SECONDS="250")
-        self.assertEqual(self.ran(serial), [])  # 600 s as one: over it
+        self.assertIn("tests/smoke.sh --changed HEAD --jobs 3 runs them here", as_three.stdout)
+        raised = {"BOSUN_SMOKE_BASE": "HEAD", "BOSUN_SMOKE_DEFER_SECONDS": "350"}
+        self.assertEqual(
+            self.ran(self.run_suite("--pre-push", "--jobs", "3", **raised)), ["alpha", "beta", "gamma"]
+        )
+        self.assertEqual(self.ran(self.run_suite("--pre-push", **raised)), [])  # 600 s as one run: over it
         by_hand = self.run_suite("--changed", "HEAD")  # only the hook leaves it to the queue
-        self.assertEqual(self.ran(by_hand), ["beta"])
+        self.assertEqual(self.ran(by_hand), ["alpha", "beta", "gamma"])
 
     def test_sections_it_cannot_weigh_run(self) -> None:
         self.write("tests/smoke_weights.txt", "beta lots\n")

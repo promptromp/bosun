@@ -47,7 +47,7 @@
 # otherwise runs what --changed origin/main selects (BOSUN_SMOKE_BASE=<ref> names another base; this is the
 # build-out setting, to go back to the whole suite once the project is past its release: drop the selection from
 # the `--pre-push` branch below). When that is the whole suite, or sections the hook would take more than
-# BOSUN_SMOKE_DEFER_SECONDS to run (180 by default: their serial time by tests/smoke_weights.txt over its --jobs; a
+# BOSUN_SMOKE_DEFER_SECONDS to run (180 by default: the longest of its --jobs shards by tests/smoke_weights.txt; a
 # build-out setting too), the hook leaves it to the merge queue, whose smoke job runs it (defer_whole_run,
 # defer_long_selection). The hook runs what it runs as --jobs 3. BOSUN_SMOKE_FULL=1 runs the whole suite. A whole run (none of --only,
 # --last-failed, -x) that ends with no failure records its tree in tests/.smoke-cache/passes, but only if the tree is the same at its end as at
@@ -275,17 +275,18 @@ defer_whole_run() {
 }
 
 # defer_long_selection <ids>: the same for a selection the hook would take more than BOSUN_SMOKE_DEFER_SECONDS (180 s by
-# default; the build-out setting, as the selection is) to run: the sections' serial time with what they need, by
-# tests/smoke_weights.txt, over the shards the hook runs them as (--jobs). Whatever cannot weigh them (no python3, an
-# unknown id, a setting that is not a number) runs them here.
+# default; the build-out setting, as the selection is) to run: the longest of the shards it runs them as (--jobs), by
+# tests/smoke_weights.txt, each with what its sections need. Whatever cannot weigh them (no python3, an unknown id, a
+# setting that is not a number) runs them here.
 defer_long_selection() {
-  local seconds limit="${BOSUN_SMOKE_DEFER_SECONDS:-180}" shards="${JOBS:-1}" wall
+  local seconds limit="${BOSUN_SMOKE_DEFER_SECONDS:-180}" shards="${JOBS:-1}" how
   seconds="$(python3 "$ROOT/tools/smoke_shard.py" --script "$SCRIPT" --weights "$ROOT/tests/smoke_weights.txt" \
-    --seconds --sections "$1" 2>/dev/null)" || return 0
+    --seconds --shards "$shards" --sections "$1" 2>/dev/null)" || return 0
   case "$seconds,$limit" in *[!0-9,]* | ,* | *,) return 0 ;; esac
-  wall=$(((seconds + shards - 1) / shards))
-  [ "$wall" -gt "$limit" ] || return 0
-  echo "smoke selection: those sections would take this hook about $wall s ($seconds s by smoke_weights.txt, as $shards shard(s) side by side), more than BOSUN_SMOKE_DEFER_SECONDS ($limit), so the merge queue runs them; tests/smoke.sh --changed $CHANGED${JOBS:+ --jobs $JOBS} runs them here, BOSUN_SMOKE_FULL=1 the whole suite"
+  [ "$seconds" -gt "$limit" ] || return 0
+  how="as one run"
+  [ "$shards" = 1 ] || how="the longest of $shards shards side by side"
+  echo "smoke selection: those sections would take this hook about $seconds s by smoke_weights.txt ($how), more than BOSUN_SMOKE_DEFER_SECONDS ($limit), so the merge queue runs them; tests/smoke.sh --changed $CHANGED${JOBS:+ --jobs $JOBS} runs them here, BOSUN_SMOKE_FULL=1 the whole suite"
   exit 0
 }
 
@@ -349,7 +350,7 @@ start_shard() {
 
 # wait_shards: until every shard has ended, printing each as it does; with -x, the first that failed stops the others.
 wait_shards() {
-  local k running still
+  local k running still stopping=0
   running="$(seq 1 "$JOBS" | tr '\n' ' ')"
   while [ -n "${running// /}" ]; do
     still=""
@@ -359,11 +360,23 @@ wait_shards() {
         continue
       fi
       print_shard "$k" "shard $k of $JOBS"
-      [ "$EXITFIRST" = 0 ] || [ "$(cat "$JOBS_DIR/$k/status")" = 0 ] || stop_shards
+      [ "$EXITFIRST" = 0 ] || [ "$(cat "$JOBS_DIR/$k/status")" = 0 ] || { stop_shards && stopping=1; }
     done
     running="$still"
-    [ -z "${running// /}" ] || sleep 1
+    [ -z "${running// /}" ] || shards_waited "$stopping" || return 0
   done
+}
+
+# shards_waited <stopping>: a second of the wait; once -x stopped the shards, at most 30 of them (a failsafe: a stopped
+# shard may be waiting on a child that ignores TERM), then it says so and the wait ends (the exit settles them again).
+SHARDS_STOP_WAIT=0
+shards_waited() {
+  sleep 1
+  [ "$1" = 1 ] || return 0
+  SHARDS_STOP_WAIT=$((SHARDS_STOP_WAIT + 1))
+  [ "$SHARDS_STOP_WAIT" -lt 30 ] && return 0
+  echo "tests/smoke.sh: a shard -x stopped had not ended 30 s later; not waiting for it" >&2
+  return 1
 }
 
 # stop_shards: each shard still running gets TERM once, its whole process group (what it waits on too; its EXIT trap
@@ -410,25 +423,24 @@ print_shard() { # <k> <heading>
 
 # count_shard <k>: shard k's checks (or the unit tests', k=unit) in this run's counts, from its summary line; one that
 # ended without one (it crashed) and not with 0 counts as a failure, as does one that failed with none. One that -x
-# stopped is said, not counted: the failure that stopped it is.
+# stopped is said, not counted: the failure that stopped it is (and one that ended on its own as the stop came counts
+# what its summary says).
 count_shard() {
-  local line status
+  local line status stopped=0
   status="$(cat "$JOBS_DIR/$1/status" 2>/dev/null || echo "no status")"
-  if [ -e "$JOBS_DIR/$1/stopped" ]; then
-    echo "shard $1 of $JOBS: stopped (-x), when another shard failed"
-    return 0
-  fi
-  line="$(grep -E '^[0-9]+ passed, [0-9]+ failed' "$JOBS_DIR/$1/log" | tail -1)"
-  if [ -n "$line" ]; then
+  [ ! -e "$JOBS_DIR/$1/stopped" ] || stopped=1
+  line="$(grep -E '^[0-9]+ passed, [0-9]+ failed' "$JOBS_DIR/$1/log" 2>/dev/null | tail -1)"
+  if [ -n "$line" ]; then # (it ended on its own, before the stop or without one: what it says counts)
     passed=$((passed + ${line%% passed*}))
     line="${line#* passed, }"
     failed=$((failed + ${line%% failed*}))
-  fi
-  if [ "$status" != 0 ] && [ -z "$line" ]; then
+    [ "$status" = 0 ] || [ "$stopped" = 1 ] || [ "${line%% failed*}" != 0 ] || failed=$((failed + 1)) # stopped short
+  elif [ "$stopped" = 1 ]; then
+    echo "shard $1 of $JOBS: stopped (-x), when another shard failed"
+  elif [ "$status" != 0 ]; then
     failed=$((failed + 1))
     echo "shard $1 of $JOBS ended (exit $status) without its summary"
   fi
-  [ "$status" = 0 ] || [ -z "$line" ] || [ "${line%% failed*}" != 0 ] || failed=$((failed + 1)) # (it stopped short)
 }
 
 # merge_shard_caches: the shards' (and the unit tests') results into this checkout's cache, by one writer: a section's
