@@ -1,5 +1,5 @@
 #!/bin/bash
-# Usage: live.sh prepare <claude|codex|agy> | go <claude|codex|agy> [codex model] | ontology claude | login agy
+# Usage: live.sh prepare <claude|codex|agy> | go <claude|codex|agy> [codex model] | login agy
 #        | ready <claude|codex> <release|checkout> <model> <the release's get.sh URL>
 #        (through tests/sandbox.sh mac live, and mac try for ready)
 #
@@ -16,7 +16,8 @@
 #             three repos as its windows (and, from this checkout, the ontology about them), the menu bar app
 #             (from the release only), the agents on <model>, started
 #   go        the first-run screens, the install, real windows, a restart and the hand-over; then whether a
-#             running Claude picks up a changed command file of its plugin, and `bosun update` to the next
+#             running Claude picks up a changed command file of its plugin (only on a Claude Code other than the
+#             one PICKUP_SEEN_ON names, unless the part is named), and `bosun update` to the next
 #             version (this checkout and tests/sandbox/update_patch.sh) while the repo window waits on a
 #             background command: the take-stock and update prompts, to the real agents; then connectors:
 #             a window with BOSUN_CONNECTORS reaches only the local test servers it names, also resumed;
@@ -26,8 +27,10 @@
 #             orchestrator's, nor in a real learning analysis, the Slack watcher's call (a local server) or a
 #             login check
 #             On Claude Code, right after the hand-over (before the update, whose end uninstalls bosun, and before the
-#             connectors, whose list would limit the windows): the ontology end to end, below
-#   ontology  claude only: the install and the real windows, then the ontology step alone (`go` runs it too)
+#             connectors, whose list would limit the windows): the ontology end to end, below.
+#             On Claude Code and Codex, `go` is in parts, the `part` lines at the end (tests/sandbox/e2e_parts.sh):
+#             E2E_PARTS names the ones a run runs (tests/sandbox/mac.sh live --only, or --changed with --paid);
+#             empty, all of them. `--only ontology` is the ontology alone, after the install and the real windows
 # The keys go in between, from mac.sh, so this script never sees where they come from. `agy` has steps of its
 # own (tests/sandbox/live_agy.sh, which this sources): the repo window on Antigravity, the orchestrator on
 # Claude Code, and what the design note's Testing list asks of the real agy.
@@ -58,6 +61,8 @@ UPDATE_RC=""
 BACKGROUND_ASK="The nightly invoice export has to run to its end today. Start it as a background command: \`sleep 300\` stands for it here (with Claude Code, the Bash tool's run_in_background), so that it keeps running after this turn; when it ends, the export is done and I want to hear so. Do not wait for it now. Then reply with just: started."
 passed=0
 failed=0
+# part, part_chosen, part_named, parts_end: `go`'s main body is its parts (the `part` lines at the end).
+source "$(dirname "$0")/e2e_parts.sh" || exit 1
 FAIL_WINDOWS="" # windows whose pane and status a failed check shows (the ontology step sets it)
 
 show_windows() { # what each of FAIL_WINDOWS shows and its status, so that a failure shows its cause
@@ -438,6 +443,20 @@ asked_for_word() {
     [ -n "$said" ] && echo "$said" && return 0
   done
   echo "no answer"
+}
+# The Claude Code whose plugin pick-up the notes of picks_up_commands were last read for: a fact about Claude Code,
+# not bosun, so a whole run looks again only when the installed one differs; a run that names the part (--only, or
+# --changed by its covers) looks whatever the version. Once you have read its notes, set this to the version they say.
+PICKUP_SEEN_ON="2.1.308"
+plugin_pickup() {
+  local version
+  version="$(claude --version 2>/dev/null | awk '{ print $1; exit }')"
+  if [ "$version" = "$PICKUP_SEEN_ON" ] && ! part_named plugin-pickup; then
+    echo "  note  Claude Code $version is the one the plugin pick-up was last read on (PICKUP_SEEN_ON): not looked at again"
+    return 0
+  fi
+  picks_up_commands
+  echo "  note  read for Claude Code ${version:-unknown}: once read, set PICKUP_SEEN_ON in tests/sandbox/live.sh to it"
 }
 picks_up_commands() {
   echo "a running Claude and a changed command file of its plugin"
@@ -912,6 +931,7 @@ widened_by_the_repo() {
 # start that loads the plugin leaves its line there, one that does not leaves none. Lines go by the session's id, so a
 # headless `claude -p` bosun starts meanwhile (a login check) cannot stand for a window (plugins_of_mine sets the
 # names).
+PLUGIN_MARKET="$HOME/probe-claude-market" PLUGIN_STARTS="$OUT/plugin-starts.log" PLUGIN_ID="probe-hook@probe-local"
 a_claude_plugin() {
   local kit="$PLUGIN_MARKET/plugins/probe-hook"
   mkdir -p "$PLUGIN_MARKET/.claude-plugin" "$kit/.claude-plugin" "$kit/hooks"
@@ -1031,10 +1051,20 @@ headless_calls_load_none() {
   : >"$PLUGIN_STARTS"
   watch_and_login_calls "probe-hook off in my settings"
 }
-plugins_of_mine() {
-  echo "plugins: repo windows keep mine, the orchestrator and bosun's headless calls load none of them"
-  PLUGIN_MARKET="$HOME/probe-claude-market" PLUGIN_STARTS="$OUT/plugin-starts.log" PLUGIN_ID="probe-hook@probe-local"
+# probe-hook, installed and on in my user settings, for the parts that look at it (plugins-windows and headless):
+# once, by the first of them a run runs; the last takes it off again.
+plugin_in_place() {
+  [ ! -d "$PLUGIN_MARKET" ] || return 0
   check "Claude Code installs a local plugin, probe-hook, enabled in my user settings" a_claude_plugin
+}
+plugin_taken_off() {
+  claude plugin uninstall "$PLUGIN_ID" >>"$OUT/claude-plugin-add.txt" 2>&1 || echo "  note  could not uninstall $PLUGIN_ID"
+  claude plugin marketplace remove probe-local >>"$OUT/claude-plugin-add.txt" 2>&1 || echo "  note  could not remove the marketplace probe-local"
+  rm -rf "$PLUGIN_MARKET"
+}
+plugins_of_mine() {
+  echo "plugins: repo windows keep mine, the orchestrator loads none of them"
+  plugin_in_place
   : >"$PLUGIN_STARTS"
   probe_restarted "relaunched with probe-hook installed, the probe window resumes"
   check "... and the plugin's SessionStart hook ran in its folder" wait_for 30 started_in_probe
@@ -1047,10 +1077,13 @@ plugins_of_mine() {
   check "doctor's line: the orchestrator loads none of mine" grep -qF "orchestrator: plugins: none of yours (" "$OUT/plugin-doctor.txt"
   check "doctor's line: the probe window loads all of mine" grep -q "$PROBE_WINDOW: plugins: all of yours" "$OUT/plugin-doctor.txt"
   grep ": plugins: " "$OUT/plugin-doctor.txt" | sed 's/^/  note  doctor: /'
+  part_chosen headless || plugin_taken_off
+}
+headless_calls_of_mine() {
+  echo "plugins: bosun's headless calls load none of mine"
+  plugin_in_place
   headless_calls_load_none
-  claude plugin uninstall "$PLUGIN_ID" >>"$OUT/claude-plugin-add.txt" 2>&1 || echo "  note  could not uninstall $PLUGIN_ID"
-  claude plugin marketplace remove probe-local >>"$OUT/claude-plugin-add.txt" 2>&1 || echo "  note  could not remove the marketplace probe-local"
-  rm -rf "$PLUGIN_MARKET"
+  plugin_taken_off
 }
 
 connectors() {
@@ -1090,7 +1123,6 @@ connectors() {
     plugin_server
   else
     widened_by_the_repo
-    plugins_of_mine
   fi
 }
 
@@ -1429,17 +1461,6 @@ ontology_costs() {
   done
 }
 
-# The step on its own, for a cheaper run than `go`'s (mac.sh: BOSUN_SANDBOX_LIVE_STEP=ontology).
-ontology_alone() {
-  [ "$AGENT" = "claude" ] || {
-    echo "ontology is for claude: the repo window's quotes are only checked in its sessions" >&2
-    exit 2
-  }
-  install_it
-  real_windows
-  ontology
-}
-
 ontology() {
   echo "the ontology, end to end, with the real agents"
   ontology_on
@@ -1454,48 +1475,79 @@ ontology() {
 
 source "$(dirname "$0")/live_agy.sh"
 
-case "$STEP" in
-  prepare)
-    if [ "$AGENT" = "agy" ]; then agy_prepare; else prepare; fi
-    ;;
-  ready)
-    [ "$AGENT" != "agy" ] || {
-      echo "ready is for claude and codex: agy needs a person to sign in" >&2
+# ---- the parts of `go` on Claude Code and Codex (tests/sandbox/e2e_parts.sh) ----------------------------------------
+
+claude_only() { # <what>: Claude Code's alone (its sessions are where quotes are checked, and its plugins)
+  [ "$AGENT" = "claude" ] && return 0
+  echo "  note  $1 is for Claude Code: not on $AGENT"
+  return 1
+}
+part_install() { install_it; }
+part_windows() { real_windows; }
+part_hand_over() {
+  hand_over
+  show_what_happened
+}
+part_ontology() { claude_only "the ontology" && ontology; }
+part_plugin_pickup() { plugin_pickup; }
+part_update() {
+  update_with_agents_at_work
+  show_what_happened
+}
+part_connectors() { connectors; }
+part_plugins_windows() { claude_only "the plugins of repo windows" && plugins_of_mine; }
+part_headless() { claude_only "the plugins in headless calls" && headless_calls_of_mine; }
+part_off_again() { off_again; }
+
+# The steps but `go` on Claude Code and Codex, each to its end (`go` there is the parts below), given the script's
+# arguments.
+other_steps() {
+  case "$STEP" in
+    prepare)
+      if [ "$AGENT" = "agy" ]; then agy_prepare; else prepare; fi
+      parts_end
+      exit
+      ;;
+    ready)
+      [ "$AGENT" != "agy" ] || {
+        echo "ready is for claude and codex: agy needs a person to sign in" >&2
+        exit 2
+      }
+      ready "${3:?release or checkout}" "${4:?the model}" "${5:?the get.sh URL}" || failed=$((failed + 1))
+      parts_end
+      exit
+      ;;
+    login)
+      [ "$AGENT" = "agy" ] || {
+        echo "login is for agy: the others are logged in by their keys" >&2
+        exit 2
+      }
+      agy_login
+      parts_end
+      exit
+      ;;
+    go)
+      [ "$AGENT" != "agy" ] || {
+        agy_go
+        parts_end
+        exit
+      }
+      ;;
+    *)
+      echo "unknown step $STEP" >&2
       exit 2
-    }
-    ready "${3:?release or checkout}" "${4:?the model}" "${5:?the get.sh URL}" || failed=$((failed + 1))
-    ;;
-  login)
-    [ "$AGENT" = "agy" ] || {
-      echo "login is for agy: the others are logged in by their keys" >&2
-      exit 2
-    }
-    agy_login
-    ;;
-  go)
-    if [ "$AGENT" = "agy" ]; then
-      agy_go
-    else
-      install_it
-      real_windows
-      hand_over
-      show_what_happened
-      [ "$AGENT" != "claude" ] || ontology
-      picks_up_commands
-      update_with_agents_at_work
-      show_what_happened
-      connectors
-      off_again
-    fi
-    ;;
-  ontology)
-    ontology_alone
-    ;;
-  *)
-    echo "unknown step $STEP" >&2
-    exit 2
-    ;;
-esac
-echo
-echo "$passed passed, $failed failed"
-[ "$failed" -eq 0 ]
+      ;;
+  esac
+}
+other_steps "$@"
+part install "the first-run screens, the install by what it says, the world's windows named and its ontology seeded" covers 'get.sh,bin/bosun,install.sh,lib/preflight.sh,lib/harnesses/claude.sh,lib/harnesses/codex.sh,lib/init*.py,lib/claude_state.py,lib/codex_state.py,libexec/bosun-init,libexec/bosun-doctor,tests/sandbox/live/**,tests/fixtures/knowledge/acme-import.jsonl'
+part windows "real windows, and a restart that comes back on the same session" needs install paid covers 'lib/launch/claude.sh,lib/launch/codex.sh,lib/agents.sh,lib/agent_profiles.tsv,lib/agent_state.py,lib/agent_files.py,lib/claude_state.py,lib/codex_state.py,lib/pane_input.py,lib/screen_text.py,libexec/bosun-launch,libexec/bosun-start,libexec/bosun-stop,libexec/bosun-send,libexec/bosun-sessions,orchestrator/settings.json,lib/common.sh#build_launch_command,lib/common.sh#launch_running,lib/common.sh#relaunch_in_window,lib/common.sh#window_model_effort,lib/common.sh#build_model_effort_args,lib/common.sh#valid_effort,lib/common.sh#orchestrator_extra_settings,lib/common.sh#install_read_settings,lib/common.sh#guard_hook_settings,lib/common.sh#approvals_hook_settings,lib/common.sh#repo_session_settings,lib/common.sh#worktrees_folder,lib/common.sh#signal_hook_settings,lib/common.sh#compact_hook_settings,lib/common.sh#merge_settings,lib/common.sh#*autocompact*,lib/common.sh#claude_login,lib/common.sh#paste_blocker,lib/common.sh#input_line'
+part hand-over "a real task, from the orchestrator to the repo window, reported and a pull request opened" needs windows paid covers 'orchestrator/policy.md,orchestrator/plugin/**,orchestrator/tasks/**,lib/delegate.py,libexec/bosun-delegate,lib/hook.py,lib/ledger.py,lib/guard.py,libexec/bosun-guard,lib/common.sh#repo_slug_of_dir'
+part ontology "the ontology end to end: a brief's pack, a retired environment, routing, a rule captured in my words" needs windows paid covers 'orchestrator/knowledge.md,lib/knowledge.py,lib/knowledge_query.py,lib/knowledge_review.py,lib/knowledge_model.py,libexec/bosun-kg,lib/agent_state.py,lib/approvals.py,lib/delegate.py,lib/common.sh#knowledge_rules,lib/common.sh#window_knowledge_prompt,lib/common.sh#orchestrator_policy'
+part plugin-pickup "whether a running Claude picks up a changed command file of its plugin" needs install paid covers 'orchestrator/plugin/**'
+part update "bosun update with the agents at work: the take-stock and update prompts, to the real agents" needs windows paid covers 'libexec/bosun-update,libexec/bosun-checkin,lib/update.py,lib/update_agents.py,lib/update_windows.py,lib/update_notes.py,lib/update_back.py,lib/update_state.py,lib/signals.py,lib/checkout_work.py,tests/sandbox/update_patch.sh,lib/common.sh#recorded_restart,lib/common.sh#launch_recorded'
+part connectors "a window reaches only the MCP servers its list names, also resumed" needs windows paid covers 'lib/connectors.py,lib/connectors_claude.py,lib/connectors_codex.py,lib/claude_state.py,lib/codex_state.py,tests/sandbox/mcp_probe_server.py,libexec/bosun-refresh,libexec/bosun-trust,lib/common.sh#window_connectors,lib/common.sh#set_connector_settings,lib/common.sh#connector_settings*,lib/common.sh#resolve_connectors,lib/common.sh#lists_everything,lib/common.sh#launch_log,lib/common.sh#log_connector_lines,lib/common.sh#alert_missing_connectors,lib/common.sh#require_connector_limit,lib/common.sh#window_list'
+part plugins-windows "a repo window keeps my plugins, the orchestrator loads none of them" needs connectors paid covers 'lib/plugins.py,lib/plugins_claude.py,lib/common.sh#window_plugins,lib/common.sh#set_plugin_settings,lib/common.sh#plugin_settings*,lib/common.sh#resolve_plugins,lib/common.sh#require_plugin_limit,lib/common.sh#window_list'
+part headless "bosun's headless calls load none of my plugins: learning, the Slack watcher, the login check" needs install paid covers 'lib/plugins_claude.py,lib/learn.py,lib/learn_digest.py,lib/learn_checks.py,lib/slack_watch.py,lib/login.py,libexec/bosun-learn,libexec/bosun-slack-watch,libexec/bosun-alert,orchestrator/learn.md,orchestrator/slack-watch.md'
+part off-again "uninstall: nothing of bosun stays in either agent" needs install last paid covers 'libexec/bosun-uninstall,lib/uninstall.py,lib/uninstall_detect.py,lib/uninstall_plan.py,lib/agent_changes.py,lib/claude_state.py,lib/codex_state.py'
+parts_end

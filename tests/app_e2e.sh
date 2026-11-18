@@ -6,8 +6,12 @@
 # the clicks and the answers to its dialogs from actions/<n>.json, and log every command it runs and every address
 # it would open to log.jsonl. The checks read those, `bosun status --json`, `ps`, launchctl and the tools of the
 # desktop. It needs a logged-in desktop session (the status item), so it runs only in the throwaway Mac of
-# `tests/sandbox.sh mac app`, which starts it in two parts with a restart of the Mac between them: the part
-# before keeps its counts in ~/.app-e2e-results, the part after adds to them and ends with the summary.
+# `tests/sandbox.sh mac app`, which starts it in two halves with a restart of the Mac between them: the half
+# before keeps its counts in ~/.app-e2e-results, the half after adds to them and ends with the summary.
+#
+# In parts, the `part` lines at the end (tests/sandbox/e2e_parts.sh): E2E_PARTS names the ones a run runs
+# (tests/sandbox/mac.sh app --only, --changed); empty, all of them. The restart is the part `reboot`: without it,
+# mac.sh restarts nothing and the half before ends with the summary.
 #
 # BOSUN_E2E_APP_FROM=build (the default): the app is the ad hoc one app/build.sh made, copied in as ~/e2e/app.zip
 # and placed in ~/Applications the way `bosun app install` places an app (`bosun init` cannot offer an app that is
@@ -686,29 +690,6 @@ before_the_restart() {
   check "... Open at Login is still on, and bosun's login job loaded" bash -c 'test -f "$1" && launchctl print "$2/$3" >/dev/null' _ "$APP_PLIST" "$DOMAIN" "$LOGIN_JOB"
 }
 
-before_reboot() {
-  install_with_the_app
-  step_1
-  step_2
-  step_3
-  step_4
-  step_5
-  step_6
-  step_8
-  step_7_login
-  ask_the_app_to_quit_from_here
-  launch_app
-  check "the app, opened again with the hooks, shows its menu" wait_for 60 menu_says '.level != null'
-  step_automation_from_the_app
-  launch_app
-  check "the app, opened again with the hooks after the update, shows its menu" wait_for 60 menu_says '.level != null'
-  step_10
-  step_11
-  step_12
-  before_the_restart
-  echo "$passed $failed" >"$RESULTS"
-}
-
 # ---- after the restart: 7, and 9 -----------------------------------------------------------------------------------
 
 app_args() { ps -o args= -p "$(app_pids | head -1)"; }
@@ -751,21 +732,72 @@ step_9() {
   check "nothing named bosun is left in this home folder" bash -c '[ -z "$1" ] || { echo "$1"; exit 1; }' _ "$(named_bosun)"
 }
 
+# The second half of the part `reboot`, run as `tests/app_e2e.sh after-reboot` once the clone is back: the counts
+# the first half kept, step 7 after the login and step 9, then the summary.
 after_reboot() {
   [ -f "$RESULTS" ] && read -r passed failed <"$RESULTS"
   step_7_after
   step_9
   rm -f "$RESULTS"
+  parts_end
+}
+
+# ---- the parts (tests/sandbox/e2e_parts.sh): each a group of the steps above ----------------------------------------
+# Every part but install needs status, which brings bosun up and opens the app with its hooks, green: the state each
+# part after it starts from, as it is at the end of the part before it in a whole run.
+
+part_install() { install_with_the_app; }
+part_status() {
+  step_1
+  step_2
+  step_3
+}
+part_update() { step_4; }
+part_quit() {
+  step_5
+  step_6
+  step_8
+}
+part_login_automation() {
+  step_7_login
+  ask_the_app_to_quit_from_here
+  launch_app
+  check "the app, opened again with the hooks, shows its menu" wait_for 60 menu_says '.level != null'
+  step_automation_from_the_app
+  launch_app
+  check "the app, opened again with the hooks after the update, shows its menu" wait_for 60 menu_says '.level != null'
+}
+part_settings() {
+  step_10
+  step_11
+  step_12
+}
+# The restart's first half: bosun running, the app quit leaving it so, and the counts kept for the second half
+# (after_reboot), which tests/sandbox/mac.sh runs once the clone is back from its restart.
+part_reboot() {
+  before_the_restart
+  echo "$passed $failed" >"$RESULTS"
   echo
-  echo "$passed passed, $failed failed"
-  [ "$failed" -eq 0 ]
+  echo "the restart follows (tests/sandbox/mac.sh), then tests/app_e2e.sh after-reboot"
+  exit 0
 }
 
 case "$PART" in
-  before-reboot) before_reboot ;;
-  after-reboot) after_reboot ;;
+  before-reboot) ;;
+  after-reboot)
+    after_reboot
+    exit
+    ;;
   *)
     echo "Usage: tests/app_e2e.sh before-reboot | after-reboot" >&2
     exit 2
     ;;
 esac
+part install "bosun installed by its piped installer, the app placed (or, from the release, installed by bosun init)" covers 'get.sh,bin/bosun,install.sh,lib/init.py,lib/init_plan.py,lib/app_install.py,lib/app_release.py,libexec/bosun-app,app/build.sh,app/Resources/**,app/Package.swift,app/publisher.json,app/VERSION,tests/sandbox/claude-stand-in,tests/sandbox/gh-stand-in'
+part status "the menu: green with the windows, yellow with a problem and back, Open Console" needs install covers 'app/Sources/**,lib/menu_status.py,lib/menu_status_live.py,lib/console_live.py,lib/console_sessions.py,lib/keep_awake.py,libexec/bosun-status,lib/watchdog.py,libexec/bosun-watchdog,libexec/bosun-console,lib/console_server.py,lib/console_token.py,console/index.html,libexec/bosun-morning,templates/launchd-console.plist'
+part update "Check for Updates, Update Now, and the menu while the update waits for a busy window" needs status covers 'app/Sources/**,libexec/bosun-update,lib/update.py,lib/update_check.py,lib/update_lookup.py,lib/update_plan.py,lib/update_agents.py,lib/update_windows.py,lib/update_state.py,lib/update_facts.py,lib/update_summary.py,lib/menu_status.py,tests/sandbox/update_patch.sh,lib/common.sh#reload_changed_jobs,lib/common.sh#unload_jobs'
+part quit "Quit bosun.app with its choices, the app opened again starting bosun, Stop bosun, one copy at a time" needs status covers 'app/Sources/**,libexec/bosun-quit,lib/quit.py,lib/quit_live.py,lib/quit_state.py,lib/stop_marker.py,lib/common.sh#quit_*'
+part login-automation "Open at Login on, and what macOS says to a quit by Apple Event, from a login and from an update the app started" needs status covers 'app/Sources/**,templates/launchd-app.plist,libexec/bosun-app,lib/app_install.py,tests/sandbox/update_quit_probe.sh,lib/common.sh#app_*,lib/common.sh#render_app_plist'
+part settings "the Settings window: start at login and the start time, outside the hours, a reload of the jobs after a stop" needs status covers 'app/Sources/**,libexec/bosun-settings,lib/settings.py,libexec/bosun-morning,lib/login_start.py,lib/awake.py,lib/common.sh#reload_changed_jobs,lib/common.sh#render_*,lib/common.sh#job_calendar,lib/common.sh#set_wake,lib/common.sh#cancel_wake,lib/common.sh#wake_*,lib/common.sh#record_keep_awake'
+part reboot "a restart: the app and bosun started at login, then the app in the Trash and an uninstall" needs login-automation last covers 'templates/launchd-app.plist,templates/launchd-login.plist,lib/login_start.py,lib/stop_marker.py,lib/watchdog.py,libexec/bosun-morning,libexec/bosun-app,libexec/bosun-uninstall,lib/uninstall.py,lib/uninstall_plan.py,app/Sources/BosunMenuCore/Launch.swift,app/Sources/BosunMenu/AppDelegate.swift'
+parts_end

@@ -2,11 +2,14 @@
 # Usage: tests/sandbox.sh [init | unit | smoke | all | shell]
 #        tests/sandbox.sh mac (setup | run [--from-nothing] | work [--base <git ref>] | app [--from build|release]
 #                              | live [claude|codex|agy] | shell | try [--from release|checkout] [codex] | clean)
+#        tests/sandbox.sh mac (run | work | app | live) ... (--only <part>[,...] | --changed <git ref> [--list]) [-x]
+#        tests/sandbox.sh mac --changed <git ref>   (which parts of each suite the change reaches; runs nothing)
 #
 # Run bosun on a clean machine that cannot touch this one: a throwaway Linux container with a
 # read-only copy of this checkout. Docker on a Mac is Linux, so launchctl, pmset and the like are
 # stand-ins (tests/sandbox/macos/): this tests bosun's logic, not launchd or a real wake. For those,
-# `mac` uses a real Mac in a Tart VM (tests/sandbox/mac.sh --help). Guide: docs/development.md.
+# `mac` uses a real Mac in a Tart VM (tests/sandbox/mac.sh --help: its suites are in parts, and a run can take the
+# ones a change reaches). Guide: docs/development.md.
 #   init   (default) a new user's first day: `bosun init`, a morning, re-runs, uninstall and back. No network.
 #   unit   the unit tests
 #   smoke  the smoke suite

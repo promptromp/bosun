@@ -5,8 +5,11 @@
 # (BOSUN_CONSOLE_ALWAYS=1: started by `bosun start`'s marker, stopped by `bosun quit`), `bosun quit` itself with
 # what the watchdog and the morning job do after it, `bosun update` from a release to the next one (on the
 # default `releases` channel, with an origin that carries release tags) and `--branch` to a branch of that origin
-# and back to main, the real pmset and plutil, and a clean uninstall. Claude Code is a stand-in, since these machines have no login. It changes the machine it runs on, so it only runs on a GitHub macOS runner
+# and back to main, the real pmset and plutil, and a clean uninstall. Claude Code is a stand-in, since these machines
+# have no login. It changes the machine it runs on, so it only runs on a GitHub macOS runner
 # (.github/workflows/install.yml) or in the throwaway Mac of tests/sandbox.sh mac.
+# In parts, the `part` lines at the end (tests/sandbox/e2e_parts.sh): E2E_PARTS names the ones a run runs, which
+# tests/sandbox/mac.sh (run --only, --changed) and the install job choose with tools/vm_select.py; empty, all of them.
 # Checks pass shell snippets to `bash -c '...' _ args`; their $ must not expand here.
 # shellcheck disable=SC2016
 set -uo pipefail
@@ -339,26 +342,49 @@ uninstall() {
   check "the agent's own config is still there" jq -e '.hasCompletedOnboarding == true' "$HOME/.claude.json"
 }
 
-a_new_machine
-follow_what_it_says
-install
-check "... versions side by side, the install path a link to the version in use" side_by_side
-nothing_chosen
-WINDOWS_ANSWERS_EXTRA='{"menu_app": false}' windows_by_answers acme-api
-console_job_for_real
-launchd_for_real
-now_job_for_real
-login_job_for_real
-quit_for_real
-# Only with an origin that has a release in it (tests/sandbox/mac.sh); a runner installs a branch's head.
-if [ -n "${BOSUN_E2E_RELEASE:-}" ]; then
+# ---- the parts (tests/sandbox/e2e_parts.sh): each a group of the steps above ----
+
+part_install() {
+  a_new_machine
+  follow_what_it_says
+  install
+  check "... versions side by side, the install path a link to the version in use" side_by_side
+  nothing_chosen
+  WINDOWS_ANSWERS_EXTRA='{"menu_app": false}' windows_by_answers acme-api
+}
+part_console_job() { console_job_for_real; }
+part_launchd() { launchd_for_real; }
+part_now_job() { now_job_for_real; }
+part_login_job() { login_job_for_real; }
+part_quit() { quit_for_real; }
+# Only with an origin that has a release in it (tests/sandbox/mac.sh and CI's install job make it: BOSUN_E2E_RELEASE).
+part_releases() {
+  [ -n "${BOSUN_E2E_RELEASE:-}" ] || {
+    echo "  note  no release origin (BOSUN_E2E_RELEASE): the releases are not checked"
+    return 0
+  }
   releases_for_real
+}
+part_branch() {
+  [ -n "${BOSUN_E2E_RELEASE:-}" ] || {
+    echo "  note  no release origin (BOSUN_E2E_RELEASE): --branch is not checked"
+    return 0
+  }
   branch_for_real
-fi
-run_again
-app_tools
-uninstall
-rm -rf "$OUT"
-echo
-echo "$passed passed, $failed failed"
-[ "$failed" -eq 0 ]
+}
+part_rerun() { run_again; }
+part_app_tools() { app_tools; }
+part_uninstall() { uninstall; }
+
+part install "a new machine: the piped installer says what is missing, then installs unattended" covers 'get.sh,install.sh,bin/bosun,lib/preflight.sh,lib/platforms/**,lib/harnesses/claude.sh,lib/init*.py,lib/run_locked.py,lib/versions.py,lib/install_paths.py,lib/agent_changes.py,libexec/bosun-init,libexec/bosun-preflight,libexec/bosun-doctor,libexec/bosun-trust,tests/sandbox/claude-stand-in,tests/sandbox/gh-stand-in,lib/common.sh#set_defaults,lib/common.sh#set_*_defaults,lib/common.sh#read_config,lib/common.sh#env_file_stops,lib/common.sh#load_config,lib/common.sh#is_env_override,lib/common.sh#log,lib/common.sh#log_to_file,lib/common.sh#die,lib/common.sh#refuse,lib/common.sh#usage*,lib/common.sh#die_usage,lib/common.sh#lock_here,lib/common.sh#one_at_a_time'
+part console-job "the console's launchd job: started by bosun start's marker, stays stopped without it" needs install covers 'templates/launchd-console.plist,libexec/bosun-console,lib/console_server.py,lib/console_token.py,lib/console_data.py,libexec/bosun-start,libexec/bosun-stop,lib/common.sh#console_*,lib/common.sh#render_console_plist'
+part launchd "launchd and pmset: the jobs loaded, the wake set, the morning job run by launchd" needs install covers 'templates/launchd.plist,templates/launchd-watchdog.plist,templates/launchd-learn.plist,libexec/bosun-morning,libexec/bosun-setup,lib/setup-helpers.sh,lib/log_files.py,lib/login.py,libexec/bosun-launch,lib/launch/claude.sh,lib/agents.sh,lib/agent_profiles.tsv,lib/common.sh#launchd_*,lib/common.sh#*_label,lib/common.sh#watchdog_plist,lib/common.sh#learn_plist,lib/common.sh#settings_lines,lib/common.sh#render_*,lib/common.sh#job_*,lib/common.sh#reload_job,lib/common.sh#stamp_job_loaded,lib/common.sh#shift_time,lib/common.sh#seconds_until*,lib/common.sh#awake_seconds_left,lib/common.sh#morning_log_file,lib/common.sh#run_with_timeout,lib/common.sh#wake_args_for,lib/common.sh#wake_owner,lib/common.sh#repeating_events,lib/common.sh#set_wake,lib/common.sh#tmux_cmd,lib/common.sh#session_exists,lib/common.sh#build_launch_command,lib/common.sh#launch_running,lib/common.sh#login_shell,lib/common.sh#window_specs,lib/common.sh#inside_bosun_tmux,lib/common.sh#window_dir_missing,lib/common.sh#find_window,lib/common.sh#attach_hint,lib/common.sh#note_error,lib/common.sh#note_reason,lib/common.sh#launch_refused,lib/common.sh#launch_error_file,lib/common.sh#claude_login'
+part now-job "the job that runs --now: bosun morning --now --background, whose tmux server is launchd's, not the caller's" needs install covers 'templates/launchd-now.plist,libexec/bosun-morning,lib/common.sh#now_label'
+part login-job "the login job: loaded, and it runs morning --at-login" needs install covers 'templates/launchd-login.plist,lib/login_start.py,lib/common.sh#login_label,lib/common.sh#login_reload_marker'
+part quit "bosun quit for real, then what the watchdog and the morning job do, and morning --now ending it" needs install covers 'libexec/bosun-quit,lib/quit.py,lib/quit_live.py,lib/quit_state.py,lib/stop_marker.py,lib/wait_knobs.py,libexec/bosun-watchdog,lib/watchdog.py,lib/awake.py,libexec/bosun-status,lib/menu_status.py,lib/menu_status_live.py,lib/console_live.py,lib/console_sessions.py,lib/keep_awake.py,lib/orphans.py,libexec/bosun-sessions,lib/common.sh#*keep_awake*,lib/common.sh#quit_*,lib/common.sh#stop_marker,lib/common.sh#start_marker,lib/common.sh#orphans,lib/common.sh#set_wrapper_args,lib/common.sh#reap_*,lib/common.sh#log_reaped'
+part releases "the releases: bosun update --check, --skip, and an update to the next release, its migration and jobs" needs install covers 'libexec/bosun-update,lib/update.py,lib/update_backups.py,lib/update_check.py,lib/update_facts.py,lib/update_gate.py,lib/update_lookup.py,lib/update_plan.py,lib/update_state.py,lib/update_summary.py,lib/versions.py,lib/migrations.py,lib/install_paths.py,lib/checkout_work.py,lib/file_tables.py,tests/sandbox/update_patch.sh,lib/common.sh#reload_changed_jobs,lib/common.sh#unload_jobs,lib/common.sh#update_hold_active,lib/common.sh#update_windows_pending,lib/common.sh#url_without_credentials'
+part branch "--branch: a branch of the origin followed, main again, then the releases" needs releases covers 'lib/update_lookup.py,lib/update_check.py,lib/update_back.py,libexec/bosun-settings,lib/settings.py'
+part rerun "get.sh again: the same answers change nothing" needs install covers 'get.sh,lib/init.py,lib/init_plan.py'
+part app-tools "the tools bosun app runs, for real: codesign, spctl, ditto, iconutil, and app/build.sh on a fresh Mac" needs install covers 'app/build.sh,app/Resources/**,app/Sources/**,app/Package.swift,app/Package.resolved,app/publisher.json,app/VERSION,lib/app_install.py,lib/app_release.py,libexec/bosun-app'
+part uninstall "uninstall through a real terminal: Enter is no, records kept, installed again, then --purge" needs install last covers 'libexec/bosun-uninstall,uninstall.sh,lib/uninstall.py,lib/uninstall_detect.py,lib/uninstall_plan.py,lib/uninstall_macos.py,lib/agent_changes.py,lib/file_tables.py,tests/sandbox/drive.py,tests/fixtures/knowledge/acme-import.jsonl,lib/common.sh#cancel_wake'
+parts_end

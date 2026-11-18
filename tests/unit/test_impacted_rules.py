@@ -181,7 +181,12 @@ class PluginTest(unittest.TestCase):
         name = "tests/unit/test_tickets.py"
         self.assertEqual(
             self.selected(name),
-            {name, "tests/unit/test_impacted_rules.py", "tests/unit/test_smoke_selection.py"},
+            {
+                name,
+                "tests/unit/test_impacted_rules.py",
+                "tests/unit/test_smoke_selection.py",
+                "tests/unit/test_vm_selection.py",
+            },
         )
 
     def test_the_plugin_selects_what_the_rules_say_for_what_bosun_reads(self) -> None:
@@ -203,6 +208,7 @@ class PluginTest(unittest.TestCase):
                 "tests/unit/test_update_summary.py",
                 "tests/unit/test_impacted_rules.py",
                 "tests/unit/test_smoke_selection.py",
+                "tests/unit/test_vm_selection.py",
             },
         )
 

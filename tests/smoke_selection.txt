@@ -62,6 +62,7 @@ ignore tests/llm/**
 ignore tests/fixtures/corpus/**
 ignore tests/fixtures/migrations/**
 ignore tests/sandbox.sh
+ignore tests/vm_selection.txt
 ignore tests/install_e2e.sh
 ignore tests/work_e2e.sh
 ignore tests/app_e2e.sh
