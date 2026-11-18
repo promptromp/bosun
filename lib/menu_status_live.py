@@ -199,11 +199,14 @@ def read_watchdog_facts(run: Run) -> dict[str, Any]:
 
 def launched_at(log_dir: Path) -> datetime | None:
     """When launchd last ran the watchdog, whatever the run did: its output file (which every run that skipped
-    writes a line to, in a quit or an update's hold, where `last_run` stays as it was). Local and naive."""
+    writes a line to, in a quit or an update's hold, where `last_run` stays as it was). Local and naive, to
+    the second, as now is (watchdog.current_time): a run in the second of now is not a time after it, which
+    watchdog_stale leaves out."""
     try:
-        return datetime.fromtimestamp((log_dir / "watchdog.launchd.out").stat().st_mtime)
+        written = (log_dir / "watchdog.launchd.out").stat().st_mtime
     except OSError:
         return None
+    return datetime.fromtimestamp(written).replace(microsecond=0)
 
 
 KERNEL_TIME = re.compile(r"\bsec = (\d+)\b")

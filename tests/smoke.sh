@@ -518,6 +518,9 @@ export BOSUN_LAUNCH_DRY_RUN=1
 # The journal's flushes without macOS's F_FULLFSYNC (lib/journal.py): with several checkouts' suites writing on
 # one drive, each full flush waits for the drive's whole cache, and the update section's 60-second waits ran out.
 export BOSUN_PLAIN_FSYNC=1
+# bosun's own waits between looks, which have a knob for tests: quit --let-finish's poll (5 s) and an update's wait
+# between turns at the windows it brings along (5 s), short here; their defaults are held by the unit tests.
+export BOSUN_QUIT_POLL_SECONDS=0.5 BOSUN_UPDATE_POLL_SECONDS=0.5
 export BOSUN_ORCHESTRATOR="" # orchestrator tests below enable it explicitly
 REPO_A="$WORK/repos/svc-a"
 REPO_B="$WORK/repos/svc-b"
@@ -1007,19 +1010,24 @@ check "... or - when that is empty" test "$(BOSUN_MODEL="" fnc harness_default_m
 check "harness_bin of an agent with no profile exits 1 and prints nothing" bash -c 'source "$1/lib/common.sh"; load_config; out="$(harness_bin acme-agent 2>&1)" && exit 1; [ -z "$out" ]' _ "$ROOT"
 check "... as does harness_default_model" bash -c 'source "$1/lib/common.sh"; load_config; out="$(harness_default_model acme-agent 2>&1)" && exit 1; [ -z "$out" ]' _ "$ROOT"
 check "known_harnesses lists the agents in the order of AGENTS" test "$(fn known_harnesses)" = "claude codex agy"
+check "launchd_paths gives a line per tool, - for one launchd's PATH does not find, in the middle and at the end" \
+  test "$(fn launchd_paths jq acme-missing-tool tmux acme-missing-last | sed 's#^/.*/##' | paste -sd' ' -)" = "jq - tmux -"
 check "profile_field reads a column by its name" test "$(fn profile_field codex flags_key)" = BOSUN_CODEX_FLAGS
 check "find_window finds an early match in a long listing, exit 0 under pipefail" bash -c 'set -o pipefail; source "$1/lib/common.sh"; tmux_cmd() { printf "w1\t42 @1\n"; awk "BEGIN { for (i = 0; i < 300000; i++) print \"x\t1 @2\" }"; }; out="$(find_window w1)"; rc=$?; [ "$out" = "42 @1" ] && [ "$rc" = 0 ]' _ "$ROOT"
 check "window_harness finds an early match in a long window list, as it does under pipefail" bash -c 'set -o pipefail; source "$1/lib/common.sh"; load_config; window_specs() { printf "w1\t\t\t\t\tcodex\n"; awk "BEGIN { for (i = 0; i < 300000; i++) print \"x\" }"; }; out="$(window_harness w1)"; rc=$?; [ "$out" = codex ] && [ "$rc" = 0 ]' _ "$ROOT"
+# The profiles are a table the shell reads (lib/agent_profiles.tsv), so what can fail is the table: missing or empty
+# stops the command, saying so. BOSUN_ROOT is set after common.sh, so only the table's folder moves.
+mkdir -p "$WORK/no-profiles/lib" "$WORK/empty-profiles/lib"
+: >"$WORK/empty-profiles/lib/agent_profiles.tsv"
+for table_root in no-profiles empty-profiles; do
+  check "profiles that cannot be read stop the command, saying so ($table_root)" fails_with "could not read the agents' profiles: $WORK/$table_root/lib/agent_profiles.tsv is missing" bash -c 'source "$1/lib/common.sh"; BOSUN_ROOT="$2"; harness_bin claude' _ "$ROOT" "$WORK/$table_root"
+done
 mkdir -p "$WORK/broken-python"
 printf '#!/bin/sh\necho "python is broken" >&2\nexit 1\n' >"$WORK/broken-python/python3"
 chmod +x "$WORK/broken-python/python3"
-check "profiles that cannot be read stop the command, saying so" fails_with "could not read the agents' profiles" bash -c 'source "$1/lib/common.sh"; PATH="$2:$PATH"; harness_bin claude' _ "$ROOT" "$WORK/broken-python"
-mkdir -p "$WORK/chatty-python"
-printf '#!/bin/sh\necho "acme warning: something deprecated" >&2\nexec "%s" "$@"\n' "$(command -v python3)" >"$WORK/chatty-python/python3"
-chmod +x "$WORK/chatty-python/python3"
-check "a python3 that warns on stderr leaves the profiles alone" test "$(bash -c 'source "$1/lib/common.sh"; PATH="$2:$PATH"; known_harnesses' _ "$ROOT" "$WORK/chatty-python" 2>/dev/null)" = "claude codex agy"
+check "reading the profiles starts no python3: a broken one leaves them alone" test "$(bash -c 'source "$1/lib/common.sh"; PATH="$2:$PATH"; known_harnesses' _ "$ROOT" "$WORK/broken-python" 2>&1)" = "claude codex agy"
 for shell_bin in /bin/bash bash; do
-  check "... and agent_bin_env works under $shell_bin" test "$(BOSUN_CODEX_BIN=acme-codex "$shell_bin" -c 'source "$1/lib/common.sh"; load_config; PATH="$2:$PATH"; agent_bin_env; printf "%s\n" "${agent_bin_assignments[@]}"' _ "$ROOT" "$WORK/chatty-python" 2>/dev/null | tr '\n' ' ')" = "BOSUN_CLAUDE_BIN=claude BOSUN_CODEX_BIN=acme-codex BOSUN_AGY_BIN=agy "
+  check "... and agent_bin_env works under $shell_bin" test "$(BOSUN_CODEX_BIN=acme-codex "$shell_bin" -c 'source "$1/lib/common.sh"; load_config; PATH="$2:$PATH"; agent_bin_env; printf "%s\n" "${agent_bin_assignments[@]}"' _ "$ROOT" "$WORK/broken-python" 2>/dev/null | tr '\n' ' ')" = "BOSUN_CLAUDE_BIN=claude BOSUN_CODEX_BIN=acme-codex BOSUN_AGY_BIN=agy "
 done
 cat >"$WORK/specs-agents.yml" <<YML
 sessions:
@@ -1703,9 +1711,75 @@ check "... but not once it is set, to nothing too" bash -c '! grep -qF "$2" <<<"
   _ "$("${ORCH[@]}" "$BOSUN" doctor 2>&1)" "$UNSET_LINE"
 printf 'BOSUN_CHECKIN_MINS=30\nBOSUN_CHECKIN_MINUTES=abc\n' >"$BOSUN_CONFIG_DIR/bosun.env"
 out="$("$BOSUN" doctor 2>&1)"
+out_status=$?
 check "doctor names a key bosun.env sets that bosun does not read, and the one it most likely meant" contains "$out" \
   "warn  bosun.env sets BOSUN_CHECKIN_MINS: bosun does not read it: did you mean BOSUN_CHECKIN_MINUTES?"
 check "... and a word where a number goes" contains "$out" "warn  BOSUN_CHECKIN_MINUTES is 'abc', not a whole number"
+# doctor's checks run side by side, each into files of its own in a temporary folder; without one, they run one after
+# another, and the report is the same, line for line (times of day aside), with the same exit status.
+check "doctor without a temporary folder runs its checks one after another and says the same" bash -c '
+  untimed() { sed -E "s/[0-9]{2}:[0-9]{2}:[0-9]{2}//"; }
+  said="$(TMPDIR=/nonexistent "$2" doctor 2>&1)"; status=$?
+  [ "$status" = "$3" ] && [ "$(untimed <<<"$said")" = "$(untimed <<<"$1")" ] || { diff <(untimed <<<"$1") <(untimed <<<"$said"); exit 1; }' \
+  _ "$out" "$BOSUN" "$out_status"
+# Its tools as launchd's PATH finds them: claude, the last of the list, not found is a failure of its own (a line per
+# tool, however many at the end are missing; launchd_paths in common-functions for one in the middle).
+out_missing="$(BOSUN_CLAUDE_BIN=acme-missing-claude "$BOSUN" doctor 2>&1)"
+missing_status=$?
+check "doctor fails a claude that launchd's PATH does not find, the last tool of its list, and exits 1" bash -c '
+  grep -qxF "  FAIL  acme-missing-claude not found on launchd PATH" <<<"$1" && [ "$2" = 1 ]' _ "$out_missing" "$missing_status"
+# The windows' agents asked at once (lib/agent_state.py windows): an answer that fails as a whole (no python3, say)
+# is one failure saying so, not a trust failure and a new session for every window. A python3 that fails only for
+# that, for one doctor run.
+printf '#!/bin/sh\ncase "$1 $2" in */agent_state.py\\ windows) echo "acme: agent_state could not start" >&2; exit 1 ;; esac\nexec "%s" "$@"\n' \
+  "$(command -v python3)" >"$HOME/.local/bin/python3"
+chmod +x "$HOME/.local/bin/python3"
+out_unasked="$("$BOSUN" doctor 2>&1)"
+rm -f "$HOME/.local/bin/python3"
+check "doctor says once that the windows' agents could not be asked, and why, and nothing of each window's trust" bash -c '
+  [ "$(grep -c "FAIL  could not ask the windows.* agents whether they trust their folders" <<<"$1")" = 1 ] &&
+    grep -q "(lib/agent_state.py windows): acme: agent_state could not start$" <<<"$1" &&
+    ! grep -qE "does not trust|no session with this exact name" <<<"$1"' _ "$out_unasked"
+# ... and one that answers too few lines and says nothing on stderr is told by what it did.
+printf '#!/bin/sh\ncase "$1 $2" in */agent_state.py\\ windows) exit 0 ;; esac\nexec "%s" "$@"\n' "$(command -v python3)" >"$HOME/.local/bin/python3"
+chmod +x "$HOME/.local/bin/python3"
+out_unasked="$("$BOSUN" doctor 2>&1)"
+rm -f "$HOME/.local/bin/python3"
+check "... with what it did for a reason when it said nothing" contains "$out_unasked" \
+  "(lib/agent_state.py windows): it exited 0 with 0 line(s) for 3 window(s)"
+# The window list is read once, its stdout only: what it says on stderr while it works (here the orchestrator's
+# check-in loop reading a word where the minutes go) is no window of the connectors' or the models' lines.
+check "doctor's window list is the list's stdout: its stderr is no window" bash -c '
+  ! sed -n "/^Connectors/,/^Schedule/p" <<<"$1" | grep -q "integer expression expected"' \
+  _ "$("${ORCH[@]}" BOSUN_CHECKIN_MINUTES=abc "$BOSUN" doctor 2>/dev/null)"
+# doctor cut short (a TERM here; Ctrl-C ends it the same way) stops what its checks run, by pid: here a claude that
+# hangs on `auth status`, which preflight and the login check ask (their own timeout is 30 s).
+cat >"$WORK/hang-claude" <<FAKE
+#!/bin/bash
+case "\$1" in
+  --version) echo "2.0.0 (Claude Code)" ;;
+  auth) echo \$\$ >>"$WORK/hang-claude.pids"; exec sleep 60 ;;
+esac
+FAKE
+chmod +x "$WORK/hang-claude"
+rm -f "$WORK/hang-claude.pids"
+BOSUN_CLAUDE_BIN="$WORK/hang-claude" "$BOSUN" doctor >/dev/null 2>&1 &
+hung_doctor=$!
+# Both askers hang (preflight's and the login check's), so neither is about to start its claude while doctor stops it.
+wait_for 30 bash -c '[ "$(wc -l <"$1")" -ge 2 ]' _ "$WORK/hang-claude.pids"
+# Its checks (its own children: a shell each), then a second TERM while it stops them, as an impatient Ctrl-C does:
+# it is ignored, so no check is left frozen.
+ps -Ao pid=,ppid= | awk -v doctor="$hung_doctor" '$2 == doctor { print $1 }' >>"$WORK/hang-claude.pids"
+kill -TERM "$hung_doctor"
+sleep 0.1
+kill -TERM "$hung_doctor" 2>/dev/null
+wait "$hung_doctor" 2>/dev/null
+# Within 5 s none of those runs; if one does, it is named.
+check "doctor cut short, twice, leaves nothing its checks started running, nor a check of its own" bash -c '
+  left() { while read -r pid; do kill -0 "$pid" 2>/dev/null && ps -o pid=,ppid=,stat=,command= -p "$pid"; done <"$1"; }
+  for _ in $(seq 1 25); do [ -z "$(left "$1")" ] && exit 0; sleep 0.2; done
+  left "$1"; exit 1' _ "$WORK/hang-claude.pids"
+while read -r hung; do kill "$hung" 2>/dev/null && kill -CONT "$hung" 2>/dev/null; done <"$WORK/hang-claude.pids"
 rm -f "$BOSUN_CONFIG_DIR/bosun.env"
 mkdir -p "$HOME/.claude"
 echo '{"allowedMcpServers": [{"serverName": "acme-local"}]}' >"$HOME/.claude/settings.json"
@@ -2422,7 +2496,8 @@ BOSUN_EVENTS_ENABLED=1 BOSUN_EVENTS_INTERVAL_SECONDS=1 BOSUN_CHECKIN_EVERY_SECON
   "$BOSUN" checkin --loop --dry-run >"$WORK/deferred-loop.out" 2>&1 &
 deferred_loop=$!
 check "the loop keeps a deferred check-in due" wait_for 30 grep -q "the check-in stays due; retrying every tick" "$WORK/deferred-loop.out"
-sleep 3
+check "... and retries on its next ticks while the orchestrator is busy (each tick's events line)" wait_for 30 bash -c '
+  [ "$(sed -n "/the check-in stays due; retrying every tick/,\$p" "$1" | grep -c "\[events\] dry-run: ")" -ge 3 ]' _ "$WORK/deferred-loop.out"
 orch_status idle 3600
 check "... and sends it on a later tick, once the orchestrator is free" wait_for 30 grep -q "would send '/bosun:chores check-in'" "$WORK/deferred-loop.out"
 pkill -P "$deferred_loop" 2>/dev/null
@@ -2787,10 +2862,15 @@ chmod +x "$WORK/live-claude"
 BOSUN_CLAUDE_BIN="$WORK/live-claude" "$BOSUN" start >/dev/null 2>&1
 wait_for 30 has_windows "orch alpha beta gamma checkin "
 live() { BOSUN_LAUNCH_DRY_RUN=0 BOSUN_START_TIMEOUT=5 "$BOSUN" send "$@"; }
-claude_in() { # <window>: prints the pid of the fake Claude running in the window
+# claude_in <window>: prints the pid of the fake Claude running in the window: the first of the pane's descendants
+# with a running-session record, which the fakes write for themselves ($HOME/.claude/sessions/<pid>.json). Read by
+# the shell, with no Python started (agent_pid_under asks lib/agent_state.py), since wait_for loops call it.
+claude_in() {
   local pane_pid
   pane_pid="$(tmux -L "$SOCKET" list-windows -t "=smoke" -F '#{window_name} #{pane_pid}' | awk -v w="$1" '$1 == w { print $2 }')"
-  bash -c 'source "$1/lib/common.sh"; agent_pid_under "$2"' _ "$ROOT" "$pane_pid"
+  bash -c 'source "$1/lib/common.sh"
+    for pid in $(descendants "$2"); do [ -f "$HOME/.claude/sessions/$pid.json" ] && echo "$pid" && exit 0; done
+    exit 1' _ "$ROOT" "$pane_pid"
 }
 # Longer than the 1024-byte terminal line limit, multi-line, and full of shell metacharacters.
 long_prompt="$(
@@ -2822,7 +2902,7 @@ another_claude_in() { # <window> <old pid>: a fake Claude other than that one ru
   local pid
   pid="$(claude_in "$1")" && [ -n "$pid" ] && [ "$pid" != "$2" ]
 }
-check "... and an update's restart of it" env BOSUN_LAUNCH_DRY_RUN=0 "$BOSUN" refresh --update-restart "$WORK/update-prompt" zeta
+check "... and an update's restart of it" env BOSUN_LAUNCH_DRY_RUN=0 BOSUN_AGENT_SETTLE_SECONDS=0.5 "$BOSUN" refresh --update-restart "$WORK/update-prompt" zeta
 check "... starts it again" wait_for 15 another_claude_in zeta "$zeta_pid"
 check "... keeping its --model and --effort, with the update's prompt" bash -c '
   grep -qx haiku "$1.args" && grep -q "\"effortLevel\":\"low\"" "$1.args" && [ "$(cat "$1.prompt")" = bosun-was-updated:check-in ]' _ "$WORK/live-claude.$(claude_in zeta)"
@@ -2831,7 +2911,7 @@ kill "$zeta_pid"
 wait_for 30 bash -c '! pgrep -P "$(tmux -L "$1" display -p -t =smoke:zeta "#{pane_pid}")" >/dev/null' _ "$SOCKET"
 # A real Claude leaves its conversation to resume; this fake writes none, so zeta is given one.
 make_session "$REPO_A" 44444444-0000-0000-0000-000000000001 zeta 202601040000
-check "... and once its agent has exited, an update's restart" env BOSUN_LAUNCH_DRY_RUN=0 "$BOSUN" refresh --update-restart "$WORK/update-prompt" zeta
+check "... and once its agent has exited, an update's restart" env BOSUN_LAUNCH_DRY_RUN=0 BOSUN_AGENT_SETTLE_SECONDS=0.5 "$BOSUN" refresh --update-restart "$WORK/update-prompt" zeta
 check "... starts it again" wait_for 15 another_claude_in zeta "$zeta_pid"
 check "... keeping them too, resuming its conversation with the update's prompt" bash -c '
   grep -qx haiku "$1.args" && grep -q "\"effortLevel\":\"low\"" "$1.args" && [ "$(cat "$1.prompt")" = bosun-was-updated:check-in ]' _ "$WORK/live-claude.$(claude_in zeta)"
@@ -2839,7 +2919,7 @@ echo "BOSUN_HARNESS=codex" >"$BOSUN_CONFIG_DIR/bosun.env"
 check "a send --new window launched on Claude, the default agent now Codex, fingerprints the same" bash -c '
   [ "$(cd / && "$1" launch --fingerprint zeta | jq -cS .)" = "$(jq -cS .fingerprint "$2/launches/smoke/zeta.json")" ]' _ "$BOSUN" "$BOSUN_STATE_DIR"
 zeta_pid="$(claude_in zeta)"
-check "... and an update's restart of it" env BOSUN_LAUNCH_DRY_RUN=0 "$BOSUN" refresh --update-restart "$WORK/update-prompt" zeta
+check "... and an update's restart of it" env BOSUN_LAUNCH_DRY_RUN=0 BOSUN_AGENT_SETTLE_SECONDS=0.5 "$BOSUN" refresh --update-restart "$WORK/update-prompt" zeta
 check "... starts it again on Claude, as it was launched, with its --model" wait_for 15 another_claude_in zeta "$zeta_pid"
 check "... (its arguments are Claude's)" bash -c 'grep -qx -- --remote-control "$1.args" && grep -qx haiku "$1.args"' _ "$WORK/live-claude.$(claude_in zeta)"
 rm -f "$BOSUN_CONFIG_DIR/bosun.env"
@@ -2875,9 +2955,13 @@ check "--start starts Claude in an idle window" contains "$out" "Claude is runni
 alpha_pid="$(claude_in alpha)"
 check "--start resumes the window's named session" grep -qx 11111111-0000-0000-0000-000000000002 "$WORK/live-claude.$alpha_pid.args"
 check "--start delivers the prompt" test "$(cat "$WORK/live-claude.$alpha_pid.prompt")" = "resume with this"
-out="$(live --start beta "x" 2>&1)"
+started=$SECONDS
+# a timeout far above how long the early end takes even on a slow machine, so the two cannot be mistaken
+out="$(BOSUN_LAUNCH_DRY_RUN=0 BOSUN_START_TIMEOUT=60 "$BOSUN" send --start beta "x" 2>&1)"
 check "--start fails when Claude does not start" test $? -ne 0
 check "a failed start shows the window's output" contains "$out" "already running as pid $$"
+check "... as soon as its launch has ended, saying so, not at BOSUN_START_TIMEOUT (60 s here)" bash -c '
+  grep -q "but its launch ended without starting a Claude session" <<<"$1" && [ "$2" -lt 30 ]' _ "$out" "$((SECONDS - started))"
 out="$(live --new epsilon "$TRUST_REPO" hi 2>&1)"
 check "--new trusts a repo inside the mask before starting" contains "$out" "trusted: $TRUST_REPO"
 check "... and Claude starts there" contains "$out" "Claude is running in smoke:epsilon"
@@ -3085,12 +3169,22 @@ check "with events on, the dispatcher runs as the loop starts, not an interval l
   [ "$ran" = 1 ]' _ "$BOSUN" "$WORK/events-start.out" "$BOSUN_STATE_DIR"
 check "one check-in refuses while check-ins are off" fails_with "check-ins are disabled" env BOSUN_CHECKIN_MINUTES=0 "$BOSUN" checkin
 check "the loop refuses with check-ins off unless events run without them" fails_with "BOSUN_EVENTS_WITHOUT_CHECKINS=1 keeps the loop" env BOSUN_CHECKIN_MINUTES=0 BOSUN_EVENTS_ENABLED=1 "$BOSUN" checkin --loop
+# It keeps running: the dispatcher ticks as it starts and again an interval later (its last_tick, to the second).
 check "with events alone the loop keeps running and sends no check-in" bash -c '
+  state="$3/events/state.json"
+  tick() { grep -o "\"last_tick\": *\"[^\"]*\"" "$state" 2>/dev/null; }
+  last="$(tick)" ticks=0
   BOSUN_CHECKIN_MINUTES=0 BOSUN_EVENTS_ENABLED=1 BOSUN_EVENTS_WITHOUT_CHECKINS=1 BOSUN_EVENTS_INTERVAL_SECONDS=1 \
     "$1" checkin --loop >"$2" 2>&1 & pid=$!
-  sleep 3; alive=0; kill -0 $pid 2>/dev/null && alive=1
+  for _ in $(seq 1 40); do
+    now="$(tick)"
+    if [ -n "$now" ] && [ "$now" != "$last" ]; then ticks=$((ticks + 1)) last="$now"; fi
+    [ "$ticks" -ge 2 ] && break
+    sleep 0.25
+  done
+  alive=0; kill -0 $pid 2>/dev/null && alive=1
   kill $pid 2>/dev/null; pkill -P $pid 2>/dev/null; wait $pid 2>/dev/null
-  [ "$alive" = 1 ] && ! grep -q "chores check-in" "$2"' _ "$BOSUN" "$WORK/events-loop.out"
+  [ "$ticks" -ge 2 ] && [ "$alive" = 1 ] && ! grep -q "chores check-in" "$2"' _ "$BOSUN" "$WORK/events-loop.out" "$BOSUN_STATE_DIR"
 
 section delegate "delegate (task types)" covers 'libexec/bosun-delegate,libexec/bosun-ledger,docs/orchestrator.md'
 L upsert 'review:acme/api#5' --kind review-request --title 'Add X' >/dev/null
@@ -3160,11 +3254,17 @@ env | grep -E '^(BOSUN_|PATH=|ENABLE_CLAUDEAI_MCP_SERVERS=)' >"$WORK/fake-claude
 "$BOSUN" ledger upsert 'review:o/r#9' --kind review-request --title 'From dry run' >/dev/null
 echo '{"result":"fake plan","total_cost_usd":0.01,"num_turns":1,"permission_denials":[{"tool_name":"Bash","tool_input":{"command":"gh pr merge x"}}]}'
 FAKE
+# The three rehearsals below start in one second, by a stand-in date that gives a folder's stamp as 2026-01-05
+# 09:00:00 (and anything else as date does), so they number their folders -01, -02 and -03.
+printf '#!/bin/sh\n[ "$1" = "+%%Y%%m%%d-%%H%%M%%S" ] && { echo 20260105-090000; exit 0; }\nexec /bin/date "$@"\n' >"$HOME/.local/bin/date"
+chmod +x "$HOME/.local/bin/date"
 out="$("$BOSUN" chores morning --dry-run 2>&1)"
 check "dry run prints the plan" contains "$out" "fake plan"
 check "dry run reports scratch ledger changes" contains "$out" "+ review:o/r#9"
 check "dry run reports blocked tool calls" contains "$out" "- Bash: gh pr merge x"
 check "dry run uses a scratch state dir" grep -q "^BOSUN_STATE_DIR=$BOSUN_STATE_DIR/dry-runs/" "$WORK/fake-claude.env"
+scratch_of_run() { sed -n 's/^BOSUN_STATE_DIR=//p' "$WORK/fake-claude.env"; } # the last rehearsal's scratch state
+first_rehearsal="$(scratch_of_run)"
 check "dry run turns on send dry-run" grep -qx "BOSUN_SEND_DRY_RUN=1" "$WORK/fake-claude.env"
 check "dry run puts this checkout's bosun first on PATH" grep -q "^PATH=$ROOT/bin:" "$WORK/fake-claude.env"
 check "dry run loads orchestrator settings and plugin" bash -c 'grep -qx -- --settings "$1" && grep -qx -- --plugin-dir "$1"' _ "$WORK/fake-claude.args"
@@ -3177,15 +3277,18 @@ check "dry run limits the connectors as the orchestrator's launch does" bash -c 
   [ "$(grep -A1 -x -- --settings "$1" | tail -1 | jq -c .allowedMcpServers)" = "[]" ] && ! grep -q ENABLE_CLAUDEAI "$2"' _ "$WORK/fake-claude.args" "$WORK/fake-claude.env"
 check "... and holds it to its plugins as its launch does (none of mine)" bash -c '
   [ "$(grep -A1 -x -- --settings "$1" | tail -1 | jq -c .enabledPlugins)" = "{}" ]' _ "$WORK/fake-claude.args"
-sleep 1
 env -u ENABLE_CLAUDEAI_MCP_SERVERS BOSUN_ORCHESTRATOR_CONNECTORS=acme-local "$BOSUN" chores morning --dry-run >/dev/null 2>&1
+second_rehearsal="$(scratch_of_run)"
 check "... with the orchestrator's list, and claude.ai's connectors on when it names any" bash -c '
   settings="$(grep -A1 -x -- --settings "$1" | tail -1)"
   [ "$(jq -c .allowedMcpServers <<<"$settings")" = "[{\"serverName\":\"acme-local\"}]" ] && grep -q PreToolUse <<<"$settings" &&
     grep -qx ENABLE_CLAUDEAI_MCP_SERVERS=true "$2"' _ "$WORK/fake-claude.args" "$WORK/fake-claude.env"
-sleep 1
 out="$("$BOSUN" chores morning --dry-run --continue 2>&1)"
-check "--continue starts from the previous rehearsal" contains "$out" "seeded from $BOSUN_STATE_DIR/dry-runs/"
+rm -f "$HOME/.local/bin/date"
+# Each has a folder of its own, numbered within its second, and --continue seeds from the one just before.
+check "each rehearsal has a folder of its own, numbered within the second they all start in" bash -c '
+  [ "$1 $2 $3" = "$4-01 $4-02 $4-03" ]' _ "$first_rehearsal" "$second_rehearsal" "$(scratch_of_run)" "$BOSUN_STATE_DIR/dry-runs/20260105-090000"
+check "--continue starts from the previous rehearsal" contains "$out" "seeded from $second_rehearsal/ledger.json"
 check "--continue sees earlier items as existing" contains "$out" "(0 change(s)"
 
 section chores-options "chores options" covers 'libexec/bosun-chores'
@@ -3386,6 +3489,14 @@ out="$(BOSUN_CONFIG_DIR="$SETUP_CFG" BOSUN_NETWORK_PROBE_URL=file:///dev/null "$
 check "morning --dry-run would hold the keep-awake" contains "$out" "dry-run: would hold keep-awake for 5 minutes"
 check "... but starts no caffeinate" test ! -f "$BOSUN_STATE_DIR/keep-awake-smoke.pid"
 check "it waits for the network" contains "$out" "network is up"
+# With no network it probes every 5 seconds, but sleeps no longer than what is left of its timeout: the wait alone,
+# timed by the log's own clock from the line just before it (the keep-awake's) to its last, is its 1 s, not 5 s.
+out_down="$(BOSUN_CONFIG_DIR="$SETUP_CFG" BOSUN_NETWORK_PROBE_URL=file:///nonexistent-probe BOSUN_NETWORK_TIMEOUT=1 "$BOSUN" morning --dry-run --awake-minutes 5 2>&1)"
+check "... and gives up once its timeout is over, not at its next 5-second probe" bash -c '
+  clock() { grep -m1 "$1" <<<"$2" | awk "{ split(\$2, t, \":\"); print t[1] * 3600 + t[2] * 60 + t[3] }"; }
+  from="$(clock "would hold keep-awake" "$1")" to="$(clock "network still down after 1s; continuing" "$1")"
+  [ -n "$from" ] && [ -n "$to" ] && waited=$(((to - from + 86400) % 86400)) && [ "$waited" -le 3 ] ||
+    { echo "waited ${waited:-?} s for the network"; exit 1; }' _ "$out_down"
 check "it previews the setup steps" contains "$out" "aws profile good is valid, no login needed"
 check "it lists the windows it would start, with model and effort" contains "$out" "alpha (session, opus/medium) -> $REPO_A"
 check "it names no agent update when no agent in use has update_args" bash -c '! grep -qE "updated |could not update|would run .*update" <<<"$1"' _ "$out"
@@ -3659,17 +3770,21 @@ write_quit paused
 check "bosun status --json calls a quit record with windows still open an error, with how to finish" status_has 'd["level"] == "error" and d["sentence"] == "bosun quit did not finish" and "bosun quit --stop-now" in d["problems"][0] and "bosun start" in d["problems"][0]'
 rm -f "$BOSUN_STATE_DIR/quit.json"
 
-# alpha finishes a few seconds into the wait; beta keeps waiting at its prompt, which does not hold the wait
+# alpha finishes once the quit says it waits for it (not at a fixed time, which a slow machine's quit could reach
+# only after alpha was done, and then never wait); beta keeps waiting at its prompt, which does not hold the wait.
 # A start still holds the windows lock when alpha is done: the quit takes it only for its stop phase, and waits.
-python3 "$ROOT/lib/run_locked.py" "$BOSUN_STATE_DIR/windows.lock" 10 busy -- sleep 12 &
+# (The wait polls every BOSUN_QUIT_POLL_SECONDS, 0.5 s here; the lock goes at 8 s, so a quit that waited for the lock
+# takes 6 s or more.)
+rm -f "$WORK/quit.err"
+python3 "$ROOT/lib/run_locked.py" "$BOSUN_STATE_DIR/windows.lock" 10 busy -- sleep 8 &
 wait_for 30 lock_taken "$BOSUN_STATE_DIR/windows.lock"
 (
-  sleep 7
+  wait_for 30 grep -q "Waiting for 1 busy window (alpha)" "$WORK/quit.err"
   agent_status "$quit_alpha" idle
 ) &
 quit_started=$SECONDS
-check "--let-finish waits (polling every 5 s) until alpha is done, though beta waits at a prompt, and for a start holding the windows lock, then quits: morning paused, Mac kept awake" env BOSUN_WINDOWS_LOCK_WAIT_SECONDS=30 bash -c '"$1" quit --let-finish=1 --pause-morning </dev/null >"$2" 2>"$3"' _ "$BOSUN" "$WORK/quit.out" "$WORK/quit.err"
-check "... it waited for alpha, then for the lock: 10 to 45 seconds" bash -c '[ "$1" -ge 10 ] && [ "$1" -le 45 ]' _ $((SECONDS - quit_started))
+check "--let-finish waits (polling every BOSUN_QUIT_POLL_SECONDS) until alpha is done, though beta waits at a prompt, and for a start holding the windows lock, then quits: morning paused, Mac kept awake" env BOSUN_WINDOWS_LOCK_WAIT_SECONDS=30 bash -c '"$1" quit --let-finish=1 --pause-morning </dev/null >"$2" 2>"$3"' _ "$BOSUN" "$WORK/quit.out" "$WORK/quit.err"
+check "... it waited for alpha, then for the lock: 6 to 45 seconds" bash -c '[ "$1" -ge 6 ] && [ "$1" -le 45 ]' _ $((SECONDS - quit_started))
 check "... it said once, on stderr, who it waited for" bash -c '[ "$(wc -l <"$1")" -eq 1 ] && grep -q "Waiting for 1 busy window (alpha), up to 1 minute" "$1"' _ "$WORK/quit.err"
 check "... it says what it stopped and who was waiting for you" bash -c 'grep -q "^bosun is stopped\.$" "$1" && grep -q "Stopped the windows: .*alpha" "$1" && grep -q "They were waiting for you: beta" "$1" && grep -q "paused until you run: bosun start" "$1"' _ "$WORK/quit.out"
 check "... no session is left" bash -c '! tmux -L "$1" has-session -t =smoke' _ "$SOCKET"
@@ -6123,8 +6238,10 @@ while IFS= read -r line; do
 done
 FAKE
   chmod +x "$U/fake-claude"
+  # The update's restarts are real (refresh --update-restart): an agent that lasts half a second has started, as the
+  # fakes live until stopped (BOSUN_AGENT_SETTLE_SECONDS, 2 s by default, is for tests).
   U_LIVE=(BOSUN_TMUX_SOCKET="$U_TMUX" BOSUN_LAUNCH_DRY_RUN=0 BOSUN_CLAUDE_BIN="$U/fake-claude" BOSUN_ORCHESTRATOR=orch
-    BOSUN_ORCHESTRATOR_DIR="$U_REPO" BOSUN_CHECKIN_MINUTES=0)
+    BOSUN_ORCHESTRATOR_DIR="$U_REPO" BOSUN_CHECKIN_MINUTES=0 BOSUN_AGENT_SETTLE_SECONDS=0.5)
   ul() { "${U_ENV[@]}" "${U_LIVE[@]}" "$U_LINK/bin/bosun" "$@"; }
   u_claude() { # <window>: the pid of the fake Claude running in it
     local pane_pid
@@ -6553,8 +6670,8 @@ fi
 unset BOSUN_LAUNCHD_LABEL
 
 # What this whole run left behind is the best list there is of what bosun writes: uninstall must know it all,
-# or the file stays on people's machines after they uninstall. A new file goes in lib/uninstall_plan.py's tables.
-section uninstall-files "uninstall knows every file bosun writes" covers 'lib/uninstall*.py,lib/agent_changes.py,libexec/bosun-uninstall'
+# or the file stays on people's machines after they uninstall. A new file goes in the tables of lib/file_tables.py.
+section uninstall-files "uninstall knows every file bosun writes" covers 'lib/uninstall*.py,lib/file_tables.py,lib/agent_changes.py,libexec/bosun-uninstall'
 knows_all_of() { # <state dir> <config dir>: names what it does not know
   local unknown
   unknown="$(BOSUN_STATE_DIR="$1" BOSUN_LOG_DIR="$1/logs" BOSUN_CONFIG_DIR="$2" "$BOSUN" uninstall --dry-run 2>&1 |

@@ -11,6 +11,7 @@ from typing import ClassVar
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import agent_state
+import file_tables as ft
 import journal as jr
 import log_files
 import uninstall_plan as up
@@ -133,71 +134,71 @@ class TheMenuBarApp(unittest.TestCase):
 
 class FileTables(unittest.TestCase):
     def test_each_agents_state_files_are_rows(self) -> None:
-        rows = up.agent_state_rows()
+        rows = ft.agent_state_rows()
         for agent in agent_state.AGENTS.values():
             for name in agent.PROFILE.state_files:
-                self.assertIn((name, up.WORKING), rows)
-                self.assertIn((name, up.WORKING), up.STATE_FILES)
+                self.assertIn((name, ft.WORKING), rows)
+                self.assertIn((name, ft.WORKING), ft.STATE_FILES)
                 if "/" not in name:
-                    self.assertIn((f".{name}.*", up.WORKING), rows)
-                    self.assertIn((f".{name}.*", up.WORKING), up.STATE_FILES)
+                    self.assertIn((f".{name}.*", ft.WORKING), rows)
+                    self.assertIn((f".{name}.*", ft.WORKING), ft.STATE_FILES)
 
     def test_the_rows_for_codex_are_what_they_were(self) -> None:
-        self.assertIn(("codex-sessions.json", up.WORKING), up.STATE_FILES)
-        self.assertIn((".codex-sessions.json.*", up.WORKING), up.STATE_FILES)
+        self.assertIn(("codex-sessions.json", ft.WORKING), ft.STATE_FILES)
+        self.assertIn((".codex-sessions.json.*", ft.WORKING), ft.STATE_FILES)
 
     def test_the_login_jobs_marker_and_logs_go_with_bosun(self) -> None:
-        self.assertEqual(up.kind_of("login-reload", up.STATE_FILES), up.WORKING)
+        self.assertEqual(ft.kind_of("login-reload", ft.STATE_FILES), ft.WORKING)
         for name in ("login.launchd.out", "login.launchd.err"):
-            self.assertEqual(up.kind_of(name, up.LOG_FILES), up.WORKING, name)
+            self.assertEqual(ft.kind_of(name, ft.LOG_FILES), ft.WORKING, name)
 
     def test_what_each_file_is(self) -> None:
         for name, kind in (
-            ("ledger.json", up.LEDGER),
-            ("ledger.json.bak", up.LEDGER),
-            ("ledger.json.tmp", up.WORKING),
-            ("learn", up.LEDGER),
-            ("journal", up.LEDGER),
-            ("replica.json", up.LEDGER),
-            (jr.REPLICA_TEMP.format(writer="4242.1a2b3c4d"), up.WORKING),  # replica.json cut short
-            ("ledger.lock", up.WORKING),
-            ("logs", up.WORKING),
-            ("stopped-bosun", up.WORKING),
-            ("keep-awake-bosun.pid", up.WORKING),
-            ("keep-awake-bosun.json", up.WORKING),  # when the hold ends, and its pid (bosun status --json)
-            (".keep-awake-bosun.json.4242", up.WORKING),  # that, cut short
-            (".ledger.json.restoring", up.WORKING),  # what an update's restore was writing, cut short
-            (".replica.json.restoring", up.WORKING),
-            ("anything-else", up.UNKNOWN),
+            ("ledger.json", ft.LEDGER),
+            ("ledger.json.bak", ft.LEDGER),
+            ("ledger.json.tmp", ft.WORKING),
+            ("learn", ft.LEDGER),
+            ("journal", ft.LEDGER),
+            ("replica.json", ft.LEDGER),
+            (jr.REPLICA_TEMP.format(writer="4242.1a2b3c4d"), ft.WORKING),  # replica.json cut short
+            ("ledger.lock", ft.WORKING),
+            ("logs", ft.WORKING),
+            ("stopped-bosun", ft.WORKING),
+            ("keep-awake-bosun.pid", ft.WORKING),
+            ("keep-awake-bosun.json", ft.WORKING),  # when the hold ends, and its pid (bosun status --json)
+            (".keep-awake-bosun.json.4242", ft.WORKING),  # that, cut short
+            (".ledger.json.restoring", ft.WORKING),  # what an update's restore was writing, cut short
+            (".replica.json.restoring", ft.WORKING),
+            ("anything-else", ft.UNKNOWN),
         ):
-            self.assertEqual(up.kind_of(name, up.STATE_FILES), kind, name)
+            self.assertEqual(ft.kind_of(name, ft.STATE_FILES), kind, name)
         for name, kind in (
-            ("bosun.env", up.SETTINGS),
-            ("bosun.env.pre-init-20261102-080000", up.SETTINGS),
-            ("bosun.env.pre-update-20261106-093005", up.SETTINGS),
-            ("bosun.env.pre-back-20261118-154200", up.SETTINGS),  # what bosun update --back kept
-            (".bosun.env.update.tmp", up.WORKING),  # bosun update's bosun.env, cut short
+            ("bosun.env", ft.SETTINGS),
+            ("bosun.env.pre-init-20261102-080000", ft.SETTINGS),
+            ("bosun.env.pre-update-20261106-093005", ft.SETTINGS),
+            ("bosun.env.pre-back-20261118-154200", ft.SETTINGS),  # what bosun update --back kept
+            (".bosun.env.update.tmp", ft.WORKING),  # bosun update's bosun.env, cut short
             (
                 jr.WRITING.format(name="bosun.env.pre-update-20261106-093005", writer="4242.1a2b3c4d"),
-                up.WORKING,
+                ft.WORKING,
             ),
-            ("tasks", up.SETTINGS),
-            (".bosun.env.restoring", up.WORKING),  # what an update's restore was writing, cut short
-            (".sessions.yml.restoring", up.WORKING),
-            ("knowledge", up.KNOWLEDGE),
-            ("forbidden-terms.txt", up.OURS_TO_LEAVE),
-            ("my-notes.txt", up.UNKNOWN),
+            ("tasks", ft.SETTINGS),
+            (".bosun.env.restoring", ft.WORKING),  # what an update's restore was writing, cut short
+            (".sessions.yml.restoring", ft.WORKING),
+            ("knowledge", ft.KNOWLEDGE),
+            ("forbidden-terms.txt", ft.OURS_TO_LEAVE),
+            ("my-notes.txt", ft.UNKNOWN),
         ):
-            self.assertEqual(up.kind_of(name, up.CONFIG_FILES), kind, name)
+            self.assertEqual(ft.kind_of(name, ft.CONFIG_FILES), kind, name)
 
     def test_a_restores_temporary_file_is_working_in_both_tables(self) -> None:
         """lib/update_backups.py writes each file it puts back as .<name>.restoring beside it first."""
-        for name, table in (("ledger.json", up.STATE_FILES), ("bosun.env", up.CONFIG_FILES)):
+        for name, table in (("ledger.json", ft.STATE_FILES), ("bosun.env", ft.CONFIG_FILES)):
             temporary = ub.RESTORING.format(name=name)
-            self.assertEqual(up.kind_of(temporary, table), up.WORKING, temporary)
+            self.assertEqual(ft.kind_of(temporary, table), ft.WORKING, temporary)
 
     def test_no_table_lists_a_name_twice(self) -> None:
-        for table in (up.STATE_FILES, up.CONFIG_FILES, up.LOG_FILES):
+        for table in (ft.STATE_FILES, ft.CONFIG_FILES, ft.LOG_FILES):
             names = [pattern for pattern, _ in table]
             self.assertEqual(len(names), len(set(names)))
 
@@ -247,7 +248,7 @@ class Folders(unittest.TestCase):
             "agy-api.log",
             "agy-api-2026-11-02-1.log",
         ):
-            self.assertEqual(up.kind_of(name, up.LOG_FILES), up.WORKING, name)
+            self.assertEqual(ft.kind_of(name, ft.LOG_FILES), ft.WORKING, name)
             if name.endswith(".log") and not name.startswith("agy-"):
                 self.assertIsNotNone(log_files.day_of(name), name)  # what the morning run prunes, too
         for name in (
@@ -258,7 +259,7 @@ class Folders(unittest.TestCase):
             "backup-2026-11-01.log",  # someone else's day file in a shared folder
             "rsync-backup-2026-11-01.log",
         ):
-            self.assertEqual(up.kind_of(name, up.LOG_FILES), up.UNKNOWN, name)
+            self.assertEqual(ft.kind_of(name, ft.LOG_FILES), ft.UNKNOWN, name)
             self.assertIsNone(log_files.day_of(name), name)  # nor does the morning run prune it
 
     def test_bosun_s_log_writers_are_its_commands_and_install_sh(self) -> None:
@@ -386,23 +387,23 @@ class Answers(unittest.TestCase):
     def test_a_knowledge_folder_with_anything_in_it_is_asked_about(self) -> None:
         for records in (0, up.UNREADABLE):  # only a schema.json, or files it cannot read
             something = facts(knowledge_records=records, knowledge_files=1)
-            self.assertIn(up.KNOWLEDGE, [q.key for q in up.questions(something, Choices())], records)
+            self.assertIn(ft.KNOWLEDGE, [q.key for q in up.questions(something, Choices())], records)
             self.assertNotIn(f"{CONFIG}/knowledge", targets(up.build_plan(something, Choices())))
 
     def test_a_hand_made_copy_of_the_ledger_is_not_a_working_file(self) -> None:
-        self.assertEqual(up.kind_of("ledger.json.before-my-edit", up.STATE_FILES), up.UNKNOWN)
+        self.assertEqual(ft.kind_of("ledger.json.before-my-edit", ft.STATE_FILES), ft.UNKNOWN)
 
     def test_learning_history_alone_is_worth_asking_about(self) -> None:
         learned = facts(ledger_items=0, state_entries=("ledger.json", "learn"))
-        self.assertEqual([q.key for q in up.questions(learned, Choices())], [up.LEDGER, up.KNOWLEDGE])
+        self.assertEqual([q.key for q in up.questions(learned, Choices())], [ft.LEDGER, ft.KNOWLEDGE])
 
     def test_a_ledger_it_cannot_read_may_hold_anything(self) -> None:
         unreadable = facts(ledger_items=up.UNREADABLE)
         self.assertNotIn(f"{STATE}/ledger.json", targets(up.build_plan(unreadable, Choices())))
-        self.assertIn(up.LEDGER, [q.key for q in up.questions(unreadable, Choices())])
+        self.assertIn(ft.LEDGER, [q.key for q in up.questions(unreadable, Choices())])
 
     def test_questions_only_for_what_flags_left_open(self) -> None:
-        self.assertEqual([q.key for q in up.questions(facts(), Choices(keep_ledger=False))], [up.KNOWLEDGE])
+        self.assertEqual([q.key for q in up.questions(facts(), Choices(keep_ledger=False))], [ft.KNOWLEDGE])
         self.assertEqual(up.questions(facts(), Choices(keep_ledger=False, keep_knowledge=False)), ())
 
     def test_one_is_not_plural(self) -> None:
@@ -457,7 +458,7 @@ class AgentSetups(unittest.TestCase):
         self.assertIn(f"{STATE}/agent-changes.json", targets(up.build_plan(done, Choices())))
 
     def test_the_setup_lock_is_bosuns_own(self) -> None:
-        self.assertIn(("agent-setup.lock", up.WORKING), up.STATE_FILES)
+        self.assertIn(("agent-setup.lock", ft.WORKING), ft.STATE_FILES)
 
 
 class WorktreeFolders(unittest.TestCase):
@@ -510,7 +511,7 @@ class WorktreeFolders(unittest.TestCase):
         self.assertNotIn(up.WORKTREES, [step.kind for step in self.plan().steps])
 
     def test_the_lock_is_bosuns_own(self) -> None:
-        self.assertIn(("agent-changes.lock", up.WORKING), up.STATE_FILES)
+        self.assertIn(("agent-changes.lock", ft.WORKING), ft.STATE_FILES)
 
 
 class CheckoutRules(unittest.TestCase):

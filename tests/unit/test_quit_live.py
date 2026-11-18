@@ -55,6 +55,42 @@ class StepsBoundTest(unittest.TestCase):
         self.assertEqual(json.loads(out.getvalue())["steps_seconds"], quit_live.STEPS_SECONDS)
 
 
+class PollSecondsTest(unittest.TestCase):
+    """How often the --let-finish wait looks: quit's POLL_SECONDS, or BOSUN_QUIT_POLL_SECONDS, which is for
+    tests, handed to the run in its options."""
+
+    def options_of(self, environment: dict[str, str]) -> quit_core.Options:
+        seen: list[quit_core.Options] = []
+
+        def run(options: quit_core.Options, *_args: object) -> int:
+            seen.append(options)
+            return 0
+
+        with tempfile.TemporaryDirectory() as folder:
+            argv = ["--mode", "finish", "--state-dir", folder, "--session", "acme", "--console-label", "x"]
+            with (
+                mock.patch.dict(os.environ, environment),
+                mock.patch.object(quit_live, "run", run),
+                mock.patch.object(quit_live, "live_ports", lambda _world: None),
+            ):
+                quit_live.main([*argv, "--console-marker", str(Path(folder) / "wanted")])
+        return seen[0]
+
+    def test_the_default_is_quits_own(self) -> None:
+        with mock.patch.dict(os.environ):
+            os.environ.pop("BOSUN_QUIT_POLL_SECONDS", None)
+            self.assertEqual(self.options_of({}).poll_seconds, quit_core.POLL_SECONDS)
+
+    def test_the_tests_knob_sets_it(self) -> None:
+        self.assertEqual(self.options_of({"BOSUN_QUIT_POLL_SECONDS": "0.5"}).poll_seconds, 0.5)
+
+    def test_a_knob_that_is_no_positive_number_is_the_default(self) -> None:
+        for value in ("soon", "0", "-1", "nan"):
+            with self.subTest(value=value):
+                options = self.options_of({"BOSUN_QUIT_POLL_SECONDS": value})
+                self.assertEqual(options.poll_seconds, quit_core.POLL_SECONDS)
+
+
 class LiveTest(unittest.TestCase):
     """The helpers that touch the world: launchctl, the console job, the windows lock, bosun stop."""
 

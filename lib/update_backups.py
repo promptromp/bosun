@@ -32,7 +32,7 @@ from pathlib import Path
 
 import agent_state
 import journal
-from uninstall_plan import CONFIG_FILES, KNOWLEDGE, LEDGER, SETTINGS, STATE_FILES, kind_of
+from file_tables import CONFIG_FILES, KNOWLEDGE, LEDGER, SETTINGS, STATE_FILES, kind_of
 
 
 BACKUPS_DIR = "backups"
@@ -68,7 +68,7 @@ FROZEN = tuple(part for parts in STORE_PARTS.values() for part in parts)
 _KEPT_KINDS = (LEDGER, KNOWLEDGE, SETTINGS)
 _NEVER = (BACKUPS_DIR, "logs", "dry-runs", "update")
 _CHUNK = 1 << 20
-# What a file put back is written as first, beside it (a row in both file tables of uninstall_plan).
+# What a file put back is written as first, beside it (a row in both file tables, lib/file_tables.py).
 RESTORING = ".{name}.restoring"
 _SIDE_AND_NAME = 2  # a prefix names at least a side and an entry: state/<name>
 REMOVE_TRIES = 5  # how often a deletion tries a folder that gained a file meanwhile

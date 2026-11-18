@@ -939,7 +939,7 @@ from the journal, never what travels.
   store whose journal and files are both gone, while `replica.json` is kept, looks new: its next
   write starts its journal under the old id at `seq` 1 in each file, and so mints the ids of the
   store it replaces. A documented command gets there: `bosun uninstall --delete-knowledge` keeps
-  `replica.json`, which is classed with the ledger (`lib/uninstall_plan.py`, [Setup](../setup.md)),
+  `replica.json`, which is classed with the ledger (`lib/file_tables.py`, [Setup](../setup.md)),
   so a knowledge base made again after it mints the deleted one's fact ids. Harmless in phase 0,
   where nothing holds them any more. Phase 1 must handle it, as the old journal may already be in
   the state repository: one way is for `replica.json` to record which streams have started under

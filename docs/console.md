@@ -134,8 +134,8 @@ again, `install.sh` removes the job.
 
 A `bosun console` you run by hand while the job serves prints the job's address (`--open` opens it) instead of failing
 on the port; `--new-token` is refused then, since the running console keeps its token. The job never exits for a
-console you run by hand: while yours holds the port, the job waits (it looks again every few seconds, and says so
-once) and serves once yours ends. `bosun doctor` has a line for the job: loaded, and serving while `console/wanted` is
+console you run by hand: while yours holds the port, the job waits (on the lock yours holds, saying so once) and
+serves as soon as yours ends. `bosun doctor` has a line for the job: loaded, and serving while `console/wanted` is
 there. The job's errors go to `console.launchd.err` in the log folder, never its address.
 
 A console keeps the code it started with. `bosun update`'s plan says to restart one you started by hand (the job is

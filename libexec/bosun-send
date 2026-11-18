@@ -34,7 +34,7 @@ need_profiles # here, so the agent lookups in substitutions below do not each re
 
 SESSION="$BOSUN_SESSION_NAME"
 PASTE_SETTLE_SECONDS=0.5
-START_POLL_SECONDS=1
+START_POLL_SECONDS=0.25
 FAILED_START_OUTPUT_LINES=8
 
 list_windows() {
@@ -143,23 +143,36 @@ confirm_taken() { # <window> <pane_id> <rejected count before> <agent>
   done
 }
 
-# Succeeds once a Claude process runs in the window's pane.
+# Succeeds once a Claude process runs in the window's pane. Fails at BOSUN_START_TIMEOUT, or as soon as the
+# pane's launch, once seen, has ended without one (it refused, or its agent exited at once), as refresh's
+# await_launch does: exit 2 then.
 wait_for_claude() { # <window_id>
-  local deadline=$((SECONDS + BOSUN_START_TIMEOUT)) pane_pid
+  local deadline=$((SECONDS + BOSUN_START_TIMEOUT)) pane_pid launch_seen=0
   while [ "$SECONDS" -lt "$deadline" ]; do
     pane_pid="$(tmux_cmd list-panes -t "$1" -F '#{pane_pid}' 2>/dev/null)" || return 1
     agent_pid_under "$pane_pid" >/dev/null && return 0
+    if launch_running "$pane_pid"; then
+      launch_seen=1
+    elif [ "$launch_seen" = 1 ]; then
+      return 2
+    fi
     sleep "$START_POLL_SECONDS"
   done
   return 1
 }
 
 confirm_started() { # <window> <window_id> <what happened>
-  if wait_for_claude "$2"; then
+  local waited=0
+  wait_for_claude "$2" || waited=$?
+  if [ "$waited" = 0 ]; then
     log "$3; Claude is running in $SESSION:$1"
     return 0
   fi
-  log "$3, but no Claude session started there within ${BOSUN_START_TIMEOUT}s (it may be waiting at a prompt). Last output:"
+  if [ "$waited" = 2 ]; then
+    log "$3, but its launch ended without starting a Claude session. Last output:"
+  else
+    log "$3, but no Claude session started there within ${BOSUN_START_TIMEOUT}s (it may be waiting at a prompt). Last output:"
+  fi
   tmux_cmd capture-pane -p -J -t "$2" 2>/dev/null | grep -v '^[[:space:]]*$' | tail -n "$FAILED_START_OUTPUT_LINES" | sed 's/^/    /'
   die "start failed; inspect with: $(attach_hint) (window $1)"
 }

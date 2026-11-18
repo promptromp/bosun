@@ -27,7 +27,7 @@ this note is why.
   also keeps your records: a script that wants them gone has to say so. A kept file is an `rm` away, and a deleted
   ledger cannot be got back.
 - **It only deletes what it knows is bosun's, from a folder that is bosun's.** `STATE_FILES`, `CONFIG_FILES` and
-  `LOG_FILES` in `lib/uninstall_plan.py` list what bosun writes, and what each one is. A name that is not listed
+  `LOG_FILES` in `lib/file_tables.py` list what bosun writes, and what each one is. A name that is not listed
   stays, and the plan names it. `BOSUN_STATE_DIR` can be set to anything, and `logs` or `*.log` is a name other
   programs use too, so a folder is only bosun's own when its name says bosun or everything in it is listed;
   any other folder is left whole, and the plan says why. A folder that holds your home folder or bosun's

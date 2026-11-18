@@ -11,7 +11,7 @@
 # list but none turns claude.ai's connectors on, as a headless Claude has them only when asked), and its
 # plugins of yours (BOSUN_ORCHESTRATOR_PLUGINS, as its launch has them), and real
 # Slack/GitHub/Confluence reads, but with no side effects:
-#   - the ledger is a scratch copy of the real one under $BOSUN_STATE_DIR/dry-runs/<timestamp>/,
+#   - the ledger is a scratch copy of the real one under $BOSUN_STATE_DIR/dry-runs/<timestamp>-<n>/,
 #     so idempotency is exercised against current state. --fresh starts empty; --continue starts
 #     from the previous rehearsal's ledger (run twice to check that nothing is processed again)
 #   - `bosun send` only logs what it would deliver (BOSUN_SEND_DRY_RUN=1)
@@ -57,15 +57,31 @@ normal: the ledger is a scratch copy and \`bosun send\` only logs what it would 
 Outward-facing tools are blocked; propose such actions as usual instead of calling them.
 There is no human to answer in this run, so end with the plan."
 
+# A folder of its own for each rehearsal, named for the second it starts in and numbered within it (-01, then
+# -02 for one more in that second, ...): the names sort by time in any locale, which --continue goes by (a suffix
+# only on a second one would not: the glob sorts punctuation by the locale). mkdir claims a name, so two at once
+# never share one. Prints its path.
+new_run_dir() {
+  local stamp n=1 dir
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  mkdir -p "$BOSUN_STATE_DIR/dry-runs"
+  dir="$BOSUN_STATE_DIR/dry-runs/$stamp-01"
+  until mkdir "$dir" 2>/dev/null; do
+    n=$((n + 1))
+    [ "$n" -le 99 ] || die "could not make a folder for this dry run in $BOSUN_STATE_DIR/dry-runs"
+    printf -v dir '%s/dry-runs/%s-%02d' "$BOSUN_STATE_DIR" "$stamp" "$n"
+  done
+  echo "$dir"
+}
+
 seed="$BOSUN_STATE_DIR/ledger.json"
 if [ "$CONTINUE" = "1" ]; then
-  runs=("$BOSUN_STATE_DIR"/dry-runs/*/) # timestamped names, so the glob sorts them by time
+  runs=("$BOSUN_STATE_DIR"/dry-runs/*/) # timestamped names (run_dir, below), so the glob sorts them by time
   [ -d "${runs[${#runs[@]} - 1]}" ] || die "no previous dry run to continue from"
   previous="${runs[${#runs[@]} - 1]}"
   seed="${previous%/}/ledger.json"
 fi
-run_dir="$BOSUN_STATE_DIR/dry-runs/$(date +%Y%m%d-%H%M%S)"
-mkdir -p "$run_dir"
+run_dir="$(new_run_dir)" || exit 1
 if [ "$FRESH" = "0" ] && [ -f "$seed" ]; then
   cp "$seed" "$run_dir/ledger.json"
   log "scratch ledger seeded from $seed"

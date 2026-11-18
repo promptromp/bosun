@@ -7,9 +7,9 @@ world, which the tests replace. The order of a quit is fixed:
 
 1. wait, with --let-finish, until no window is busy (a window waiting at a prompt is never waited for: it
    needs you and is stopped with the rest; a window at `shell` has only background work and counts as done).
-   The wait polls every POLL_SECONDS up to the minutes, checks once with 0 and changes nothing when it runs
-   out (exit 3, the windows still busy printed, so the caller can ask again). Quit never sends keys to a
-   window. --stop-now does not wait. The wait holds no lock.
+   The wait polls every POLL_SECONDS (the run's `poll_seconds`) up to the minutes, checks once with 0 and
+   changes nothing when it runs out (exit 3, the windows still busy printed, so the caller can ask again).
+   Quit never sends keys to a window. --stop-now does not wait. The wait holds no lock.
 2. take the `windows` lock that `bosun start` and `bosun refresh` hold (lib/run_locked.py), waiting for one
    that sets up the windows; the rest holds it, and so does what it starts (`bosun stop`), so a start cannot
    begin in between and undo the quit,
@@ -75,6 +75,7 @@ class Options:
     json: bool
     lock_wait_seconds: int  # BOSUN_WINDOWS_LOCK_WAIT_SECONDS: how long the steps wait for a start's lock
     steps_seconds: int  # the most the steps besides the two waits take (lib/quit_live.py's STEPS_SECONDS)
+    poll_seconds: float = POLL_SECONDS  # how often the --let-finish wait looks (lib/quit_live.py sets it)
 
 
 @dataclass(frozen=True)
@@ -193,7 +194,7 @@ def wait_until_nothing_is_busy(
             print(
                 f"Waiting for {plural(len(plan['busy']), 'busy window')} ({who}), up to {minutes}", file=err
             )
-        ports.sleep(min(POLL_SECONDS, deadline - ports.clock()))
+        ports.sleep(min(options.poll_seconds, deadline - ports.clock()))
 
 
 def stop_steps(options: Options, ports: Ports, result: dict[str, Any]) -> None:

@@ -222,6 +222,29 @@ class BringAlongTest(Folder):
         assert state is not None
         return update_windows.bring_along(state, self.plan(), say=self.said.append)
 
+    def test_the_wait_between_turns_is_poll_seconds_unless_the_tests_knob_says(self) -> None:
+        steps = update_windows.CTRL_C_POLL_SECONDS  # the wait sleeps in steps of this, for its Ctrl-C
+        with mock.patch.dict(os.environ), self.turns(["api"], []) as slept:
+            os.environ.pop("BOSUN_UPDATE_POLL_SECONDS", None)
+            self.bring_along()
+        self.assertEqual(slept.call_count, round(update_windows.POLL_SECONDS / steps))
+        update_state.write(self.state_dir, update_state.advanced(bringing({}), "released", pending=()))
+        knob = {"BOSUN_UPDATE_POLL_SECONDS": "0.4"}
+        with mock.patch.dict(os.environ, knob), self.turns(["api"], []) as slept:
+            self.bring_along()
+        self.assertEqual(slept.call_count, 2)
+
+    def test_a_knob_below_one_step_still_waits_one_step_between_turns(self) -> None:
+        knob = {"BOSUN_UPDATE_POLL_SECONDS": "0.05"}
+        with mock.patch.dict(os.environ, knob), self.turns(["api"], []) as slept:
+            self.bring_along()
+        self.assertEqual(slept.call_args_list, [mock.call(update_windows.CTRL_C_POLL_SECONDS)])
+
+    def test_a_knob_that_is_no_positive_number_waits_the_default(self) -> None:
+        for value in ("soon", "0", "-1", "nan"):
+            with self.subTest(value=value), mock.patch.dict(os.environ, {"BOSUN_UPDATE_POLL_SECONDS": value}):
+                self.assertEqual(update_windows.poll_seconds(), update_windows.POLL_SECONDS)
+
     def test_the_windows_to_bring_along_are_pending_from_the_start(self) -> None:
         with self.turns(["orchestrator", "api"], ["api"], ["api"], []):
             done = self.bring_along()

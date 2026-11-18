@@ -51,27 +51,33 @@ check_bypass_warning() {
   esac
 }
 
+# The tools, each looked up as launchd's PATH finds it (launchd_paths: one launchd-like shell for all of them). A
+# tool the answer has no line for counts as not found, as one it does not find does.
 check_tools() {
-  for tool in tmux ruby python3 jq curl caffeinate pmset "$BOSUN_CLAUDE_BIN"; do
-    path="$(env -i HOME="$HOME" /bin/bash -c "source '$BOSUN_ROOT/lib/common.sh'; command -v '$tool'")"
-    if [ -n "$path" ]; then ok "$tool -> $path"; else fail "$tool not found on launchd PATH"; fi
+  local tools=(tmux ruby python3 jq curl caffeinate pmset "$BOSUN_CLAUDE_BIN") path i
+  local -a paths=()
+  while IFS= read -r path; do paths+=("$path"); done < <(launchd_paths "${tools[@]}")
+  for i in "${!tools[@]}"; do
+    path="${paths[$i]:--}"
+    if [ "$path" != - ]; then ok "${tools[$i]} -> $path"; else fail "${tools[$i]} not found on launchd PATH"; fi
   done
 }
 
-# One window from the window list: its folder, trust, and which session it will resume.
-check_window() { # <name> <dir> <kind>
-  local name="$1" dir="$2" kind="$3" session_name id pid harness
+# One window from the window list: its folder, trust, and which session it will resume. Its agent is the list's
+# (window_harness, read from the line in hand), and what that agent says of it was asked for every window at once
+# (check_config).
+check_window() { # <name> <dir> <kind> <harness> <session name> <trusted<TAB>session<TAB>pid, from agent_state windows>
+  local name="$1" dir="$2" kind="$3" harness="$4" session_name="$5" trusted id pid
+  IFS=$'\t' read -r trusted id pid <<<"$6"
   [ "$kind" = "checkin" ] && return
   if [ ! -d "$dir" ]; then
     fail "$name: directory $dir does not exist"
     return
   fi
-  harness="$(window_harness "$name")"
-  agent_trusts "$harness" "$dir" ||
+  [ "$trusted" = yes ] ||
     fail "$name: $(agent_display_name "$harness") does not trust $dir yet, so an unattended start would stall at the trust prompt: run 'bosun trust $dir'"
-  session_name="$(expected_session_name "$name")"
-  if id="$(agent_state resolve "$harness" "$dir" "$session_name" 2>/dev/null)"; then
-    if pid="$(agent_state live "$id")"; then
+  if [ "$id" != - ]; then
+    if [ "$pid" != - ]; then
       warn "$name: resumes $id, but it is running now (pid $pid); launch will skip it while that runs"
     else
       ok "$name: resumes $session_name ($id) in $dir"
@@ -110,17 +116,38 @@ check_config_keys() {
 }
 
 check_config() {
-  local sessions name dir kind model effort
+  local name dir kind harness queries="" fact answer answered=0 reason i=0
+  local -a names=() facts=()
   if [ -f "$BOSUN_CONFIG_DIR/bosun.env" ]; then ok "bosun.env"; else warn "no bosun.env; using defaults"; fi
   check_config_keys
-  if ! sessions="$(window_specs 2>&1)"; then
-    fail "$sessions"
+  if [ "$SPECS_READ" != 1 ]; then
+    fail "$SPECS_ERROR"
     return
   fi
   ok "sessions manifest: $BOSUN_SESSIONS_FILE"
-  while IFS=$'\t' read -r name dir kind model effort _; do
-    check_window "$name" "$dir" "$kind"
-  done <<<"$sessions"
+  # Each window's session name, and what its agent says of it (whether it trusts the folder, the session that
+  # name resumes, whether that one runs), asked once for every window: a line each, in the list's order. An
+  # answer that fails, or lacks a window's line (no python3, say), is one failure, saying why, and no window's.
+  while IFS=$'\t' read -r name dir kind _ _ harness; do
+    if [ "$kind" = checkin ]; then names+=(-); else names+=("$(expected_session_name "$name")"); fi
+    queries+="$harness"$'\t'"$dir"$'\t'"${names[$i]}"$'\n'
+    i=$((i + 1))
+  done <<<"$SPECS"
+  answer="$(printf '%s' "$queries" | agent_state windows 2>/dev/null)" || answered=$?
+  if [ -n "$answer" ]; then
+    while IFS= read -r fact; do facts+=("$fact"); done <<<"$answer"
+  fi
+  if [ "$answered" != 0 ] || [ "${#facts[@]}" -ne "$i" ]; then
+    # Asked again for its reason (it only reads); one that says nothing is told by what it did.
+    reason="$(printf '%s' "$queries" | agent_state windows 2>&1 >/dev/null | tail -n 1)"
+    fail "could not ask the windows' agents whether they trust their folders and which session each resumes (lib/agent_state.py windows): ${reason:-it exited $answered with ${#facts[@]} line(s) for $i window(s)}"
+    return
+  fi
+  i=0
+  while IFS=$'\t' read -r name dir kind _ _ harness; do
+    check_window "$name" "$dir" "$kind" "$harness" "${names[$i]}" "${facts[$i]}"
+    i=$((i + 1))
+  done <<<"$SPECS"
 }
 
 # BOSUN_PLAIN_FSYNC=1 (lib/journal.py) is for the test suite only: with it set, a write to either store is not
@@ -170,10 +197,10 @@ check_after_update() {
 # (window_plugins, docs/design/connectors.md "Plugins"), from the files its launch reads: a warning for the
 # orchestrator with `all`, as for its connectors. A window list that cannot be read is check_config's.
 check_connectors() {
-  local specs name dir kind harness list plugins plugins_read said
+  local name dir kind harness list plugins plugins_read said
   local -a site
   [ -z "$BOSUN_ORCHESTRATOR" ] || check_orchestrator_connectors_set
-  if specs="$(window_specs 2>/dev/null)"; then
+  if [ "$SPECS_READ" = 1 ]; then
     while IFS=$'\t' read -r name dir kind _ _ harness; do
       [ "$kind" = "checkin" ] && continue
       if ! list="$(window_connectors "$name" 2>/dev/null)"; then
@@ -197,7 +224,7 @@ check_connectors() {
       else
         fail "$name: could not read its plugins: $(window_plugins "$name" 2>&1 >/dev/null | tail -n 1)"
       fi
-    done <<<"$specs"
+    done <<<"$SPECS"
   fi
 }
 
@@ -381,12 +408,12 @@ check_orchestrator() {
 }
 
 check_models() {
-  local specs name dir kind model effort saved login_env
-  if specs="$(window_specs 2>/dev/null)"; then
+  local name dir kind model effort saved login_env
+  if [ "$SPECS_READ" = 1 ]; then
     while IFS=$'\t' read -r name dir kind model effort _; do
       [ "$kind" = "checkin" ] && continue
       if valid_effort "$effort"; then ok "$name: $model / $effort"; else fail "$name: effort '$effort' is not one of: $EFFORT_LEVELS"; fi
-    done <<<"$specs"
+    done <<<"$SPECS"
   fi
   saved="$(jq -r '"\(.model // "account default") / \(.effortLevel // "model default")" + (if .modelSettings then " (per model: " + ([.modelSettings | to_entries[] | "\(.key)=\(.value.effortLevel // "-")"] | join(", ")) + ")" else "" end)' "$HOME/.claude/settings.json" 2>/dev/null)"
   ok "your saved Claude Code default, used by sessions you start yourself: ${saved:-none}. /model and /effort save to it; in /model, press s to keep a choice to one session"
@@ -577,36 +604,111 @@ check_claude_login() {
   return 0
 }
 
-section "What bosun needs"
-check_preflight
-section "Tools (as launchd sees them)"
-check_tools
-section "Claude Code login"
-check_claude_login
-check_bypass_warning
-section "Config ($BOSUN_CONFIG_DIR)"
-check_config
-check_plain_fsync
-check_update
-check_knowledge
-section "Ledger ($BOSUN_STATE_DIR)"
-check_ledger
-if [ -n "$BOSUN_ORCHESTRATOR" ]; then
-  section "Orchestrator ($BOSUN_ORCHESTRATOR in $BOSUN_ORCHESTRATOR_DIR)"
-  check_orchestrator
-  check_approvals
+# The report, as the sections and checks it prints, in order. It goes through twice: the first pass starts each
+# check (they only read) in a background shell of its own, into files of its own (its lines, its stderr, how many
+# of its checks failed), so that they run side by side; the second prints the headings, and each check's lines once
+# it is done. A check that exits (a die) ends the report there, with its status, as it would have run alone.
+# Without a folder for those files, there is only the second pass, which runs each check where it prints.
+report() {
+  heading "What bosun needs"
+  part check_preflight
+  heading "Tools (as launchd sees them)"
+  part check_tools
+  heading "Claude Code login"
+  part check_claude_login
+  part check_bypass_warning
+  heading "Config ($BOSUN_CONFIG_DIR)"
+  part check_config
+  part check_plain_fsync
+  part check_update
+  part check_knowledge
+  heading "Ledger ($BOSUN_STATE_DIR)"
+  part check_ledger
+  if [ -n "$BOSUN_ORCHESTRATOR" ]; then
+    heading "Orchestrator ($BOSUN_ORCHESTRATOR in $BOSUN_ORCHESTRATOR_DIR)"
+    part check_orchestrator
+    part check_approvals
+  fi
+  heading "Connectors (what each window may reach)"
+  part check_connectors
+  heading "Models and effort"
+  part check_models
+  heading "Schedule"
+  part check_schedule
+  heading "Power and session"
+  part check_power
+  part check_after_update
+  heading "Setup steps (dry run)"
+  part setup_dry_run
+}
+setup_dry_run() { "$BOSUN" setup --dry-run 2>&1 | sed 's/^/  /'; }
+heading() { [ "$PASS" = start ] || section "$@"; }
+part() { # <check>
+  if [ "$PASS" = start ]; then start_part "$1"; else show_part "$1"; fi
+  part_index=$((part_index + 1))
+}
+start_part() { # <check>: its failures counted from 0, the count when the first pass starts
+  (
+    "$1"
+    echo "$failures" >"$PARTS_DIR/$part_index.failures"
+  ) >"$PARTS_DIR/$part_index.out" 2>"$PARTS_DIR/$part_index.err" </dev/null &
+  part_pids[part_index]=$!
+}
+show_part() { # <check>
+  local status=0 counted
+  if [ -z "$PARTS_DIR" ]; then
+    "$1"
+    return 0
+  fi
+  wait "${part_pids[$part_index]}" || status=$?
+  part_pids[part_index]=""
+  cat "$PARTS_DIR/$part_index.out"
+  cat "$PARTS_DIR/$part_index.err" >&2
+  counted="$(cat "$PARTS_DIR/$part_index.failures" 2>/dev/null)" || exit "$((status > 0 ? status : 1))"
+  failures=$((failures + counted))
+}
+# What still runs when doctor ends early (a check's die, Ctrl-C, a TERM) is stopped by pid, never by a pattern:
+# each check that has not been shown is frozen, so that it starts nothing more, then whatever it runs, however
+# deep (descendants), and the check itself are told to stop, and it is reaped quietly. A second Ctrl-C or TERM
+# meanwhile is ignored (the exit is already under way), so it never leaves a check frozen.
+end_parts() {
+  local pid
+  trap '' INT TERM
+  for pid in ${part_pids[@]+"${part_pids[@]}"}; do
+    if [ -z "$pid" ] || ! kill -STOP "$pid" 2>/dev/null; then continue; fi
+    # shellcheck disable=SC2046  # a pid each
+    kill $(descendants "$pid") "$pid" 2>/dev/null
+    { kill -CONT "$pid" && wait "$pid"; } 2>/dev/null
+  done
+  [ -z "$PARTS_DIR" ] || rm -rf "$PARTS_DIR"
+}
+
+# The window list, read once for the checks that go through it, its stdout only; when it cannot be read,
+# check_config fails with what it said (without a temporary folder, as before, both streams).
+read_specs() {
+  SPECS_READ=1 SPECS_ERROR=""
+  if [ -z "$PARTS_DIR" ]; then
+    SPECS="$(window_specs 2>&1)" || SPECS_READ=0
+    SPECS_ERROR="$SPECS"
+    return 0
+  fi
+  SPECS="$(window_specs 2>"$PARTS_DIR/specs.err")" || SPECS_READ=0
+  SPECS_ERROR="${SPECS:+$SPECS$'\n'}$(cat "$PARTS_DIR/specs.err")"
+}
+
+need_profiles # read here, once, for every check to inherit
+part_pids=()
+PARTS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/bosun-doctor.XXXXXX" 2>/dev/null)" || PARTS_DIR=""
+trap end_parts EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+read_specs
+if [ -n "$PARTS_DIR" ]; then
+  PASS=start part_index=0
+  report
 fi
-section "Connectors (what each window may reach)"
-check_connectors
-section "Models and effort"
-check_models
-section "Schedule"
-check_schedule
-section "Power and session"
-check_power
-check_after_update
-section "Setup steps (dry run)"
-"$BOSUN" setup --dry-run 2>&1 | sed 's/^/  /'
+PASS=show part_index=0
+report
 
 printf '\n'
 if [ "$failures" -gt 0 ]; then

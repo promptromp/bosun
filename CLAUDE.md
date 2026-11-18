@@ -38,7 +38,7 @@ of truth, so don't copy rules into this file.
   only file the update's record: what each window gets turn by turn, the take-stock and update prompts,
   what came of each, and the takeover of the windows the last update still waits for: `taken_or_left`,
   `take_over`, the record's `carried` and `taken_over`), `lib/update_windows.py` (carrying them out: bosun's commands, the update's wait
-  and its Ctrl-C, which the check-in loop carries on), `lib/update_notes.py` (the windows' note
+  and its Ctrl-C, which the check-in loop carries on; its poll's test knob, as quit's, is read by `lib/wait_knobs.py`), `lib/update_notes.py` (the windows' note
   files) and `lib/update_summary.py` (pure: the summary it ends with, from what each step kept in the
   record, its text and `--json`, and what the last update left me, which `bosun doctor` lists through
   `lib/update.py after-update`); a launch's last error goes to its window's error file (`note_error`,
@@ -145,8 +145,8 @@ of truth, so don't copy rules into this file.
   the questions), `lib/init_terminal.py` (the keys and screens) and `lib/init.py` (the CLI: writes the
   config with backups, trusts the folders, then runs `install.sh`, which runs `set_wake` (`lib/common.sh`), the one place that sets `pmset`; the
   launchd jobs are rendered and loaded by `lib/common.sh`, which `install.sh` and `bosun update` share).
-  `lib/uninstall_detect.py` (read-only: what of bosun is here), `lib/uninstall_plan.py` (pure: the
-  tables of what bosun's files are, what goes, what stays, how it reads), `lib/uninstall_macos.py` (launchd
+  `lib/uninstall_detect.py` (read-only: what of bosun is here), `lib/uninstall_plan.py` (pure: what
+  goes, what stays, how it reads, by the tables of what bosun's files are in `lib/file_tables.py`), `lib/uninstall_macos.py` (launchd
   and `pmset`) and `lib/uninstall.py` (the CLI) take it off again; `lib/agent_changes.py` records what bosun
   changed in the agents' own files and the worktrees folders it made beside repo windows (`worktrees_folder` in
   `lib/common.sh`, made by `bosun launch`), so that only that is undone. Design: `docs/design/uninstall.md`.
@@ -182,7 +182,8 @@ of truth, so don't copy rules into this file.
 - Agents (design: `docs/design/harnesses.md`): an adapter per agent, `lib/claude_state.py`,
   `lib/codex_state.py` and `lib/agy_state.py`, each a module with the functions of `Agent` in `lib/agent_state.py`, whose `AGENTS`
   table is the one place that lists them (each module's `PROFILE`, a `Profile` in `lib/agent_files.py`, says
-  what it is and can do; `lib/agent_state.py profiles` prints them for the shell) and whose `record` the
+  what it is and can do; `lib/agent_state.py profiles` prints them for the shell, checked in as `lib/agent_profiles.tsv`, which
+  `lib/agents.sh` reads without starting Python: written again after a change to a profile or to `AGENTS`) and whose `record` the
   watchdog, ledger and events use. They share `lib/agent_files.py`, and neither imports the other.
   `lib/agents.sh` is the shell side: `agent_state`, `window_harness`, `harnesses_in_use`, `agent_*`.
   `libexec/bosun-launch` holds the flow, and `lib/launch/<harness>.sh` what differs in it
@@ -383,7 +384,8 @@ of truth, so don't copy rules into this file.
   `tests/sandbox/agy-stand-in` so the stand-in does it too, `tests/fixtures/agy/` (the recorded hook payloads,
   screens and listings) and `docs/design/antigravity.md`.
 - **A file bosun writes in its state or config folder, or anything it leaves elsewhere:** a row in `STATE_FILES`
-  or `CONFIG_FILES` (`lib/uninstall_plan.py`), or a step there, or uninstall leaves it behind. The smoke suite
+  or `CONFIG_FILES` (`lib/file_tables.py`, which uninstall and the update's backups both go by), or a step in
+  `lib/uninstall_plan.py`, or uninstall leaves it behind. The smoke suite
   fails on a file in the state folder that the table does not list. A change in an agent's own files, or a folder
   bosun makes outside its own, goes on record in `lib/agent_changes.py`.
 - **An answer `bosun init` offers:** a field of `Answers` (`lib/init_plan.py`) with its check, what

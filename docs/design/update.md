@@ -88,7 +88,7 @@ Any of these makes the update a failure, even if it otherwise works:
   catches up on the next one. This is to be checked in the VM.
 - **The store locks.** `locked_ledger` and the knowledge base's `locked` wait on an `flock` with no
   timeout, so a writer waits rather than fails while the lock is held.
-- **The file tables.** `STATE_FILES` and `CONFIG_FILES` in `lib/uninstall_plan.py` list every file
+- **The file tables.** `STATE_FILES` and `CONFIG_FILES` in `lib/file_tables.py` list every file
   bosun keeps, and class each as working, ledger, knowledge or settings. The smoke suite fails on a
   state file the tables do not list, so they can serve as the backup's list too.
 - **What `init` and `install.sh` already do.** `init` keeps a `*.pre-init-*` copy of each config file
@@ -1277,7 +1277,7 @@ Changed with the build and the runs in the VM:
 - `docs/commands.md`;
 - `README.md`;
 - the `get.sh` header;
-- the file tables in `lib/uninstall_plan.py`;
+- the file tables in `lib/uninstall_plan.py` (now `lib/file_tables.py`);
 - `docs/development.md` (the VM scenario);
 - `CLAUDE.md`: a new common change, "a data format change", which needs a version bump, a migration
   and a fixture.

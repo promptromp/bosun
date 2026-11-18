@@ -432,7 +432,7 @@ twice. On a disk without them (exFAT, some network shares), writes stop and say 
 | `update.json`, `update.lock`, `update/` | The last `bosun update`'s record, its lock, and the windows' notes to it |
 | `backups/<time>-<from>-<to>/` | What `bosun update` backed up before it changed anything, with its `manifest.json` and `summary.md`, the last 3 kept |
 | `impact/`, `alerts/`, `events/`, `slack-watch/`, `learn/` | The Impact snapshot, the last Slack alert, the event queue, the Slack watcher's runs, and the learning runs (kept 14 days), each with its feature on |
-| `dry-runs/<timestamp>/` | Chores rehearsals |
+| `dry-runs/<timestamp>-<n>/` | Chores rehearsals (`<n>` numbers those that start in the same second) |
 
 </details>
 

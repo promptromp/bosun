@@ -7,28 +7,30 @@
 # The orchestrator stands on Claude Code's hooks, plugins and permission settings, for now.
 ORCHESTRATOR_HARNESS="claude"
 
-# What each agent says it is and can do (Profile in lib/agent_files.py), asked of lib/agent_state.py once per
-# process: one tab-separated line per agent, in AGENTS order, with the columns of AGENT_PROFILE_COLUMNS.
-# A command substitution has its own copy of the variable, so a function that makes many of them reads the
-# profiles first (need_profiles), and what they inherit is filled in.
+# What each agent says it is and can do (Profile in lib/agent_files.py), as lib/agent_profiles.tsv holds it: one
+# tab-separated line per agent, in AGENTS order, with the columns of AGENT_PROFILE_COLUMNS. lib/agent_state.py
+# profiles writes the file, which is checked in (tests/unit/test_agent_profiles.py holds it to the code), so that
+# no command starts Python for a few hundred bytes that never change within a version. A command substitution has its
+# own copy of the variable, so a function that makes many of them reads the profiles first (need_profiles), and
+# what they inherit is filled in.
 AGENT_PROFILE_COLUMNS="harness bin_key flags_key model_key names_sessions remote_control autocompact subagents statuses update_args verifies_quotes"
 AGENT_PROFILES=""
 AGENT_PROFILES_ERROR=""
 
-# Fills AGENT_PROFILES; on a failure returns 1 with why in AGENT_PROFILES_ERROR (run_preflight goes on
-# without: it is what says python3 is missing).
+# Fills AGENT_PROFILES from the table, read by the shell itself (no process started); on a table that is missing,
+# unreadable or empty returns 1 with why in AGENT_PROFILES_ERROR (run_preflight goes on without).
 load_agent_profiles() {
   [ -n "$AGENT_PROFILES" ] && return 0
-  local out errors_file="" errors=""
-  # Only stdout is the profiles: what a working python3 says on stderr (a warning, a shim's notice) is not.
-  errors_file="$(mktemp "${TMPDIR:-/tmp}/bosun-profiles.XXXXXX" 2>/dev/null)" || errors_file=/dev/null
-  if ! out="$(python3 "$BOSUN_ROOT/lib/agent_state.py" profiles 2>"$errors_file")" || [ -z "$out" ]; then
-    errors="$(cat "$errors_file" 2>/dev/null)"
-    [ "$errors_file" = /dev/null ] || rm -f "$errors_file"
-    AGENT_PROFILES_ERROR="could not read the agents' profiles (lib/agent_state.py profiles): ${errors:-$out}"
+  local table="$BOSUN_ROOT/lib/agent_profiles.tsv" line out="" nl=$'\n'
+  if [ -r "$table" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      [ -n "$line" ] && out="${out:+$out$nl}$line"
+    done <"$table"
+  fi
+  if [ -z "$out" ]; then
+    AGENT_PROFILES_ERROR="could not read the agents' profiles: $table is missing, unreadable or empty"
     return 1
   fi
-  [ "$errors_file" = /dev/null ] || rm -f "$errors_file"
   AGENT_PROFILES="$out"
 }
 
@@ -167,7 +169,7 @@ update_agents() { # [--dry-run]
 # explicitly, since load_config does not export them.
 run_preflight() { # [--quiet]
   local agent_bin_assignments=()
-  # Without python3 the commands cannot be named; preflight then says that python3 is what is missing.
+  # Without the profiles the commands cannot be named; preflight still says what else is missing.
   if load_agent_profiles; then agent_bin_env; fi
   env BOSUN_HARNESSES="$(harnesses_in_use)" ${agent_bin_assignments[@]+"${agent_bin_assignments[@]}"} \
     BOSUN_CLAUDE_FLAGS="$BOSUN_CLAUDE_FLAGS" BOSUN_ORCHESTRATOR_FLAGS="$BOSUN_ORCHESTRATOR_FLAGS" \

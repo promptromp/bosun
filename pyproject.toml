@@ -67,6 +67,10 @@ impacted_map = [
     "lib/*.sh=bin/bosun",
     "lib/*/*.sh=bin/bosun",
     "libexec/*=bin/bosun",
+    # ... and the agents' profiles as the shell reads them, a table written from lib/agent_state.py, which
+    # its test holds to the code.
+    "lib/agent_profiles.tsv=bin/bosun",
+    "lib/agent_profiles.tsv=tests/unit/test_agent_profiles.py",
     "get.sh=bin/bosun",
     "install.sh=bin/bosun",
     "uninstall.sh=bin/bosun",
