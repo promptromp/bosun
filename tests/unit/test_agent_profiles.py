@@ -341,5 +341,67 @@ class AgentSetupCommandTest(unittest.TestCase):
             assert agent_state.main(["setup", "nobody"]) == USAGE
 
 
+class WindowsCommandTest(unittest.TestCase):
+    """`agent_state.py windows`: what bosun doctor asks of every window's agent, in one run. Stub agents stand
+    in for the real ones, whose files nothing here reads."""
+
+    def setUp(self) -> None:
+        self.folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.folder)
+
+    def stub(self, **answers: object) -> types.SimpleNamespace:
+        def answer(key: str, default: object) -> Callable[..., object]:
+            value = answers.get(key, default)
+            if isinstance(value, Exception):
+
+                def raising(*_args: object) -> object:
+                    raise value
+
+                return raising
+            return lambda *_args: value
+
+        return types.SimpleNamespace(
+            trusted=answer("trusted", True),
+            resolve=answer("resolve", "session-1"),
+            live_pid=answer("live_pid", None),
+        )
+
+    def run_windows(self, stdin: str, **agents: types.SimpleNamespace) -> list[str]:
+        out = io.StringIO()
+        with (
+            mock.patch.dict(agent_state.AGENTS, agents, clear=True),
+            mock.patch.object(sys, "stdin", io.StringIO(stdin)),
+            contextlib.redirect_stdout(out),
+        ):
+            assert agent_state.main(["windows"]) == 0
+        return out.getvalue().splitlines()
+
+    def test_a_line_for_each_window_in_order(self) -> None:
+        running = self.stub(resolve="session-2", live_pid=4242)
+        untrusted = self.stub(trusted=False, resolve=None)
+        lines = self.run_windows(f"a\t{self.folder}\talpha\nb\t{self.folder}\tbeta\n", a=running, b=untrusted)
+        assert lines == ["yes\tsession-2\t4242", "no\t-\t-"]
+
+    def test_the_running_pid_is_asked_of_every_agent(self) -> None:
+        holder = self.stub(live_pid=99)
+        resolver = self.stub(resolve="session-3", live_pid=None)
+        lines = self.run_windows(f"r\t{self.folder}\tname\n", r=resolver, h=holder)
+        assert lines == ["yes\tsession-3\t99"]
+
+    def test_no_agent_or_no_folder_is_no_session(self) -> None:
+        lines = self.run_windows(
+            f"-\t{self.folder}\t-\na\t{self.folder}/gone\talpha\n", a=self.stub(live_pid=7)
+        )
+        assert lines == ["no\t-\t-", "no\t-\t-"]
+
+    def test_a_question_that_fails_is_answered_as_none_and_the_others_still_asked(self) -> None:
+        broken_trust = self.stub(trusted=OSError("unreadable"), resolve="session-4")
+        broken_resolve = self.stub(resolve=ValueError("bad transcript"))
+        lines = self.run_windows(
+            f"t\t{self.folder}\tx\nr\t{self.folder}\ty\n", t=broken_trust, r=broken_resolve
+        )
+        assert lines == ["no\tsession-4\t-", "yes\t-\t-"]
+
+
 if __name__ == "__main__":
     unittest.main()

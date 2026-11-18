@@ -1706,9 +1706,17 @@ check "... but not once it is set, to nothing too" bash -c '! grep -qF "$2" <<<"
   _ "$("${ORCH[@]}" "$BOSUN" doctor 2>&1)" "$UNSET_LINE"
 printf 'BOSUN_CHECKIN_MINS=30\nBOSUN_CHECKIN_MINUTES=abc\n' >"$BOSUN_CONFIG_DIR/bosun.env"
 out="$("$BOSUN" doctor 2>&1)"
+out_status=$?
 check "doctor names a key bosun.env sets that bosun does not read, and the one it most likely meant" contains "$out" \
   "warn  bosun.env sets BOSUN_CHECKIN_MINS: bosun does not read it: did you mean BOSUN_CHECKIN_MINUTES?"
 check "... and a word where a number goes" contains "$out" "warn  BOSUN_CHECKIN_MINUTES is 'abc', not a whole number"
+# doctor's checks run side by side, each into files of its own in a temporary folder; without one, they run one after
+# another, and the report is the same, line for line (times of day aside), with the same exit status.
+check "doctor without a temporary folder runs its checks one after another and says the same" bash -c '
+  untimed() { sed -E "s/[0-9]{2}:[0-9]{2}:[0-9]{2}//"; }
+  said="$(TMPDIR=/nonexistent "$2" doctor 2>&1)"; status=$?
+  [ "$status" = "$3" ] && [ "$(untimed <<<"$said")" = "$(untimed <<<"$1")" ] || { diff <(untimed <<<"$1") <(untimed <<<"$said"); exit 1; }' \
+  _ "$out" "$BOSUN" "$out_status"
 rm -f "$BOSUN_CONFIG_DIR/bosun.env"
 mkdir -p "$HOME/.claude"
 echo '{"allowedMcpServers": [{"serverName": "acme-local"}]}' >"$HOME/.claude/settings.json"

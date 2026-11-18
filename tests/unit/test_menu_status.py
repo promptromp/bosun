@@ -1336,6 +1336,19 @@ class WatchdogJobFactsTestCase(unittest.TestCase):
             os.utime(out, (1700000000, 1700000000))
             self.assertEqual(menu_status_live.launched_at(Path(tmp)), datetime.fromtimestamp(1700000000))
 
+    def test_a_run_in_the_second_of_now_is_not_after_now(self) -> None:
+        # now is to the second (watchdog.current_time); the file's time has its fraction, which would put a
+        # run of this very second after now, where the stale check leaves it out.
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "watchdog.launchd.out"
+            out.write_text("update in progress: skipping this watchdog run\n")
+            os.utime(out, (1700000000.75, 1700000000.75))
+            ran = menu_status_live.launched_at(Path(tmp))
+            self.assertEqual(ran, datetime.fromtimestamp(1700000000))
+            now = datetime.fromtimestamp(1700000000)
+            job = WatchdogJob(True, True, ran, None, now - timedelta(days=1), None)  # booted a day ago
+            self.assertFalse(menu_status.watchdog_stale(job, now))
+
     def test_a_quit_that_ended_long_after_the_last_full_run_is_not_yellow_while_the_job_still_runs(
         self,
     ) -> None:

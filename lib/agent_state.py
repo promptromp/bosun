@@ -14,6 +14,9 @@ Usage: agent_state.py registered <pid>...               the first of them that i
        agent_state.py set-trust <harness> <dir> <true|false>
        agent_state.py setup <harness>                   make that agent's one-time setup, if it needs one
        agent_state.py profiles                          every agent's profile, a line each
+       agent_state.py windows                           for each line <harness><TAB><dir><TAB><name> on
+                                                        stdin: trusted<TAB>session<TAB>pid (what bosun
+                                                        doctor asks of each window, in one run)
 
 A record has the fields of Claude Code's running-session record, and `harness`, the agent's name.
 Exit status 0 found or done, 3 not found, 2 usage.
@@ -25,7 +28,7 @@ import json
 import os
 import subprocess
 import sys
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -174,6 +177,35 @@ def launch_settings(pid: str) -> LaunchSettings | None:
     return AGENTS[entry["harness"]].launch_settings(pid) if entry else None
 
 
+def window_facts(harness: str, folder: str, name: str) -> str:
+    """What `bosun doctor` asks of a window's agent, as one line: whether it trusts <folder> (yes or no), the
+    session it knows by <name> there, and the pid of a running agent holding that session (each "-" for none).
+    An agent bosun does not know (the check-in window's "-") or a folder that is not there is no, -, -. Each
+    question that fails is answered as none, as each of `trusted`, `resolve` and `live` failing alone is."""
+    agent = AGENTS.get(harness)
+    if agent is None or not os.path.isdir(folder):
+        return "no\t-\t-"
+    trusted = _answer(lambda: agent.trusted(folder), False)
+    session = _answer(lambda: agent.resolve(folder, name), None)
+    pid = _answer(lambda: live_pid(session), None) if session else None
+    return f"{'yes' if trusted else 'no'}\t{session or '-'}\t{pid or '-'}"
+
+
+def _answer[T](question: Callable[[], T], none: T) -> T:
+    try:
+        return question()
+    except Exception:  # noqa: BLE001 - a question that fails is answered as none, as its command alone would be
+        return none
+
+
+def cmd_windows(_args: list[str]) -> int:
+    """window_facts for each line of stdin, a line each, in order."""
+    for line in sys.stdin.read().splitlines():
+        harness, folder, name = [*line.split("\t"), "", "", ""][:3]
+        print(window_facts(harness, folder, name))
+    return 0
+
+
 def cmd_launch(args: list[str]) -> int:
     """model<TAB>effort<TAB>bosun, "-" for what was not set at launch and yes if bosun launched it."""
     settings = launch_settings(args[0])
@@ -279,6 +311,7 @@ COMMANDS: dict[str, Command] = {
     "context": (1, lambda args: emit(conversation_size(args[0]))),
     "launch": (1, cmd_launch),
     "profiles": (0, cmd_profiles),
+    "windows": (0, cmd_windows),
 }
 PER_AGENT = {
     "resolve": (2, cmd_resolve),
