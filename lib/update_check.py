@@ -155,11 +155,12 @@ def _you_have(answer: Mapping[str, Any]) -> str:
     return installed["version"] or str(installed["commit"])[:SHORT]
 
 
-def skippable(version: str) -> bool:
-    """Whether <version> is one `bosun update --skip` takes: a release's tag, or a commit as the `main`
-    channel names its head (SHORT characters of it: what --check says as its version, and the menu bar
-    app passes to --skip)."""
-    return release_key(version) is not None or COMMIT_NAME.fullmatch(version) is not None
+def skippable(version: str, channel: str) -> bool:
+    """Whether <version> is one `bosun update --skip` takes on <channel>: a release's tag; or on the `main`
+    channel a commit as it names its head (SHORT characters of it: what --check says as its version, and the
+    menu bar app passes to --skip). On `releases` a commit's name would only replace the release skipped."""
+    named = channel == "main" and COMMIT_NAME.fullmatch(version) is not None
+    return release_key(version) is not None or named
 
 
 def describe(answer: Mapping[str, Any], branch: str = "main") -> str:

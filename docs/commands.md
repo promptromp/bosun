@@ -323,7 +323,8 @@ How to use it: [Updating](updating.md). What each part does:
 - **`--back`** goes back to the version the last finished update came from, one step, never further: a second
   `--back` is refused (`bosun update` goes forward again), and so is one with no finished update, or to a checkout
   from before versions (by hand: [Going back](updating.md#going-back)). The version installed runs it and fetches
-  nothing; the older version's folder is added again from `bosun.git` if it is gone. It restores that update's
+  nothing; the older version's folder is added again from `bosun.git` if it is gone (never by a dry run, which reads
+  what it can of that version there and says what it cannot tell). It restores that update's
   backup only for what the older version cannot read: a store whose format or rules version differs between the two
   (the changes written since then go, kept in a backup it takes first), and `bosun.env`, whose changes by that update
   are taken back where they still read as it wrote them (the file kept as `bosun.env.pre-back-<time>`). Everything

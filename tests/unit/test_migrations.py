@@ -641,7 +641,11 @@ class TestRevertConfig(MigrationTest):
         self.assertIn("NEW=5\n", reverted.text)
         self.assertIn('BOSUN_KEEPS="slack"\n', reverted.text)
         self.assertIn("MINE=1\n", reverted.text)
-        self.assertNotIn("# Added by bosun update", reverted.text)
+        # the kept value was changed since: it stays, and so does the comment above it
+        self.assertIn(
+            '# Added by bosun update: keeps what it did; name what it needs\nBOSUN_KEEPS="slack"\n',
+            reverted.text,
+        )
         self.assertTrue(reverted.text.endswith(migrations.PUT_BACK + "GONE=3\n"), reverted.text)
         self.assertEqual(reverted.said, ("GONE put back",))
         self.assertEqual(
@@ -654,6 +658,26 @@ class TestRevertConfig(MigrationTest):
                 ),
             ),
         )
+
+    def test_a_renamed_last_line_without_a_newline_keeps_a_line_added_since_apart(self) -> None:
+        """The update wrote the renamed line with a newline only where a line follows it now: taken back, it
+        keeps its own ending, so the line written since is never glued to it."""
+        reverted = migrations.revert_config("NEW=1\nMINE=1\n", "OLD=1", ())
+        self.assertEqual(reverted.text, "OLD=1\nMINE=1\n")
+        self.assertEqual(reverted.said, ("NEW is OLD again",))
+
+    def test_so_too_with_a_kept_value_appended_after_it(self) -> None:
+        before = "# mine\nOLD=1"
+        now = migrations.written_config(before, self.ADDED_KEYS)[0] + "MINE=1\n"
+        reverted = migrations.revert_config(now, before, self.ADDED_KEYS)
+        self.assertEqual(reverted.text, "# mine\nOLD=1\nMINE=1\n")
+        self.assertEqual(reverted.said, ("NEW is OLD again", 'BOSUN_KEEPS="all" removed'))
+
+    def test_a_kept_value_goes_with_the_comment_above_it(self) -> None:
+        now = self.written() + "MINE=1\n"
+        reverted = migrations.revert_config(now, self.BEFORE, self.ADDED_KEYS)
+        self.assertNotIn("# Added by bosun update", reverted.text)
+        self.assertNotIn("BOSUN_KEEPS", reverted.text)
 
     def test_a_removed_key_set_again_since_is_not_put_back_twice(self) -> None:
         now = self.written() + "GONE=4\n"

@@ -312,31 +312,105 @@ class EveryUpdateFactsTest(World):
     each version's store formats from its source, and the line a plan says going forward to a version a back
     left."""
 
-    def test_the_jobs_the_new_version_lacks_are_those_it_unloads(self) -> None:
-        labels = {
-            self.old: "com.bosun.morning com.bosun.morning.now com.bosun.morning.login\n",
-            self.new: "com.bosun.morning\n",
-        }
+    def kinds(self, listed: dict[Path, str | None]) -> tuple[Any, list[tuple[str, ...]]]:
+        """update_facts.shell as each version's job_kinds answers (None: it fails), and what else it was
+        asked (unload_jobs --dry-run, answering that each label it is given is installed)."""
         asked: list[tuple[str, ...]] = []
 
         def shell(root: Path, script: str, *args: str) -> subprocess.CompletedProcess[str]:
-            if script == "job_labels":
-                return subprocess.CompletedProcess([], 0, labels[root], "")
+            if script == update_facts.JOB_KINDS:
+                said = listed[root]
+                return subprocess.CompletedProcess([], 1 if said is None else 0, said or "", "")
             asked.append((script, *args))
-            return subprocess.CompletedProcess([], 0, "com.bosun.morning.now\n", "")  # the one installed
+            return subprocess.CompletedProcess([], 0, "\n".join(args) + "\n", "")
 
-        with mock.patch.object(update_facts, "shell", side_effect=shell):
-            self.assertEqual(update_facts.dropped_jobs(self.old, self.new), ["com.bosun.morning.now"])
+        return mock.patch.object(update_facts, "shell", side_effect=shell), asked
+
+    NEW = "com.bosun.morning\tbosun\ncom.bosun.morning.app\tapp\n"
+    OLD = (
+        "com.bosun.morning\tbosun\ncom.bosun.morning.now\tbosun\ncom.bosun.morning.login\tbosun\n"
+        "com.bosun.morning.app\tapp\n"
+    )
+
+    def test_the_jobs_the_new_version_lacks_are_those_it_unloads(self) -> None:
+        patch, asked = self.kinds({self.old: self.OLD, self.new: self.NEW})
+        with patch:
+            self.assertEqual(
+                update_facts.dropped_jobs(self.old, self.new),
+                ["com.bosun.morning.now", "com.bosun.morning.login"],
+            )
             self.assertEqual(update_facts.dropped_jobs(self.new, self.old), [])
         self.assertEqual(
             asked, [('unload_jobs --dry-run "$@"', "com.bosun.morning.now", "com.bosun.morning.login")]
         )
 
     def test_a_version_that_cannot_say_its_jobs_unloads_none(self) -> None:
-        with mock.patch.object(
-            update_facts, "shell", return_value=subprocess.CompletedProcess([], 1, "", "")
-        ):
-            self.assertEqual(update_facts.dropped_jobs(self.old, self.new), [])
+        cases: list[dict[Path, str | None]] = [
+            {self.old: None, self.new: None},
+            {self.old: self.OLD, self.new: None},
+            {self.old: None, self.new: self.NEW},
+        ]
+        for listed in cases:
+            with self.subTest(listed=listed):
+                patch, asked = self.kinds(listed)
+                with patch:
+                    self.assertEqual(update_facts.dropped_jobs(self.old, self.new), [])
+                self.assertEqual(asked, [])
+
+    def test_the_app_s_open_at_login_job_is_never_one_it_unloads(self) -> None:
+        """It runs the app's own binary, and no reload makes it again: a target from before it keeps it."""
+        before_the_app = "com.bosun.morning\tbosun\n"
+        patch, asked = self.kinds({self.old: self.OLD, self.new: before_the_app})
+        with patch:
+            dropped = update_facts.dropped_jobs(self.old, self.new)
+        self.assertNotIn("com.bosun.morning.app", dropped)
+        self.assertNotIn("com.bosun.morning.app", asked[0])
+
+    def test_job_kinds_read_from_each_version_s_own_shell(self) -> None:
+        """This code's job_kinds, and an older version's job_labels, each a job that runs bosun."""
+        repo = Path(update_facts.__file__).resolve().parents[1]
+        with mock.patch.dict(os.environ, {"BOSUN_LAUNCHD_LABEL": "com.bosun.kinds-test"}):
+            kinds = update_facts.job_kinds(repo)
+        assert kinds is not None
+        self.assertEqual(kinds["com.bosun.kinds-test.app"], "app")
+        self.assertEqual(kinds["com.bosun.kinds-test.watchdog"], "bosun")
+        older = self.old / "lib"
+        older.mkdir()
+        (older / "common.sh").write_text(
+            'load_config() { :; }\njob_labels() { echo "com.a com.a.watchdog"; }\n'
+        )
+        self.assertEqual(update_facts.job_kinds(self.old), {"com.a": "bosun", "com.a.watchdog": "bosun"})
+
+    def test_a_commit_in_bosun_git_reads_as_its_folder_does(self) -> None:
+        """A back's dry run whose older folder is gone reads it there, never checked out."""
+        tree = self.state.parent / "tree"
+        files = {
+            "lib/ledger.py": "LEDGER_FORMAT = 2\nRULES_VERSION = 3\n",
+            "lib/knowledge_store.py": "KNOWLEDGE_FORMAT = 1\n",
+            "lib/knowledge.py": "KG_RULES_VERSION = 1\n",
+            "lib/common.sh": "  BOSUN_ONE=1\n  BOSUN_TWO=2\n",
+            "orchestrator/policy.md": "# policy\n",
+            "orchestrator/tasks/review.md": "review\n",
+            "orchestrator/tasks/deeper/not-a-task.md": "no\n",
+        }
+        for name, text in files.items():
+            (tree / name).parent.mkdir(parents=True, exist_ok=True)
+            (tree / name).write_text(text)
+        identity = ("-c", "user.name=acme", "-c", "user.email=dev@example.com", "-c", "commit.gpgsign=false")
+        versions.git("init", "-q", str(tree))
+        versions.git("-C", str(tree), "add", "-A")
+        versions.git("-C", str(tree), *identity, "commit", "-qm", "a version")
+        committed = update_facts.Committed(tree / ".git", versions.commit_of(tree))
+        folder = update_facts.Folder(tree)
+        self.assertEqual(update_facts.formats_in(committed), {"ledger": 2, "knowledge": 1})
+        self.assertEqual(update_facts.rules_in(committed), {"ledger": 3, "knowledge": 1})
+        self.assertEqual(update_facts.keys_in(committed), frozenset({"BOSUN_ONE", "BOSUN_TWO"}))
+        self.assertEqual(update_facts.prompts_in(committed), update_facts.prompts_in(folder))
+        self.assertEqual(
+            sorted(update_facts.prompts_in(committed)),
+            ["orchestrator/policy.md", "orchestrator/tasks/review.md"],
+        )
+        self.assertIsNone(committed.read("no/such/file"))
 
     def test_a_version_s_formats_are_read_from_its_source(self) -> None:
         (self.old / "lib").mkdir()

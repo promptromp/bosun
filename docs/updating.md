@@ -199,10 +199,15 @@ What you wrote since the update stays wherever the older version can read it. Ea
 The plan says which applies, and what restoring would lose (how many changes were written since, when the last was,
 and the ledger items they touch), before it asks. With nothing to restore it only switches back, and writes never
 pause. The windows come along as for an update ([What happens to the windows](#what-happens-to-the-windows)), and it
-ends with a summary ("bosun went back: ..."), saved beside its backup (or, when it took none, as `back-summary.md`
+ends with a summary ("bosun went back: ..."), saved as `back-summary.md` beside its backup (or, when it took none,
 beside the backup of the update it went back over). The version it left is recorded as skipped, so `bosun update
 --check` and the menu bar app no longer offer it; a newer one is offered as usual, and `bosun update` still goes to it
 if you ask, its plan saying `--back` left it.
+
+`--back --dry-run` changes nothing, even when the older version's folder is gone: it reads what it can of that
+version from `bosun.git` and says what it cannot tell until going back adds the folder again. After going back to a
+version from before `--back`, that version's `bosun uninstall --purge` does not know `bosun.env.pre-back-<time>` and
+leaves the config folder with it: delete it by hand.
 
 It is refused when no update has finished, after a back, or when the version before is the checkout an older `get.sh`
 made (go back by hand, below). A restore needs the update's backup: never past a `kg forget`, which deletes every

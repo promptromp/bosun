@@ -14,6 +14,7 @@ is (older_than_data), which the wrapper checks before every update.
 from __future__ import annotations
 
 import dataclasses
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -56,9 +57,24 @@ BACKUP_OTHER = (
     "that update's backup holds the {store} at format {found}, not the {wanted} the older version reads"
 )
 CONFIG_GONE = (
-    "bosun.env needs the copy in that update's backup, to take its changes back, which is gone: a kg forget "
-    "deletes every backup"
+    "bosun.env needs the copy in that update's backup, or the one the update kept beside it, to take its "
+    "changes back, and both are gone"
 )
+# What a dry run cannot tell when the older version's folder is gone (it adds none: it reads what it can of
+# that version from bosun.git).
+NOT_ADDED = (
+    "{folder} is not there: going back adds it again from bosun.git, at {commit}; until then this dry run "
+    "cannot tell what each window gets, which launchd jobs reload or unload, or what that version needs of "
+    "this Mac"
+)
+NOT_FETCHED = (
+    "{folder} is not there, nor {commit} in bosun.git: going back fetches it from the origin first; until "
+    "then this dry run cannot tell that version's formats and rules (so whether a store is restored), what "
+    "each window gets, which launchd jobs reload or unload, or what it needs of this Mac"
+)
+# The copy an update kept of bosun.env, as its record's config_changed line names it.
+CONFIG_COPY = re.compile(r"\(before: (bosun\.env\.pre-update-\d{8}-\d{6})\)$")
+PENDING = "(saved while it still brought along {windows}: the check-in loop finishes them)"
 OLDER_THAN_DATA = (
     "{target} {problems}: going back past a migration or a rules change is bosun update --back's, to the "
     "version the last update came from"
@@ -234,8 +250,8 @@ class ConfigPart:
 @dataclass(frozen=True)
 class BackPart:
     """A back's own part of its plan: the update it goes back over (its id, start and backup), each store,
-    bosun.env, and what that update asked me to change in my own files, which the older version reads as
-    before."""
+    bosun.env, what that update asked me to change in my own files, which the older version reads as
+    before, and why its backup is not that update's (<mismatch>, a backup of another update)."""
 
     over: str
     over_started: str
@@ -243,6 +259,7 @@ class BackPart:
     stores: tuple[StorePart, ...]
     config: ConfigPart = ConfigPart()
     user_changes: tuple[str, ...] = ()
+    mismatch: str = ""
 
     def restored(self) -> tuple[StorePart, ...]:
         return tuple(part for part in self.stores if part.restore)
@@ -258,6 +275,11 @@ class BackPart:
         return (*parts, *((CONFIG,) if self.config.takes_back else ()))
 
     def blockers(self) -> tuple[str, ...]:
+        """What stops it: a backup of another update, said once, where anything needs that backup; else each
+        part that needs a backup it cannot have."""
+        if self.mismatch:
+            needs = bool(self.restored()) or (self.config.changed and not self.config.backup_there)
+            return (self.mismatch,) if needs else ()
         found = [part.blocker() for part in self.stores] + [self.config.blocker()]
         return tuple(line for line in found if line)
 
@@ -305,9 +327,20 @@ def from_record(data: Mapping[str, Any] | None) -> BackPart | None:
                 bool(config.get("backup_there", True)),
             ),
             tuple(map(str, data.get("user_changes", ()))),
+            str(data.get("mismatch", "")),
         )
     except (KeyError, TypeError, ValueError, AttributeError):
         return None
+
+
+def config_copy(config_changed: Sequence[str]) -> str | None:
+    """The name of the copy an update kept of bosun.env (bosun.env.pre-update-<time>), as the lines its record
+    keeps of what it changed there name it; None when none does."""
+    for line in config_changed:
+        found = CONFIG_COPY.search(line)
+        if found:
+            return found.group(1)
+    return None
 
 
 # ---- the plan's text ----------------------------------------------------------------------------------
@@ -332,6 +365,7 @@ def render(plan: Plan, back: BackPart) -> str:
         back.user_changes,
     )
     out += update_plan.plan_sections(plan)
+    out += _section("Not known in this dry run:", plan.unknown)
     out += _section("Blocked:", plan.blockers)
     out.append("Going back is blocked." if plan.blockers else "Nothing changes until you say yes.")
     return "\n".join(out) + "\n"
@@ -358,15 +392,30 @@ def summary_data(back: BackPart, restored: Sequence[str]) -> tuple[tuple[str, st
 
 
 def summary_place(state: UpdateState) -> tuple[Path, str] | None:
-    """Where a finished record's summary is saved: summary.md beside its backup; a back that took none (it
-    restored nothing) beside the backup of the update it went back over, as BACK_SUMMARY; None without
-    either."""
-    if state.backup:
-        return Path(state.backup), update_backups.SUMMARY
+    """Where a record's summary is saved: an update's as summary.md beside its backup; a back's always as
+    BACK_SUMMARY, beside its own backup or, when it took none (it restored nothing), beside the backup of the
+    update it went back over. Never summary.md for a back: an older bosun's check-in loop that finishes it
+    knows no back, and saves an update's summary.md in its backup, which so never replaces the back's. None
+    without a backup to save it beside."""
+    if state.kind != update_state.BACK:
+        return (Path(state.backup), update_backups.SUMMARY) if state.backup else None
     over = update_state.from_object(state.previous) if state.previous else None
-    if state.kind == update_state.BACK and over is not None and over.backup:
-        return Path(over.backup), BACK_SUMMARY
-    return None
+    folder = state.backup or (over.backup if over is not None else "")
+    return (Path(folder), BACK_SUMMARY) if folder else None
+
+
+def saved_pending(state: UpdateState) -> bool:
+    """Whether the summary of <state>'s record is saved before it is done: a back that left windows to the
+    check-in loop (`agents`), which may be an older version's, knowing no back; it is saved again, whole,
+    by whichever newer run finishes it."""
+    return state.kind == update_state.BACK and state.step == "agents" and bool(state.pending)
+
+
+def pending(text: str, state: UpdateState) -> str:
+    """<text>, a back's summary, saved while windows are still brought along: its first line, then what it
+    still brings along and who finishes them, then the rest."""
+    head, _, rest = text.partition("\n")
+    return f"{head}\n{PENDING.format(windows=', '.join(state.pending))}\n{rest}"
 
 
 # ---- a version older than the data --------------------------------------------------------------------

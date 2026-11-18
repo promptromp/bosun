@@ -579,12 +579,13 @@ class Reverted:
 @dataclass(frozen=True)
 class _Change:
     """A line an update changed in bosun.env: <before> (None: it added the line) became <after> (None:
-    it removed the line), with the key that line sets, or "" for a comment."""
+    it removed the line), with the key that line sets; for a line it added, the comment it wrote above it."""
 
     before: str | None
     after: str | None
     key: str
     old: str = ""  # a renamed key's name before
+    comment: str = ""  # the comment above a kept value the update appended
 
 
 def _renames_made(before: str) -> list[_Change]:
@@ -608,12 +609,8 @@ def _update_changes(before: str, added: Collection[str]) -> list[_Change]:
     renamed, _ = migrate_config(before)
     notes = {entry.key: entry.note for entry in CONFIG_ADDED}
     appended = [
-        change
+        _Change(None, f"{assignment(key, value)}\n", key, comment=f"# Added by bosun update: {notes[key]}\n")
         for key, value in kept_values(added, _assigned(renamed)).items()
-        for change in (
-            _Change(None, f"# Added by bosun update: {notes[key]}\n", ""),
-            _Change(None, f"{assignment(key, value)}\n", key),
-        )
     ]
     return [*_renames_made(before), *appended]
 
@@ -637,22 +634,31 @@ def _left_of(change: _Change) -> str:
     return f"{change.key} was changed since the update: left as it is (the version gone back to: {reads})"
 
 
+def _ending(line: str) -> str:
+    """<line>'s own line ending ("" for a last line without one)."""
+    return line[len(line.rstrip("\n")) :]
+
+
 def _take_back(lines: list[str], change: _Change, put_back: list[str]) -> bool | None:
     """<change> taken back in <lines> (a removed line kept for <put_back>, at the end): True when it was;
     None when there was nothing to take back (a removed key the file sets again); False where the line the
-    update wrote is no longer there as it wrote it."""
+    update wrote is no longer there as it wrote it. A line given its old text keeps its own ending, so a
+    line written since after it is never glued to it; a kept value goes with the comment right above it,
+    which stays when the value was changed since."""
     if change.after is None:  # a line removed, which was there before
         if change.before is None or change.old in _assigned("".join([*lines, *put_back])):
             return None
-        put_back.append(change.before)
+        put_back.append(change.before.rstrip("\n") + "\n")
         return True
     at = _at(lines, change.after)
     if at is None:
         return False
-    if change.before is None:
-        del lines[at]
-    else:
-        lines[at] = change.before
+    if change.before is not None:
+        lines[at] = change.before.rstrip("\n") + _ending(lines[at])
+        return True
+    del lines[at]
+    if change.comment and at > 0 and lines[at - 1].rstrip("\n") == change.comment.rstrip("\n"):
+        del lines[at - 1]
     return True
 
 

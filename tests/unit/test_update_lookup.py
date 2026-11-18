@@ -348,11 +348,22 @@ class CommandTest(unittest.TestCase):
             self.assertEqual(code, 2)
             self.assertIn("--skip takes a release version", err.getvalue())
             self.assertEqual(update_lookup.skipped_version(Path(tmp)), "v2026.11.12")
-            code, _ = self.run_main("skip", "0123456789ab", BOSUN_STATE_DIR=tmp)  # a head of main, as named
+            with contextlib.redirect_stderr(io.StringIO()) as err:  # a commit, on the releases channel
+                code, _ = self.run_main(
+                    "skip", "0123456789ab", BOSUN_STATE_DIR=tmp, BOSUN_UPDATE_CHANNEL="releases"
+                )
+            self.assertEqual(code, 2)
+            self.assertIn("not '0123456789ab' on the releases channel", err.getvalue())
+            self.assertEqual(
+                update_lookup.skipped_version(Path(tmp)), "v2026.11.12"
+            )  # the release still skipped
+            code, _ = self.run_main("skip", "0123456789ab", BOSUN_STATE_DIR=tmp, BOSUN_UPDATE_CHANNEL="main")
             self.assertEqual((code, update_lookup.skipped_version(Path(tmp))), (0, "0123456789ab"))
             for not_one in ("0123456789", "0123456789abc", "0123456789AB"):
                 with self.subTest(not_one=not_one), contextlib.redirect_stderr(io.StringIO()):
-                    self.assertEqual(self.run_main("skip", not_one, BOSUN_STATE_DIR=tmp)[0], 2)
+                    self.assertEqual(
+                        self.run_main("skip", not_one, BOSUN_STATE_DIR=tmp, BOSUN_UPDATE_CHANNEL="main")[0], 2
+                    )
 
     def test_target_refuses_the_main_channel_and_a_bad_one_in_one_line(self) -> None:
         for channel in ("main", "nightly"):

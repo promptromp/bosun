@@ -256,12 +256,13 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _skip(version: str) -> int:
+def _skip(version: str, channel: str) -> int:
     state_dir = _state_dir()
-    if not update_check.skippable(version):
+    if not update_check.skippable(version, channel):
         print(
             "bosun update: --skip takes a release version, such as v2026.11.12, or on the main channel "
-            f"the head's commit as --check names it ({update_check.SHORT} characters; not {version!r})",
+            f"the head's commit as --check names it ({update_check.SHORT} characters; not {version!r} on the "
+            f"{channel} channel)",
             file=sys.stderr,
         )
         return USAGE
@@ -334,7 +335,7 @@ def main(argv: Sequence[str]) -> int:
             )
             return 0
         if args.command == "skip":
-            return _skip(args.version)
+            return _skip(args.version, channel)
         if args.command == "branch":
             has_branch(args.name)
             return 0

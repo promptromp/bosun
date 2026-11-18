@@ -12,6 +12,7 @@ The folders and the tmux session come from the environment the wrapper (libexec/
 from __future__ import annotations
 
 import dataclasses
+import fnmatch
 import hashlib
 import json
 import os
@@ -20,7 +21,7 @@ import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import console_token
 import install_paths
@@ -129,41 +130,121 @@ def shell(
 # ---- the facts each version gives the plan ------------------------------------------------------
 
 
-def prompts(root: Path) -> dict[str, str]:
-    """Each prompt file of the version in <root> (update_plan.PROMPTS), by its path there, and the
+class Source(Protocol):
+    """Where a version's files are read from, as text a plan compares and never as code that runs: its
+    folder (Folder), or bosun.git at its commit, never checked out (Committed)."""
+
+    def read(self, path: str) -> bytes | None:
+        """The file at <path> (relative to the version's top), byte for byte; None when there is none."""
+
+    def names(self, pattern: str) -> list[str]:
+        """The files whose path matches <pattern>, a glob over its parts ("orchestrator/tasks/*.md"),
+        sorted."""
+
+
+@dataclass(frozen=True)
+class Folder:
+    """A version's folder."""
+
+    root: Path
+
+    def read(self, path: str) -> bytes | None:
+        try:
+            return (self.root / path).read_bytes()
+        except OSError:
+            return None
+
+    def names(self, pattern: str) -> list[str]:
+        return sorted(p.relative_to(self.root).as_posix() for p in self.root.glob(pattern) if p.is_file())
+
+
+def _matches(name: str, pattern: str) -> bool:
+    """Whether the path <name> matches the glob <pattern> part for part, as Path.glob matches it."""
+    parts, wanted = name.split("/"), pattern.split("/")
+    return len(parts) == len(wanted) and all(
+        fnmatch.fnmatchcase(a, b) for a, b in zip(parts, wanted, strict=True)
+    )
+
+
+@dataclass(frozen=True)
+class Committed:
+    """A version as the git directory <repo> holds it at <commit>, never checked out (a dry run of `bosun
+    update --back` whose older folder is gone adds none)."""
+
+    repo: Path
+    commit: str
+
+    def read(self, path: str) -> bytes | None:
+        return versions.show(self.repo, self.commit, path)
+
+    def names(self, pattern: str) -> list[str]:
+        return sorted(name for name in versions.tree(self.repo, self.commit) if _matches(name, pattern))
+
+
+def prompts_in(source: Source) -> dict[str, str]:
+    """Each prompt file of the version <source> holds (update_plan.PROMPTS), by its path there, and the
     SHA-256 of its content."""
     found: dict[str, str] = {}
     for pattern in update_plan.PROMPTS:
-        for path in sorted(root.glob(pattern)):
-            if path.is_file():
-                found[path.relative_to(root).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+        for name in source.names(pattern):
+            data = source.read(name)
+            if data is not None:
+                found[name] = hashlib.sha256(data).hexdigest()
     return found
 
 
+def prompts(root: Path) -> dict[str, str]:
+    """prompts_in the version in <root>."""
+    return prompts_in(Folder(root))
+
+
+def _text(source: Source, path: str) -> str:
+    data = source.read(path)
+    return data.decode("utf-8", "replace") if data is not None else ""
+
+
+def keys_in(source: Source) -> frozenset[str]:
+    """The config keys the version <source> holds has a default for (lib/common.sh)."""
+    return frozenset(CONFIG_KEY.findall(_text(source, "lib/common.sh")))
+
+
 def config_keys(root: Path) -> frozenset[str]:
-    """The config keys the version in <root> has a default for (lib/common.sh)."""
-    try:
-        return frozenset(CONFIG_KEY.findall((root / "lib" / "common.sh").read_text()))
-    except OSError:
-        return frozenset()
+    """keys_in the version in <root>."""
+    return keys_in(Folder(root))
 
 
-def _source_int(path: Path, name: str) -> int:
-    """The whole number <name> is set to at the top level of the Python file <path>; 0 if it is not.
-    Read from the source, so that no other version's code runs in this process."""
-    try:
-        found = re.search(rf"^{name} = (\d+)$", path.read_text(), re.MULTILINE)
-    except OSError:
-        return 0
+def _int_in(source: Source, path: str, name: str) -> int:
+    """The whole number <name> is set to at the top level of the Python file <path> of <source>; 0 if it is
+    not. Read as text, so that no other version's code runs in this process."""
+    found = re.search(rf"^{name} = (\d+)$", _text(source, path), re.MULTILINE)
     return int(found.group(1)) if found else 0
 
 
-def rules(root: Path) -> dict[str, int]:
-    """The rules version of each store's journal in the version in <root>."""
+def rules_in(source: Source) -> dict[str, int]:
+    """The rules version of each store's journal in the version <source> holds."""
     return {
-        "ledger": _source_int(root / "lib" / "ledger.py", "RULES_VERSION"),
-        "knowledge": _source_int(root / "lib" / "knowledge.py", "KG_RULES_VERSION"),
+        "ledger": _int_in(source, "lib/ledger.py", "RULES_VERSION"),
+        "knowledge": _int_in(source, "lib/knowledge.py", "KG_RULES_VERSION"),
     }
+
+
+def rules(root: Path) -> dict[str, int]:
+    """rules_in the version in <root>."""
+    return rules_in(Folder(root))
+
+
+def formats_in(source: Source) -> dict[str, int]:
+    """The format of each store the version <source> holds writes (0: it says none), as rules_in reads
+    its rules versions."""
+    return {
+        "ledger": _int_in(source, "lib/ledger.py", "LEDGER_FORMAT"),
+        "knowledge": _int_in(source, "lib/knowledge_store.py", "KNOWLEDGE_FORMAT"),
+    }
+
+
+def source_formats(root: Path) -> dict[str, int]:
+    """formats_in the version in <root>."""
+    return formats_in(Folder(root))
 
 
 def store_formats(state_dir: Path, config_dir: Path) -> tuple[dict[str, int], list[str]]:
@@ -595,31 +676,37 @@ def plan_from(
 THIS = Path(__file__).resolve().parents[1]  # this code's folder, whose helpers act for any version
 
 
-def job_labels(root: Path) -> list[str]:
-    """The launchd jobs' labels the version in <root> lists (lib/common.sh's job_labels); none when it
-    cannot say."""
-    done = shell(root, "job_labels")
-    return done.stdout.split() if done.returncode == 0 else []
+# What a version's jobs run, as lib/common.sh's job_kinds says: one from before it lists job_labels, each a
+# job that runs bosun (it had no job that runs anything else it could drop).
+JOB_KINDS = (
+    "if declare -F job_kinds >/dev/null; then job_kinds; "
+    'else for l in $(job_labels); do printf "%s\\tbosun\\n" "$l"; done; fi'
+)
+BOSUN_JOB = "bosun"  # a job that runs a bosun command; `app` runs the menu bar app's own binary
+
+
+def job_kinds(root: Path) -> dict[str, str] | None:
+    """Each launchd job's label the version in <root> lists and what it runs (lib/common.sh's job_kinds:
+    `bosun` or `app`); None when it cannot say (its shell failed, or listed nothing)."""
+    done = shell(root, JOB_KINDS)
+    found = dict(line.split("\t", 1) for line in done.stdout.splitlines() if "\t" in line)
+    return found if done.returncode == 0 and found else None
 
 
 def dropped_jobs(old_root: Path, new_root: Path) -> list[str]:
-    """The launchd jobs installed (a plist, or loaded) whose label the version in <old_root> lists and
-    the one in <new_root> does not: each would run a command that version may lack, so the release
-    unloads it (this code's unload_jobs, asked with --dry-run here)."""
-    kept = set(job_labels(new_root))
-    labels = [label for label in job_labels(old_root) if label not in kept]
+    """The launchd jobs installed (a plist, or loaded) that run a bosun command (job_kinds), whose label the
+    version in <old_root> lists and the one in <new_root> does not: each would run a command that version may
+    lack, so the release unloads it (this code's unload_jobs, asked with --dry-run here). None when either
+    version cannot say what it lists: a version that cannot be asked must never have every job taken for
+    dropped. The menu bar app's Open at Login job is never one: it runs the app, and no reload makes it
+    again."""
+    old, new = job_kinds(old_root), job_kinds(new_root)
+    if old is None or new is None:
+        return []
+    labels = [label for label, kind in old.items() if kind == BOSUN_JOB and label not in new]
     if not labels:
         return []
     return shell(THIS, 'unload_jobs --dry-run "$@"', *labels).stdout.split()
-
-
-def source_formats(root: Path) -> dict[str, int]:
-    """The format of each store the version in <root> writes, read from its source (0: it says none),
-    as `rules` reads its rules versions: no other version's code runs in this process."""
-    return {
-        "ledger": _source_int(root / "lib" / "ledger.py", "LEDGER_FORMAT"),
-        "knowledge": _source_int(root / "lib" / "knowledge_store.py", "KNOWLEDGE_FORMAT"),
-    }
 
 
 def older_than_data(target: Path, name: str, state_dir: Path, config_dir: Path, installed: Path) -> list[str]:

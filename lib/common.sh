@@ -1656,7 +1656,18 @@ app_plist() { echo "$HOME/Library/LaunchAgents/$(app_label).plist"; }
 app_bundle() { echo "$HOME/Applications/bosun.app"; }
 
 # Every launchd job bosun can have loaded: what `bosun uninstall` looks for.
-job_labels() { echo "$BOSUN_LAUNCHD_LABEL $(watchdog_label) $(learn_label) $(console_label) $(now_label) $(login_label) $(app_label) $(waketest_label)"; }
+# Each launchd job's label and what it runs, a line each, tab-separated: `bosun`, a bosun command through the
+# install link; `app`, the menu bar app's own binary (its Open at Login job). An update unloads a `bosun` job the
+# version it goes to does not list, as it would run a command that version lacks, and never an `app` one, which
+# runs no bosun and which no reload makes again (lib/update_facts.py, dropped_jobs).
+job_kinds() {
+  local label
+  for label in "$BOSUN_LAUNCHD_LABEL" "$(watchdog_label)" "$(learn_label)" "$(console_label)" "$(now_label)" "$(login_label)" "$(waketest_label)"; do
+    printf '%s\tbosun\n' "$label"
+  done
+  printf '%s\tapp\n' "$(app_label)"
+}
+job_labels() { job_kinds | cut -f1 | paste -sd ' ' -; } # every label, on one line (bosun uninstall's list)
 
 render_console_plist() {
   ENV_XML="$(launchd_env_xml)" LABEL="$(console_label)" ROOT="$BOSUN_INSTALL" LOGS="$BOSUN_LOG_DIR" WANTED="$(console_wanted_marker)" \

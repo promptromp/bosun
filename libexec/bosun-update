@@ -59,7 +59,8 @@
 # pointing at --back.
 #   --back     go back to the version the last finished update came from, one step, never further (a second
 #              --back is refused: bosun update goes forward again), run by the version installed, with no
-#              fetch. It restores that update's backup only where the older version cannot read the data as
+#              fetch (but of the older version's commit, should its folder and bosun.git have lost it; a dry run
+#              adds no folder, and reads what it can of that version from bosun.git). It restores that update's backup only where the older version cannot read the data as
 #              it is now: a store whose format or rules version differs between the two, and bosun.env, whose
 #              changes by that update are taken back where they still read as it wrote them (the file kept
 #              as bosun.env.pre-back-<time>). Everything else is kept, with what was written since; the plan
@@ -350,13 +351,17 @@ target_fits() { # <folder> <what>
 }
 target_fits "$folder" "${WHAT:-the new version}"
 
-# --branch, but for a dry run: what the install follows from now on, said, before the new version asks.
+# --branch, but for a dry run: what the install follows from now on, said, before the new version asks. The
+# channel first, through bosun settings set, which may refuse (another settings set, bosun init): then nothing
+# is set at all. The new version's plan, said no to, says the install follows the branch (BOSUN_UPDATE_FOLLOWS).
 say() { if [ "$JSON" = 1 ]; then echo "$*" >&2; else echo "$*"; fi; }
 follow_branch() {
-  repo_git config bosun.branch "$BRANCH" || die "could not set bosun.branch in $REPO"
   if [ "$BOSUN_UPDATE_CHANNEL" != main ]; then
-    "$BOSUN_ROOT/bin/bosun" settings set BOSUN_UPDATE_CHANNEL=main >&2 || die "could not set BOSUN_UPDATE_CHANNEL=main (bosun settings set)"
+    "$BOSUN_ROOT/bin/bosun" settings set BOSUN_UPDATE_CHANNEL=main >&2 ||
+      die "could not set BOSUN_UPDATE_CHANNEL=main (bosun settings set); nothing changed: the install follows what it did"
   fi
+  repo_git config bosun.branch "$BRANCH" || die "could not set bosun.branch in $REPO"
+  export BOSUN_UPDATE_FOLLOWS="$BRANCH"
   say "bosun follows $BRANCH from now on (bosun update --branch main follows main again)"
 }
 case " ${args[*]-} " in

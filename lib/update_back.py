@@ -27,7 +27,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
-import os
+import subprocess
 import sys
 import time
 from collections.abc import Sequence
@@ -43,9 +43,9 @@ import migrations
 import update
 import update_back_plan
 import update_backups
+import update_check
 import update_facts
 import update_gate
-import update_lookup
 import update_plan
 import update_state
 import versions
@@ -76,12 +76,24 @@ def _journals(store: str, state_dir: Path, config_dir: Path) -> Journal:
 
 
 @dataclass(frozen=True)
+class Older:
+    """The version a back goes back to: its folder; where its files are read (the folder, bosun.git at its
+    commit for a dry run whose folder is gone, None when bosun.git lacks that commit too); whether its folder
+    is there, so its own commands can be asked; and what a plan cannot tell without it."""
+
+    root: Path
+    source: update_facts.Source | None
+    present: bool
+    unknown: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class Facts:
-    """What a back is made from: the update it goes back over, the older version's folder, its own part
-    of the plan, bosun.env as that update's backup holds it (None: not needed, or not there), the plan."""
+    """What a back is made from: the update it goes back over, the older version, its own part of the plan,
+    bosun.env as it was before that update (None: not needed, or not there), the plan."""
 
     over: UpdateState
-    older: Path
+    older: Older
     back: BackPart
     before_env: str | None
     plan: Plan
@@ -95,55 +107,127 @@ def _over(state_dir: Path) -> UpdateState:
     return found
 
 
+def _commit_of(folder: Path) -> str | None:
+    """The commit checked out in <folder>; None where it is no checkout git can read (a link moved by
+    hand)."""
+    try:
+        return versions.commit_of(folder)
+    except RuntimeError:
+        return None
+
+
 def _installed_is(over: UpdateState) -> None:
     """UpdateRefused unless the install leads to the version <over> installed."""
     installed = update.installed(ROOT)
-    if versions.commit_of(installed) != over.to_commit:
+    if _commit_of(installed) != over.to_commit:
         raise UpdateRefused(
             update_back_plan.MOVED.format(installed=installed, to=update_back_plan.short(over.to_commit))
         )
 
 
+# A fetch over the network: no terminal to ask in (a private https origin never prompts while update.lock is
+# held), a transfer slower than 1 KB/s for 30 seconds given up on, as the wrapper's own fetch does, and never
+# longer than FETCH_SECONDS.
+NO_PROMPT = {"GIT_TERMINAL_PROMPT": "0"}
+SLOW = ("-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=30")
+FETCH_SECONDS = 120
+
+
+def _repo_of(folder: Path) -> Path:
+    return folder.parent / install_paths.REPO
+
+
+def _fetched(repo: Path, commit: str) -> None:
+    """<commit> fetched into bosun.git (<repo>) from its origin; UpdateRefused saying why it could not be."""
+    Output.say(f"Fetching {update_back_plan.short(commit)}, which bosun.git no longer has...")
+    try:
+        done = versions.git(
+            *SLOW,
+            "--git-dir",
+            str(repo),
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            "origin",
+            commit,
+            env=NO_PROMPT,
+            timeout=FETCH_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise UpdateRefused(f"could not fetch {commit}: it took over {FETCH_SECONDS} s") from exc
+    if done.returncode != 0:
+        lines = [line.strip() for line in done.stderr.splitlines() if line.strip()]
+        why = update_check.strip_credentials(lines[-1]) if lines else f"git exited {done.returncode}"
+        raise UpdateRefused(f"could not fetch {commit} from the origin: {why}")
+
+
 def _add_again(folder: Path, commit: str) -> None:
     """The version at <commit> added again as <folder> from bosun.git (a worktree, as an update makes one),
     its commit fetched from the origin first if bosun.git no longer has it; UpdateRefused if it cannot be."""
-    repo = ("--git-dir", str(folder.parent / install_paths.REPO))
-    if versions.git(*repo, "cat-file", "-e", f"{commit}^{{commit}}").returncode != 0:
-        Output.say(f"Fetching {update_back_plan.short(commit)}, which bosun.git no longer has...")
-        versions.git(*repo, "fetch", "--quiet", "--no-tags", "origin", commit)
-    done = versions.git(*repo, "worktree", "add", "--quiet", "--detach", str(folder), commit)
+    repo = _repo_of(folder)
+    if not versions.has_commit(repo, commit):
+        _fetched(repo, commit)
+    try:
+        done = versions.git(
+            "--git-dir",
+            str(repo),
+            "worktree",
+            "add",
+            "--quiet",
+            "--detach",
+            str(folder),
+            commit,
+            timeout=versions.LOCAL_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise UpdateRefused(f"could not add {folder} again: git took too long") from exc
     if done.returncode != 0:
         raise UpdateRefused(f"could not add {folder} again at {commit}: {done.stderr.strip()}")
     Output.say(f"Added {folder} again, the version the last update came from")
 
 
-def _older(over: UpdateState) -> Path:
-    """The version <over> came from, its folder added again if it is gone; UpdateRefused for a checkout from
-    before versions, or a folder that is not that version."""
+def _unseen(older: Path, commit: str) -> Older:
+    """For a dry run, the version at <commit> whose folder <older> is gone, never added again: read from
+    bosun.git at that commit, or nothing when bosun.git lacks it (a back fetches it first)."""
+    repo = _repo_of(older)
+    short = update_back_plan.short(commit)
+    if versions.has_commit(repo, commit):
+        note = update_back_plan.NOT_ADDED.format(folder=older, commit=short)
+        return Older(older, update_facts.Committed(repo, commit), False, (note,))
+    return Older(older, None, False, (update_back_plan.NOT_FETCHED.format(folder=older, commit=short),))
+
+
+def _older(over: UpdateState, dry_run: bool) -> Older:
+    """The version <over> came from: its folder, added again if it is gone (a dry run adds none, and reads
+    what it can of it from bosun.git: _unseen); UpdateRefused for a checkout from before versions, or a
+    folder that is not that version."""
     older = Path(over.from_root)
     if versions.before_versions(older):
         raise UpdateRefused(update_back_plan.LEGACY.format(folder=older))
     if not older.is_dir():
+        if dry_run:
+            return _unseen(older, over.from_commit)
         _add_again(older, over.from_commit)
-    if versions.commit_of(older) != over.from_commit:
+    if _commit_of(older) != over.from_commit:
         raise UpdateRefused(
             f"{older} is not a checkout of {over.from_commit}; move it aside and run it again"
         )
-    return older
+    return Older(older, update_facts.Folder(older), True)
 
 
-def _manifest(over: UpdateState) -> tuple[update_backups.Manifest | None, list[str]]:
-    """The manifest of <over>'s backup (None: it is gone), and a blocker if it is another update's."""
+def _manifest(over: UpdateState) -> tuple[update_backups.Manifest | None, str]:
+    """The manifest of <over>'s backup (None: it is gone, or is another update's), and why it is not that
+    update's ("" when it is, or is gone)."""
     backup = Path(over.backup) if over.backup else None
     if backup is None or not backup.is_dir():
-        return None, []
+        return None, ""
     manifest = update_backups.read_manifest(backup)
     if (manifest.from_commit, manifest.to_commit) != (over.from_commit, over.to_commit):
         found = (
             f"{update_back_plan.short(manifest.from_commit)} -> {update_back_plan.short(manifest.to_commit)}"
         )
-        return None, [MISMATCH.format(backup=backup, found=found, guide=update_back_plan.GUIDE)]
-    return manifest, []
+        return None, MISMATCH.format(backup=backup, found=found, guide=update_back_plan.GUIDE)
+    return manifest, ""
 
 
 def _written(store: str, where: Folders, backup: Path) -> update_back_plan.Since:
@@ -159,13 +243,15 @@ def _written(store: str, where: Folders, backup: Path) -> update_back_plan.Since
 
 
 def _stores(
-    older: Path, where: Folders, over: UpdateState, manifest: update_backups.Manifest | None
+    older: Older, where: Folders, over: UpdateState, manifest: update_backups.Manifest | None
 ) -> list[StorePart]:
     """Each store as the back finds it, with what was written since that update's backup where it is
-    restored."""
+    restored; none when the older version cannot be read (a dry run that would fetch it)."""
+    if older.source is None:
+        return []
     now = update_facts.store_formats(where.state_dir, where.config_dir)[0]
-    then = update_facts.source_formats(older)
-    rules_now, rules_then = update_facts.rules(ROOT), update_facts.rules(older)
+    then = update_facts.formats_in(older.source)
+    rules_now, rules_then = update_facts.rules(ROOT), update_facts.rules_in(older.source)
     found = []
     for store in migrations.FORMATS:
         backup_format = manifest.formats.get(store, 0) if manifest is not None else None
@@ -178,65 +264,106 @@ def _stores(
     return found
 
 
+def _env_before(over: UpdateState, config_dir: Path, there: bool) -> str | None:
+    """bosun.env as it was before <over> wrote it: the copy in its backup (<there>: that backup is <over>'s),
+    or the copy it kept beside bosun.env (bosun.env.pre-update-<time>, named in its config_changed), which
+    a kg forget leaves; None when neither is there."""
+    copies = [Path(over.backup) / "config" / migrations.CONFIG_FILE] if there else []
+    kept = update_back_plan.config_copy(over.config_changed)
+    copies += [config_dir / kept] if kept else []
+    found = next((copy for copy in copies if copy.is_file()), None)
+    return found.read_bytes().decode("utf-8", "surrogateescape") if found is not None else None
+
+
 def _config(over: UpdateState, config_dir: Path, there: bool) -> tuple[ConfigPart, str | None]:
     """bosun.env as the back finds it (whether that update wrote it, and what taking its changes back does),
-    and bosun.env as that update's backup holds it."""
+    and bosun.env as it was before that update."""
     env = config_dir / migrations.CONFIG_FILE
     if not over.config_changed or not env.is_file():
         return ConfigPart(), None
-    copy = Path(over.backup) / "config" / migrations.CONFIG_FILE
-    if not there or not copy.is_file():
+    before = _env_before(over, config_dir, there)
+    if before is None:
         return ConfigPart(changed=True, backup_there=False), None
-    before = copy.read_bytes().decode("utf-8", "surrogateescape")
     now = env.read_bytes().decode("utf-8", "surrogateescape")
     reverted = migrations.revert_config(now, before, update_plan.from_record(over.plan).keys_added)
     return ConfigPart(True, reverted.said, reverted.left), before
 
 
-def _older_facts(older: Path, formats: dict[str, int]) -> VersionFacts:
-    """The older version's facts, read from its folder (no code of it runs here); a store whose format its
-    source does not say is taken at <formats>' (the data's)."""
-    then = update_facts.source_formats(older)
+def _older_facts(older: Older, over: UpdateState, now: VersionFacts) -> VersionFacts:
+    """The older version's facts, read from where its files are (no code of it runs here); a store whose
+    format its source does not say is taken at <now>'s (the data's), and what cannot be read at all (a dry
+    run that would fetch it) as <now>'s, so the plan says no change of it."""
+    if older.source is None:
+        return dataclasses.replace(now, commit=over.from_commit)
+    then = update_facts.formats_in(older.source)
     return VersionFacts(
-        commit=versions.commit_of(older),
-        formats={store: then.get(store) or found for store, found in formats.items()},
-        rules=update_facts.rules(older),
-        keys=update_facts.config_keys(older),
-        prompts=update_facts.prompts(older),
+        commit=over.from_commit,
+        formats={store: then.get(store) or found for store, found in now.formats.items()},
+        rules=update_facts.rules_in(older.source),
+        keys=update_facts.keys_in(older.source),
+        prompts=update_facts.prompts_in(older.source),
     )
 
 
-def _plan(older: Path, back: BackPart, where: Folders, blockers: Sequence[str]) -> Plan:
+def _plan_unseen(versions_: Versions, where: Folders) -> Plan:
+    """A dry run's plan when the older version's folder is gone: what the data and the prompts tell, and what
+    stops it of the stores'; nothing of the windows, the jobs or what it needs, which only its own commands
+    can say (its `unknown` says so)."""
+    cut_short, unreadable = update_facts.deletion_cut_short(where.state_dir, where.config_dir)
+    plan = update_plan.make_plan(
+        versions_.old,
+        versions_.new,
+        commits=(),
+        windows=(),
+        jobs=(),
+        renames=(),
+        user_changes=(),
+        in_flight=update_facts.in_flight(where.state_dir, where.config_dir),
+        missing=(),
+        deletion_cut_short=cut_short,
+        console=update_facts.console_running(where.state_dir),
+        steps=lambda *_: (),
+    )
+    found = (
+        *update_facts.store_formats(where.state_dir, where.config_dir)[1],
+        *unreadable,
+        *update_facts.dangling_links(where.state_dir, where.config_dir),
+    )
+    return dataclasses.replace(plan, blockers=(*plan.blockers, *found))
+
+
+def _plan(older: Older, over: UpdateState, back: BackPart, where: Folders) -> Plan:
     """The back's plan: an update's from the version installed to the older one (update_facts.plan_from),
     with the data as it will be once restored, so no migration; nothing written to bosun.env but what
-    taking that update's changes back does; and its own part, and what stops it."""
+    taking that update's changes back does; and its own part, and what stops it. With the older folder gone
+    (a dry run), what can be told without it (_plan_unseen)."""
     old = update_facts.live_facts(where.state_dir, where.config_dir, ROOT)
     restored = {part.store: part.format_then for part in back.restored()}
     old = dataclasses.replace(old, formats={**old.formats, **restored})
-    new = _older_facts(older, dict(old.formats))
-    plan = update_facts.plan_from(
-        Versions(old, new, ROOT, older),
-        where.state_dir,
-        where.config_dir,
-        kept={},
-        renames=(),
-        user_changes=(),
+    versions_ = Versions(old, _older_facts(older, over, old), ROOT, older.root)
+    if older.present:
+        plan = update_facts.plan_from(
+            versions_, where.state_dir, where.config_dir, kept={}, renames=(), user_changes=()
+        )
+    else:
+        plan = _plan_unseen(versions_, where)
+    found = (*plan.blockers, *back.blockers())
+    return dataclasses.replace(
+        plan, keys_added=(), back=back.as_record(), blockers=found, unknown=older.unknown
     )
-    found = (*plan.blockers, *back.blockers(), *blockers)
-    return dataclasses.replace(plan, keys_added=(), back=back.as_record(), blockers=found)
 
 
-def facts(where: Folders) -> Facts:
+def facts(where: Folders, dry_run: bool = False) -> Facts:
     """What a back is made from, gathered: UpdateRefused where there is nothing to go back over, the install
-    leads elsewhere, or the version to go back to cannot be had."""
+    leads elsewhere, or the version to go back to cannot be had. A dry run adds no folder."""
     over = _over(where.state_dir)
     _installed_is(over)
-    older = _older(over)
-    manifest, blockers = _manifest(over)
+    older = _older(over, dry_run)
+    manifest, mismatch = _manifest(over)
     stores = tuple(_stores(older, where, over, manifest))
     config, before = _config(over, where.config_dir, manifest is not None)
-    back = BackPart(over.id, over.started_at, over.backup, stores, config, over.user_changes)
-    return Facts(over, older, back, before, _plan(older, back, where, blockers))
+    back = BackPart(over.id, over.started_at, over.backup, stores, config, over.user_changes, mismatch)
+    return Facts(over, older, back, before, _plan(older, over, back, where))
 
 
 # ---- the steps ----------------------------------------------------------------------------------------
@@ -325,8 +452,10 @@ def carried_out(found: Facts, where: Folders) -> UpdateState:
     """Recorded from `planned` on (kind BACK, its `previous` the update gone over): the rehearsal, the hold,
     the freeze or none, the release, the windows brought along; or where it stopped."""
     Output.say("Asking bosun doctor of the older version what fails before going back...")
-    before = update._doctor_fails(found.older)
-    started = update.begun(found.plan, ROOT, found.older, before, where.state_dir, kind=update_state.BACK)
+    before = update._doctor_fails(found.older.root)
+    started = update.begun(
+        found.plan, ROOT, found.older.root, before, where.state_dir, kind=update_state.BACK
+    )
     state = update._runs_as(where.state_dir, update._record(where.state_dir, started))
     state = _rehearsed(state, found, where)
     if state.step == "failed":
@@ -338,18 +467,6 @@ def carried_out(found: Facts, where: Folders) -> UpdateState:
     state = update.release(state)
     Output.say("Bringing the agents along...")
     return update._windows_brought_along(state)
-
-
-def _skip_left(state_dir: Path, state: UpdateState) -> None:
-    """The version the back left recorded as skipped, and said: --check and the menu bar app no longer
-    offer it."""
-    channel = os.environ.get("BOSUN_UPDATE_CHANNEL") or "releases"
-    name = update_lookup.skip_left(state_dir, channel, state.from_commit)
-    if name:
-        Output.say(
-            f"bosun update --check no longer offers {name}, the version it left; bosun update still goes "
-            "there"
-        )
 
 
 # ---- the command --------------------------------------------------------------------------------------
@@ -370,7 +487,7 @@ def _back(where: Folders, args: argparse.Namespace, said: Said) -> int:
     state = carried_out(found, where)
     if state.step not in update.ENDED:
         return update._failed(state)
-    _skip_left(where.state_dir, state)
+    update.skip_left(where.state_dir, state)
     update._say_summary(where.state_dir, state, said)
     return 0
 
@@ -378,7 +495,7 @@ def _back(where: Folders, args: argparse.Namespace, said: Said) -> int:
 def _dry_run(where: Folders, args: argparse.Namespace, said: Said) -> int:
     """The plan alone; an update cut short is said first, never carried on here."""
     update._said_recorded(where.state_dir)
-    found = facts(where)
+    found = facts(where, dry_run=True)
     said.plan = found.plan
     _show(found, args.json)
     Output.say("A dry run: nothing has changed.")

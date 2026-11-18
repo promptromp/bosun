@@ -159,6 +159,9 @@ class Plan:
     # A back's own part (lib/update_back_plan.py, BackPart.as_record): what it restores and keeps, and
     # what restoring loses; None for an update.
     back: Mapping[str, Any] | None = None
+    # What this plan cannot tell, a line each: a back's dry run whose older version's folder is gone, which
+    # it never adds again (it reads what it can of that version from bosun.git).
+    unknown: tuple[str, ...] = ()
 
 
 def _matches(path: str, patterns: Sequence[str]) -> bool:
@@ -319,6 +322,7 @@ _READ: dict[str, tuple[Callable[[Any], Any], Any]] = {
     "unload": (_strings, ()),
     "left_by_back": (str, ""),
     "back": (lambda value: dict(value) if isinstance(value, dict) else None, None),
+    "unknown": (_strings, ()),
 }
 
 

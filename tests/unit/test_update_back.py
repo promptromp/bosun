@@ -10,7 +10,9 @@ import dataclasses
 import io
 import json
 import os
+import shutil
 import sys
+import tempfile
 import unittest
 from collections.abc import Iterator
 from datetime import UTC, datetime
@@ -65,9 +67,13 @@ class BackWorld(World):
         stack = contextlib.ExitStack()
         self.addCleanup(stack.close)
         commits = {self.old.resolve(): FROM, self.new.resolve(): TO}
-        stack.enter_context(
-            mock.patch.object(versions, "commit_of", side_effect=lambda root: commits[Path(root).resolve()])
-        )
+
+        def commit_of(root: Path) -> str:
+            if Path(root).resolve() not in commits:
+                raise RuntimeError(f"cannot read the commit of {root}: not a git repository")
+            return commits[Path(root).resolve()]
+
+        stack.enter_context(mock.patch.object(versions, "commit_of", side_effect=commit_of))
         for module in (update, update_back):
             stack.enter_context(mock.patch.object(module, "ROOT", self.new))
         for name, value in (
@@ -150,6 +156,162 @@ class RefusedTest(BackWorld):
         self.assertEqual(update_back.facts(self.where()).plan.blockers, ())
 
 
+class UnseenTest(BackWorld):
+    """A dry run whose older folder is gone adds none: it reads what it can of that version from bosun.git."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        source(self.new, rules=2)  # the ledger needs restoring: decided from the older version's source
+        self.files = {
+            path.relative_to(self.old).as_posix(): path.read_bytes()
+            for path in self.old.rglob("*")
+            if path.is_file()
+        }
+        shutil.rmtree(self.old)
+
+    @contextlib.contextmanager
+    def bosun_git(self, has: bool) -> Iterator[None]:
+        """bosun.git holding the older commit (<has>), its files as the folder had them."""
+        with (
+            mock.patch.object(versions, "has_commit", return_value=has),
+            mock.patch.object(versions, "show", side_effect=lambda _r, _c, path: self.files.get(path)),
+            mock.patch.object(versions, "tree", return_value=sorted(self.files)),
+        ):
+            yield
+
+    def test_it_reads_the_older_version_from_bosun_git_and_adds_no_folder(self) -> None:
+        with self.bosun_git(True):
+            found = update_back.facts(self.where(), dry_run=True)
+        self.assertFalse(self.old.exists())
+        self.assertFalse(found.older.present)
+        [ledger_part] = found.back.restored()
+        self.assertEqual(ledger_part.why(), "rules 2 -> 1")
+        [note] = found.plan.unknown
+        self.assertIn(
+            f"{self.old} is not there: going back adds it again from bosun.git, at {FROM[:7]}", note
+        )
+        self.assertIn("Not known in this dry run:", update_back_plan.render(found.plan, found.back))
+
+    def test_without_the_commit_either_it_says_what_it_cannot_tell(self) -> None:
+        with self.bosun_git(False):
+            found = update_back.facts(self.where(), dry_run=True)
+        self.assertEqual((found.back.stores, found.plan.blockers), ((), ()))
+        [note] = found.plan.unknown
+        self.assertIn(f"nor {FROM[:7]} in bosun.git: going back fetches it from the origin first", note)
+        self.assertFalse(self.old.exists())
+
+
+class RefusedMoreTest(BackWorld):
+    def test_a_link_moved_by_hand_to_a_folder_git_cannot_read_is_refused_not_a_traceback(self) -> None:
+        elsewhere = self.state.parent / "elsewhere"
+        elsewhere.mkdir()
+        versions.point(self.install, elsewhere)
+        with self.assertRaises(update_facts.UpdateRefused) as caught:
+            update_back.facts(self.where())
+        self.assertIn("going back is then by hand", str(caught.exception))
+
+    def test_a_backup_of_another_update_is_said_once(self) -> None:
+        manifest = json.loads((self.update_backup / update_backups.MANIFEST).read_text())
+        manifest["to"] = "c" * 40
+        (self.update_backup / update_backups.MANIFEST).write_text(json.dumps(manifest))
+        self.assertEqual(update_back.facts(self.where()).plan.blockers, ())  # nothing needs it
+        source(self.new, rules=2)
+        [blocker] = update_back.facts(self.where()).plan.blockers
+        self.assertIn("is of another update (aaaaaaa -> ccccccc)", blocker)
+
+
+class ConfigCopyTest(BackWorld):
+    """bosun.env's changes taken back from the copy the update kept beside it, once a kg forget deleted the
+    backup."""
+
+    def test_the_copy_the_update_kept_beside_bosun_env_serves(self) -> None:
+        patch = mock.patch.object(migrations, "CONFIG_ADDED", ConfigTest.ADDED)
+        patch.start()
+        self.addCleanup(patch.stop)
+        before = "# mine\nKEEP=2\n"
+        (self.config / "bosun.env.pre-update-20261107-120000").write_text(before)
+        (self.config / "bosun.env").write_text(migrations.written_config(before, ("BOSUN_KEEPS",))[0])
+        changed = ('bosun.env: BOSUN_KEEPS="all" added (before: bosun.env.pre-update-20261107-120000)',)
+        self.record(
+            "done",
+            backup=str(self.update_backup),
+            config_changed=changed,
+            plan={"keys_added": ["BOSUN_KEEPS"]},
+        )
+        update_backups.delete_all(self.state)
+        found = update_back.facts(self.where())
+        self.assertEqual((found.plan.blockers, found.back.config.said), ((), ('BOSUN_KEEPS="all" removed',)))
+        self.assertEqual(found.before_env, before)
+
+
+class AddAgainTest(unittest.TestCase):
+    """The older version's folder added again from bosun.git, its commit fetched from the origin if
+    needed."""
+
+    def setUp(self) -> None:
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        self.origin = tmp / "origin"
+        self.git("init", "-q", "-b", "main", str(self.origin))
+        self.first = self.commit("first")
+        self.versions = tmp / "share" / "bosun-versions"
+        self.repo = self.versions / "bosun.git"
+        self.git("clone", "-q", "--bare", str(self.origin), str(self.repo))
+        self.folder = self.versions / self.first[:12]
+        self.git(
+            "--git-dir", str(self.repo), "worktree", "add", "-q", "--detach", str(self.folder), self.first
+        )
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+
+    def git(self, *args: str) -> str:
+        done = versions.git(
+            "-c", "user.name=acme", "-c", "user.email=dev@example.com", "-c", "commit.gpgsign=false", *args
+        )
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return done.stdout.strip()
+
+    def commit(self, subject: str) -> str:
+        self.git("-C", str(self.origin), "commit", "-q", "--allow-empty", "-m", subject)
+        return self.git("-C", str(self.origin), "rev-parse", "HEAD")
+
+    def test_a_folder_removed_comes_back_from_bosun_git(self) -> None:
+        self.git("--git-dir", str(self.repo), "worktree", "remove", str(self.folder))
+        update_back._add_again(self.folder, self.first)
+        self.assertEqual(versions.commit_of(self.folder), self.first)
+
+    def test_a_commit_bosun_git_lacks_is_fetched_from_the_origin_first(self) -> None:
+        later = self.commit("later")
+        self.assertFalse(versions.has_commit(self.repo, later))
+        folder = self.versions / later[:12]
+        update_back._add_again(folder, later)
+        self.assertEqual(versions.commit_of(folder), later)
+
+    def test_its_fetch_never_asks_a_terminal_and_gives_up_on_a_slow_one(self) -> None:
+        later = self.commit("later")
+        real = versions.git
+        calls: list[tuple[tuple[str, ...], dict[str, Any]]] = []
+
+        def git(*args: str, **kw: Any) -> Any:
+            calls.append((args, kw))
+            return real(*args, **kw)
+
+        with mock.patch.object(versions, "git", side_effect=git):
+            update_back._add_again(self.versions / later[:12], later)
+        [(args, kw)] = [call for call in calls if "fetch" in call[0]]
+        self.assertEqual(kw["env"], {"GIT_TERMINAL_PROMPT": "0"})
+        self.assertEqual(kw["timeout"], update_back.FETCH_SECONDS)
+        self.assertIn("http.lowSpeedLimit=1000", args)
+        self.assertIn("http.lowSpeedTime=30", args)
+
+    def test_a_commit_the_origin_does_not_have_either_is_refused(self) -> None:
+        with self.assertRaises(update_facts.UpdateRefused) as caught:
+            update_back._add_again(self.versions / ("e" * 12), "e" * 40)
+        self.assertIn("could not fetch " + "e" * 40 + " from the origin", str(caught.exception))
+        self.assertFalse((self.versions / ("e" * 12)).exists())
+
+
 class KeepTest(BackWorld):
     """The two versions read the stores alike: everything written since is kept, and nothing is frozen."""
 
@@ -188,6 +350,33 @@ class KeepTest(BackWorld):
         self.assertIn("ledger      kept, with what was written since", text)
         self.assertTrue(text.rstrip().endswith("Going forward again: bosun update"), text)
         self.assertIn("bosun went back", (self.update_backup / update_back_plan.BACK_SUMMARY).read_text())
+
+
+class PendingTest(BackWorld):
+    """A back that leaves windows to the check-in loop saves its summary then, marked, with this code: an
+    older version's loop, which finishes it, knows no back."""
+
+    def test_its_summary_is_saved_at_agents_marked_with_the_windows_still_waited_for(self) -> None:
+        def handed(state: UpdateState) -> UpdateState:
+            ended = update_state.advanced(state, "agents", pending=("acme-api",))
+            update_state.write(self.state, ended)
+            return ended
+
+        with mock.patch.object(update, "_windows_brought_along", side_effect=handed):
+            ended = update_back.carried_out(update_back.facts(self.where()), self.where())
+        with contextlib.redirect_stdout(io.StringIO()):
+            update._say_summary(self.state, ended, update.Said())
+        saved = (self.update_backup / update_back_plan.BACK_SUMMARY).read_text().splitlines()
+        self.assertTrue(saved[1].startswith("bosun went back: "), saved)
+        self.assertEqual(
+            saved[2], "(saved while it still brought along acme-api: the check-in loop finishes them)"
+        )
+
+    def test_an_update_at_agents_saves_none_yet(self) -> None:
+        state = self.record("agents", backup=str(self.update_backup), pending=("acme-api",))
+        with contextlib.redirect_stdout(io.StringIO()):
+            update._say_summary(self.state, state, update.Said())
+        self.assertFalse((self.update_backup / update_backups.SUMMARY).exists())
 
 
 class RestoreTest(BackWorld):

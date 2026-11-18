@@ -123,9 +123,11 @@ class CheckTest(unittest.TestCase):
             OLD, None, ("c" * 12, "c" * 40), NEW[:12], False, channel="main", notes="- Two\n"
         )
         self.assertFalse(newer["skipped"])
-        self.assertTrue(update_check.skippable(NEW[:12]))
-        self.assertTrue(update_check.skippable("v2026.11.12.2"))
-        self.assertFalse(update_check.skippable(NEW[:7]))
+        self.assertTrue(update_check.skippable(NEW[:12], "main"))
+        self.assertFalse(update_check.skippable(NEW[:12], "releases"))  # it would replace the release skipped
+        self.assertTrue(update_check.skippable("v2026.11.12.2", "releases"))
+        self.assertTrue(update_check.skippable("v2026.11.12.2", "main"))
+        self.assertFalse(update_check.skippable(NEW[:7], "main"))
 
     def test_the_main_channel_names_the_branch_the_install_follows(self) -> None:
         answer = update_check.check(OLD, None, (NEW[:12], NEW), None, False, channel="main", notes="- One\n")

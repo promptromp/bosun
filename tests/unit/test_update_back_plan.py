@@ -181,6 +181,18 @@ class BackPartTest(unittest.TestCase):
         self.assertEqual(len(blocked.blockers()), 2)
         self.assertIn(ubp.CONFIG_GONE, blocked.blockers())
 
+    def test_a_backup_of_another_update_is_said_once_and_only_where_it_is_needed(self) -> None:
+        mismatch = "that update's backup (/b) is of another update (aaaaaaa -> ccccccc)"
+        blocked = self.back(stores=(ledger(backup_format=None),), config=ConfigPart(True, backup_there=False))
+        self.assertEqual(dataclasses.replace(blocked, mismatch=mismatch).blockers(), (mismatch,))
+        kept = self.back(stores=(ledger(format_now=1, backup_format=None),), mismatch=mismatch)
+        self.assertEqual(kept.blockers(), ())  # nothing needs that backup
+
+    def test_the_copy_the_update_kept_is_found_by_its_line(self) -> None:
+        line = 'bosun.env: BOSUN_KEEPS="all" added (before: bosun.env.pre-update-20261118-140207)'
+        self.assertEqual(ubp.config_copy(("x", line)), "bosun.env.pre-update-20261118-140207")
+        self.assertIsNone(ubp.config_copy(("bosun.env: something (before: elsewhere)",)))
+
     def test_it_reads_back_from_the_record_and_one_of_another_shape_is_none(self) -> None:
         back = self.back(config=ConfigPart(True, ("a",), ("b",)), user_changes=("sessions.yml: x",))
         back = dataclasses.replace(back, stores=(ledger(written=Since(2, "t", ("a1",))), knowledge()))
@@ -264,6 +276,19 @@ class SummaryPlaceTest(unittest.TestCase):
         self.assertEqual(ubp.summary_place(back), (Path("/b/0"), ubp.BACK_SUMMARY))
         self.assertIsNone(ubp.summary_place(record("done")))
         self.assertIsNone(ubp.summary_place(record("done", previous=update_state.bare(over))))  # an update
+        own = record("done", kind=update_state.BACK, backup="/b/2", previous=update_state.bare(over))
+        self.assertEqual(ubp.summary_place(own), (Path("/b/2"), ubp.BACK_SUMMARY))  # never summary.md
+
+    def test_a_back_left_to_the_check_in_loop_is_saved_then_marked(self) -> None:
+        back = record("agents", kind=update_state.BACK, pending=("acme-api", "acme-web"))
+        self.assertTrue(ubp.saved_pending(back))
+        self.assertFalse(ubp.saved_pending(record("agents", pending=("acme-api",))))  # an update's waits
+        self.assertFalse(ubp.saved_pending(dataclasses.replace(back, pending=())))
+        self.assertEqual(
+            ubp.pending("bosun went back: x\nData\n", back),
+            "bosun went back: x\n(saved while it still brought along acme-api, acme-web: the check-in loop "
+            "finishes them)\nData\n",
+        )
 
 
 class OlderThanDataTest(unittest.TestCase):

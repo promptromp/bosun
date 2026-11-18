@@ -71,6 +71,7 @@ import update_back_plan
 import update_backups
 import update_facts
 import update_gate
+import update_lookup
 import update_notes
 import update_plan
 import update_state
@@ -627,14 +628,24 @@ def _go_ahead(yes: bool, ahead: str = AHEAD, question: str = "Update now?") -> b
     if yes:
         return True
     if not sys.stdin.isatty():
-        Output.say(f"Nothing has changed: in a terminal it asks first, and {ahead}.")
+        Output.say(f"{_unchanged()}: in a terminal it asks first, and {ahead}.")
         return False
     print(f"{question} [y/N] ", end="", file=sys.stderr if Output.to_stderr else sys.stdout, flush=True)
     answer = input().strip().lower()
     if answer in ("y", "yes"):
         return True
-    Output.say("Nothing has changed.")
+    Output.say(f"{_unchanged()}.")
     return False
+
+
+FOLLOWS_ENV = "BOSUN_UPDATE_FOLLOWS"  # the wrapper's: the branch `--branch` just made the install follow
+
+
+def _unchanged() -> str:
+    """What a plan said no to leaves: nothing; or, after `--branch` (the wrapper sets FOLLOWS_ENV), the branch
+    the install follows from now on, and nothing else."""
+    follows = os.environ.get(FOLLOWS_ENV)
+    return f"bosun now follows {follows}; nothing else changed" if follows else "Nothing has changed"
 
 
 def _started(
@@ -793,14 +804,24 @@ def _text(state: UpdateState, summary: update_summary.Summary) -> str:
 
 
 def _saved(state: UpdateState, text: str, say: Callable[[str], None]) -> Path | None:
-    """<text> as summary.md in the update's backup folder (a back that took none: beside the backup of
-    the update it went back over, update_back_plan.summary_place), once the update is done and if the
-    folder is still there (a kg forget deletes every backup, and may do so meanwhile: its deletion tries
-    a folder this wrote into again); where, or None. One that cannot be written is said."""
+    """<text> saved where update_back_plan.summary_place says (summary.md in the update's backup folder; a
+    back's back-summary.md), once the update is done, and a back's also when it left windows to the check-in
+    loop (marked so: update_back_plan.pending), as an older version's loop may finish it, which knows no
+    back; if the folder is still there (a kg forget deletes every backup, and may do so meanwhile: its
+    deletion tries a folder this wrote into again); where, or None. One that cannot be written is said."""
     place = update_back_plan.summary_place(state)
-    if state.step != "done" or place is None or not place[0].is_dir():
+    if place is None or not place[0].is_dir():
         return None
-    folder, name = place
+    if state.step != "done":
+        if not update_back_plan.saved_pending(state):
+            return None
+        text = update_back_plan.pending(text, state)
+    return _write_summary(place[0], place[1], text, say)
+
+
+def _write_summary(folder: Path, name: str, text: str, say: Callable[[str], None]) -> Path | None:
+    """<text> as <name> in <folder>, whole (a temporary file renamed over it); where, or None, said, when it
+    cannot be written (but for the folder deleted meanwhile)."""
     path = folder / name
     tmp = folder / f".{name}.tmp"
     try:
@@ -1137,7 +1158,8 @@ def _say_up_to_date() -> None:
 def _resumed_line(state: UpdateState) -> str:
     """What became of an update found cut short (resume): put back, ended, carried on to the end, or,
     at `agents`, nothing: its windows are still brought along, and who finishes them."""
-    versions_ = f"An update from {_short(state.from_commit)} to {_short(state.to_commit)}"
+    what_it_is = "A back" if state.kind == update_state.BACK else "An update"
+    versions_ = f"{what_it_is} from {_short(state.from_commit)} to {_short(state.to_commit)}"
     if state.step == "agents":
         finishes = update_windows.who_finishes(Path(state.to_root), state.pending)
         return f"{versions_} still brings windows along: {finishes}; a newer update takes them over."
@@ -1189,13 +1211,30 @@ def _carried_on(state_dir: Path, said: Said) -> bool:
     try:
         resumed = resume(state_dir)
     except WaitStopped as stopped:
+        skip_left(state_dir, stopped.state)
         _say_summary(state_dir, stopped.state, said)
         return False
     if resumed is not None:
         Output.say(_resumed_line(resumed))
         if resumed.step in ENDED:
+            skip_left(state_dir, resumed)
             _say_summary(state_dir, resumed, said)
     return True
+
+
+def skip_left(state_dir: Path, state: UpdateState) -> None:
+    """A back that ended (done, or its windows left to the check-in loop): the version it left recorded as
+    skipped (update_lookup.skip_left, by the name --check gives it on the channel), and said; nothing for an
+    update."""
+    if state.kind != update_state.BACK or state.step not in ENDED:
+        return
+    channel = os.environ.get("BOSUN_UPDATE_CHANNEL") or "releases"
+    name = update_lookup.skip_left(state_dir, channel, state.from_commit)
+    if name:
+        Output.say(
+            f"bosun update --check no longer offers {name}, the version it left; bosun update still goes "
+            "there"
+        )
 
 
 def _for_real(where: Folders, args: argparse.Namespace, said: Said) -> int:

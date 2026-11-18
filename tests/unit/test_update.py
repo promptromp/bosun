@@ -39,6 +39,7 @@ import update_agents
 import update_backups
 import update_facts
 import update_gate
+import update_lookup
 import update_notes
 import update_plan
 import update_state
@@ -850,6 +851,76 @@ class BegunTest(World):
     def test_with_nothing_finished_it_keeps_none(self) -> None:
         (self.state / update_state.STATE_FILE).unlink(missing_ok=True)
         self.assertEqual(update.begun(a_plan(), self.old, self.new, (), self.state).previous, {})
+
+
+class BackCarriedOnTest(World):
+    """A back cut short is carried on, or put back, by the update's own machinery (resume,
+    update_gate.recover), whose record it shares (kind back)."""
+
+    def back_record(self, step: str, **fields: Any) -> UpdateState:
+        """A back from the new version to the old one, at <step>."""
+        state = dataclasses.replace(
+            self.record(step, **fields),
+            from_root=str(self.new),
+            to_root=str(self.old),
+            from_commit=TO,
+            to_commit=FROM,
+            kind=update_state.BACK,
+        )
+        update_state.write(self.state, state)
+        return state
+
+    def test_one_that_restored_nothing_cut_short_at_checked_is_switched_and_finished(self) -> None:
+        """It records `checked` before the release switches: carried on, the release leads the install to the
+        older version, its windows come along, the version it left is skipped, and it says it was a back."""
+        versions.point(self.install, self.new)
+        self.back_record("checked")
+
+        def done(state: UpdateState) -> UpdateState:
+            ended = update_state.advanced(state, "done")
+            update_state.write(self.state, ended)
+            return ended
+
+        out = io.StringIO()
+        with (
+            mock.patch.object(update, "_reload_jobs", return_value=([], [])),
+            mock.patch.object(update_facts, "open_windows", return_value=[]),
+            mock.patch.object(update_facts, "dropped_jobs", return_value=[]),
+            mock.patch.object(update, "_doctor", return_value=[]),
+            mock.patch.object(update, "_prune", return_value=[]),
+            mock.patch.object(update, "_windows_brought_along", side_effect=done),
+            mock.patch.dict(os.environ, {"BOSUN_UPDATE_CHANNEL": "main"}),
+            contextlib.redirect_stdout(out),
+        ):
+            self.assertTrue(update._carried_on(self.state, update.Said()))
+        self.assertEqual(self.link().resolve(), self.old.resolve())
+        recorded = update_state.read(self.state)
+        assert recorded is not None
+        self.assertEqual((recorded.step, recorded.kind), ("done", update_state.BACK))
+        self.assertIn(
+            f"A back from {TO[:7]} to {FROM[:7]} that was cut short: carried on to the end.", out.getvalue()
+        )
+        self.assertEqual(update_lookup.skipped_version(self.state), TO[:12])
+
+    def test_one_cut_short_while_writes_were_paused_is_put_back_bosun_env_too(self) -> None:
+        """At `migrated`, with bosun.env among what it restores: the next writer puts the back's own backup
+        back, and the install at the newer version it was going back from."""
+        versions.point(self.install, self.new)
+        env = self.config / "bosun.env"
+        env.write_text("BOSUN_NEW=1\n")
+        now = datetime(2026, 11, 18, 15, 0, tzinfo=UTC)
+        backup = update_backups.take(self.state, self.config, TO, FROM, {"ledger": 1, "knowledge": 0}, now)
+        self.ledger("upsert", "review:acme/exporter#99", "--kind", "review-request", "--title", "half way")
+        env.write_text("BOSUN_OLD=1\n")  # taken back, half way
+        restorable = (*update_backups.STORE_PARTS["ledger"], "config/bosun.env")
+        self.back_record("migrated", backup=str(backup), restorable=restorable)
+        self.assertTrue(update_gate.recover(self.state, self.config))
+        self.assertEqual(env.read_text(), "BOSUN_NEW=1\n")
+        self.assertNotIn("review:acme/exporter#99", ledger.load_at(self.state)["items"])
+        self.assertEqual(self.link().resolve(), self.new.resolve())
+        recorded = update_state.read(self.state)
+        assert recorded is not None
+        self.assertEqual((recorded.step, recorded.kind), ("restored", update_state.BACK))
 
 
 class ThroughTest(World):

@@ -6303,7 +6303,12 @@ HAND
   b_over_id="$(jq -r .id "$B_STATE/update.json")"
   b_over_backup="$(jq -r .backup "$B_STATE/update.json")"
   bb ledger upsert 'review:acme/api#32' --kind review-request --title "Written on v2, since the update" >/dev/null
+  # v1's folder gone (deleted by hand, or pruned): its commit is still in bosun.git.
+  git --git-dir="$B_VERSIONS/bosun.git" worktree remove --force "$B_V1"
   out="$(bb update --back --dry-run 2>&1)"
+  check "--back --dry-run with v1's folder gone adds no folder, and reads v1 from bosun.git: what it cannot tell yet, said" bash -c '
+    [ ! -e "$2" ] && grep -qF "$2 is not there: going back adds it again from bosun.git, at ${3:0:7}" <<<"$1" &&
+      grep -q "^Not known in this dry run:" <<<"$1"' _ "$out" "$B_V1" "$U_V1_COMMIT"
   check "--back --dry-run: its plan goes back over that update, restores the ledger (format 2 -> 1) and says what that loses" bash -c '
     grep -q "^Go back ${2:0:7} -> ${3:0:7}, over the update of " <<<"$1" &&
       grep -q "ledger: format 2 -> 1: restored from that update.s backup; loses 1 change written since (the last at .*), to review:acme/api#32" <<<"$1"' _ "$out" "$U_V2_COMMIT" "$U_V1_COMMIT"
@@ -6313,6 +6318,8 @@ HAND
   bb update --back --yes >"$B/back.out" 2>&1
   rc=$?
   check "--back --yes goes back (exit 0): the link at v1" bash -c '[ "$1" = 0 ] && [ "$(cd "$2" && pwd -P)" = "$3" ] || { tail -15 "$4"; exit 1; }' _ "$rc" "$B_LINK" "$B_V1" "$B/back.out"
+  check "... v1's folder added again from bosun.git, at its commit, said" bash -c '
+    [ "$(git -C "$2" rev-parse HEAD)" = "$3" ] && grep -qF "Added $2 again, the version the last update came from" "$1"' _ "$B/back.out" "$B_V1" "$U_V1_COMMIT"
   check "... the ledger restored from that update's backup: format 1, without what was written since" bash -c '
     [ "$(jq -r .version "$1/ledger.json")" = 1 ] && jq -e ".items | has(\"review:acme/api#31\") and (has(\"review:acme/api#32\") | not)" "$1/ledger.json" >/dev/null' _ "$B_STATE"
   check "... and valid against its journal, as v1 reads it" test "$(bb ledger validate --journal 2>&1)" = "ledger is valid"
@@ -6324,7 +6331,7 @@ HAND
     .kind == "back" and .step == "done" and .previous.id == $id and (.restored | length == 1) and (.config_changed | length == 1)' "$B_STATE/update.json"
   check "... its summary says so, and is saved beside its own backup" bash -c '
     grep -q "^bosun went back: ${2:0:7} -> ${3:0:7} in .*, over the update of " "$1" && [ "$(tail -1 "$1")" = "Going forward again: bosun update" ] &&
-      grep -q "^bosun went back" "$(jq -r .backup "$4/update.json")/summary.md"' _ "$B/back.out" "$U_V2_COMMIT" "$U_V1_COMMIT" "$B_STATE"
+      grep -q "^bosun went back" "$(jq -r .backup "$4/update.json")/back-summary.md"' _ "$B/back.out" "$U_V2_COMMIT" "$U_V1_COMMIT" "$B_STATE"
   check "... and the version it left is skipped: --check no longer offers it" jq -e --arg v "${U_V2_COMMIT:0:12}" '.skipped == true and .latest.version == $v' <<<"$(bb update --check --json)"
   check "a second --back is refused: one step back, never further" fails_with "bosun already went back from ${U_V2_COMMIT:0:7} to ${U_V1_COMMIT:0:7}" bb update --back --dry-run
   out="$(bb update --dry-run 2>&1)"
@@ -6397,6 +6404,18 @@ HAND
   check "... with --json, the one object with the error" bash -c '
     out="$("$@" update --branch nope --json 2>/dev/null)"; [ $? = 1 ] && jq -e ".contract == 1 and .plan == null and (.error | endswith(\"has no branch nope: nothing changed\"))" <<<"$out" >/dev/null' _ "${R_ENV[@]}" "$R_LINK/bin/bosun"
   check "a name git does not take as a branch's is a usage error" fails_with "is not a branch's name" rb update --branch "a..b"
+  check "... and changes nothing: no branch followed, bosun.env as it was" bash -c '
+    ! git --git-dir="$1/bosun.git" config bosun.branch && [ "$(cat "$2/bosun.env")" = "$3" ]' _ "$R_VERSIONS" "$R_CONFIG" "$r_env"
+  # Another bosun settings set (or bosun init) holding its lock: settings set refuses, and --branch sets nothing.
+  python3 -c 'import fcntl, sys, time; f = open(sys.argv[1], "a"); fcntl.flock(f, fcntl.LOCK_EX); print("held", flush=True); time.sleep(120)' \
+    "$R_STATE/init.lock" >"$R/held.out" &
+  r_holder=$!
+  wait_for 10 grep -q held "$R/held.out"
+  check "--branch whose channel cannot be set (bosun settings set refuses) sets nothing at all" bash -c '
+    out="$("${@:4}" update --branch try-x </dev/null 2>&1)"; [ $? = 1 ] && grep -q "nothing changed: the install follows what it did" <<<"$out" &&
+      ! git --git-dir="$1/bosun.git" config bosun.branch && [ "$(cat "$2/bosun.env")" = "$3" ]' _ "$R_VERSIONS" "$R_CONFIG" "$r_env" "${R_ENV[@]}" "$R_LINK/bin/bosun"
+  kill "$r_holder" 2>/dev/null
+  wait "$r_holder" 2>/dev/null
   out="$(rb update --branch try-x --dry-run 2>&1)"
   check "--branch --dry-run shows the plan to the branch's head, and writes nothing" bash -c '
     grep -q "^Update $2 -> $3" <<<"$1" && ! git --git-dir="$4/bosun.git" config bosun.branch && [ "$(cat "$5/bosun.env")" = "$6" ]' \
@@ -6404,7 +6423,8 @@ HAND
   rb update --branch try-x </dev/null >"$R/declined.out" 2>&1
   rc=$?
   check "--branch said no to (no terminal: the plan alone): the install follows the branch from now on, and says so" bash -c '
-    [ "$1" = 0 ] && grep -qx "bosun follows try-x from now on (bosun update --branch main follows main again)" "$2" && grep -q "Nothing has changed" "$2"' _ "$rc" "$R/declined.out"
+    [ "$1" = 0 ] && grep -qx "bosun follows try-x from now on (bosun update --branch main follows main again)" "$2" &&
+      grep -q "^bosun now follows try-x; nothing else changed: in a terminal it asks first" "$2" && ! grep -q "Nothing has changed" "$2"' _ "$rc" "$R/declined.out"
   check "... bosun.branch is try-x, the channel main in bosun.env (its copy kept), the version as it was" bash -c '
     [ "$(git --git-dir="$1/bosun.git" config bosun.branch)" = try-x ] && grep -q "^BOSUN_UPDATE_CHANNEL=\"\{0,1\}main\"\{0,1\}" "$2/bosun.env" &&
       ls "$2"/bosun.env.pre-init-* >/dev/null && [ "$(cd "$3" && pwd -P)" = "$4" ]' _ "$R_VERSIONS" "$R_CONFIG" "$R_LINK" "$R_V2"
@@ -6415,10 +6435,14 @@ HAND
   check "--branch to a branch whose code is older in a store's format than the data is refused, pointing at --back" bash -c '
     out="$("$@" update --branch old-x 2>&1)"; [ $? = 1 ] && grep -q "has the ledger at format 1, and the data is at format 2" <<<"$out" &&
       grep -q "bosun update --back" <<<"$out"' _ "${R_ENV[@]}" "$R_LINK/bin/bosun"
-  check "... nothing changed: still following try-x" test "$(r_branch)" = try-x
+  check "... nothing changed: still following try-x, bosun.env as it was, the version as it was" bash -c '
+    [ "$(git --git-dir="$1/bosun.git" config bosun.branch)" = try-x ] && [ "$(cat "$2/bosun.env")" = "$3" ] && [ "$(cd "$4" && pwd -P)" = "$5" ]' \
+    _ "$R_VERSIONS" "$R_CONFIG" "$(cat "$R_CONFIG/bosun.env")" "$R_LINK" "$(cd "$R_VERSIONS/${U_V3_COMMIT:0:12}" && pwd -P)"
   rb update --branch main </dev/null >"$R/main.out" 2>&1
-  check "--branch main follows main again, and says so" bash -c '
-    [ "$(git --git-dir="$1/bosun.git" config bosun.branch)" = main ] && grep -qx "bosun follows main from now on (bosun update --branch main follows main again)" "$2"' _ "$R_VERSIONS" "$R/main.out"
+  rc=$?
+  check "--branch main follows main again, and says so; main's head (the update section's v4, its launchd templates broken) is blocked at its plan (exit 1)" bash -c '
+    [ "$1" = 1 ] && [ "$(git --git-dir="$2/bosun.git" config bosun.branch)" = main ] &&
+      grep -qx "bosun follows main from now on (bosun update --branch main follows main again)" "$3" && grep -q "The update is blocked." "$3"' _ "$rc" "$R_VERSIONS" "$R/main.out"
   rb update --branch rules-up --yes >"$R/rules.out" 2>&1
   rc=$?
   check "--branch rules-up --yes follows it and moves to its head (exit 0), the ledger's rules at 2 from then on" bash -c '
