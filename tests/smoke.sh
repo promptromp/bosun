@@ -80,6 +80,7 @@ section() {
 # needs_section <id> <other>: section <id> needs <other>, itself or through what it needs (of the sections entered).
 needs_section() {
   local todo="$1" seen="," id need
+  [ "$1" = "$2" ] && return 0
   while [ -n "$todo" ]; do
     id="${todo%%,*}"
     if [ "$todo" = "$id" ]; then todo=""; else todo="${todo#*,}"; fi
@@ -396,11 +397,33 @@ passed=0
 failed=0
 STOPPED_AT=""  # with -x, where the run stopped
 CONSOLE_PID="" # the console test's server, while it runs
-BG_PIDS=""     # commands a check runs in the background (a quit, a start, a lock's holder): stopped with the run
+BG_PIDS=""     # commands a check runs in the background (a quit, a start, a lock's holder) until it waits for them
+
+# bg_started <pid>: a command a check started in the background, stopped with the run if it still runs then.
+bg_started() { BG_PIDS="$BG_PIDS $1"; }
+# bg_done <pid>: wait for it, with its status, and drop it from the list: once it ended, its pid may name another
+# process.
+bg_done() {
+  local status=0 pid rest=""
+  wait "$1" 2>/dev/null || status=$?
+  for pid in $BG_PIDS; do [ "$pid" = "$1" ] || rest="$rest $pid"; done
+  BG_PIDS="$rest"
+  return "$status"
+}
+# own_child <pid>: the pid names a child of this run's shell still. One that ended on its own was reaped by bash,
+# and the system may have given its pid to anyone's process since.
+own_child() { [ "$(command -p ps -o ppid= -p "$1" 2>/dev/null | tr -d ' ')" = "$$" ]; }
+# stop_background: what bg_started recorded and no bg_done took back, if it is still this run's own (never a pid that
+# has come to name another process).
+stop_background() {
+  local pid
+  for pid in $BG_PIDS; do own_child "$pid" && kill "$pid" 2>/dev/null; done
+  BG_PIDS=""
+}
 
 cleanup() {
   [ -n "$CONSOLE_PID" ] && kill "$CONSOLE_PID" 2>/dev/null
-  for pid in $BG_PIDS; do kill "$pid" 2>/dev/null; done
+  stop_background
   tmux -L "$SOCKET" kill-server 2>/dev/null
   tmux -L "$SOCKET-update" kill-server 2>/dev/null # the update's windows (bosun update)
   tmux -L "$SOCKET-agy" kill-server 2>/dev/null    # the windows on the agy stand-in
@@ -754,13 +777,13 @@ hold_lock() {
   python3 "$ROOT/lib/run_locked.py" "$1" 30 busy -- bash -c ': >"$1.held"
     for _ in $(seq 1 3000); do [ -e "$1" ] || exit 0; sleep 0.1; done' _ "$release" &
   echo $! >"$release.pid"
-  BG_PIDS="$BG_PIDS $!"
+  bg_started $!
   wait_for 30 test -e "$release.held" || fail_check "hold_lock: $1 not taken (another holder, or none started)"
 }
 release_lock() { # <name>: the holder hold_lock started lets go, and is gone
   local release="$WORK/hold-lock.$1"
   rm -f "$release" "$release.held"
-  wait "$(cat "$release.pid")" 2>/dev/null
+  bg_done "$(cat "$release.pid")"
   rm -f "$release.pid"
 }
 fake_claude() { # <window> <status> <version> <seconds-in-status> [name]; runs `sleep` in the pane as "Claude"
@@ -1101,6 +1124,32 @@ check "only idle, busy and shell sessions take input" bash -c 'source "$1/lib/co
 # length is only how long a broken timeout would hang the run.)
 check "run_with_timeout stops a slow command" bash -c 'source "$1/lib/common.sh"; run_with_timeout 1 sleep 30; [ $? -eq 143 ]' _ "$ROOT"
 check "run_with_timeout passes a fast command's status" bash -c 'source "$1/lib/common.sh"; run_with_timeout 5 true && ! run_with_timeout 5 false' _ "$ROOT"
+# The run's own end (stop_background) stops only what is still its own: a command a check left running in the
+# background, never a pid waited for (bg_done drops it) nor one whose process this run did not start (here a loop
+# whose parent ended at once, which writes down the signals it gets: the test's USR1, sent after, comes first if no
+# TERM came). Each ends on its own after 30 s of polls, exit 7, should nothing stop it.
+bash -c 'for _ in $(seq 1 300); do sleep 0.1; done; exit 7' &
+bg_own=$!
+true &
+bg_waited=$!
+bg_started "$bg_waited"
+bg_done "$bg_waited"
+bg_other="$(sh -c '(trap "echo TERM >>\"\$1\"; exit" TERM; trap "echo USR1 >>\"\$1\"; exit" USR1
+  for _ in $(seq 1 300); do sleep 0.1; done; exit 7) >/dev/null 2>&1 & echo $!' _ "$WORK/bg-other.signals")"
+stops_only_its_own() { # <own pid> <other pid>: each is told for what it is, then stop_background goes over both
+  own_child "$1" && ! own_child "$2" || return 1
+  BG_PIDS=" $2 $1"
+  stop_background
+}
+check "bg_done drops the pid it waited for" bash -c 'case "$1 " in *" $2 "*) exit 1 ;; esac' _ "$BG_PIDS" "$bg_waited"
+check "the run's end tells a background command of its own from a pid that names another's process" \
+  stops_only_its_own "$bg_own" "$bg_other"
+wait "$bg_own" 2>/dev/null # (bash would say "Terminated")
+check "... stops its own (TERM: 143), which would have ended 7 on its own" test $? -eq 143
+kill -USR1 "$bg_other"
+wait_for 30 test -s "$WORK/bg-other.signals"
+check "... and sends nothing to the other: the first signal it got is the test's, sent after" \
+  test "$(head -1 "$WORK/bg-other.signals")" = USR1
 fnc() { bash -c 'source "$1/lib/common.sh"; load_config; shift; "$@"' _ "$ROOT" "$@"; } # with the config's defaults
 check "harness_bin names the command the config gives each agent" test "$(fnc harness_bin codex)" = codex
 check "... and an override of it" test "$(BOSUN_CODEX_BIN=/opt/acme/codex fnc harness_bin codex)" = /opt/acme/codex
@@ -2990,23 +3039,25 @@ wait_for 30 pane_has_children gamma
 check "--start never replaces a running command" fails_with "running another command" env BOSUN_RELAUNCH_SETTLE_SECONDS=1 "$BOSUN" send --start gamma x
 tmux -L "$SOCKET" send-keys -t "=smoke:gamma" C-c
 wait_for 30 bash -c '! pgrep -P "$(tmux -L "$1" display -p -t =smoke:gamma "#{pane_pid}")" >/dev/null' _ "$SOCKET"
-# A shell busy until the test lets it go (a file it waits on), not for a fixed time: --start waits, starting
-# nothing while it is busy, and starts once it is free. (Its settle time, 120 s here, is only hang protection.)
+# A shell busy until the test lets it go (a file it waits on), not for a fixed time: --start waits, and starts once
+# it is free. The busy command is one process (a shell looping in a pane would have no child between its sleeps,
+# which --start would take for free), and it writes a file of its own when it ends: a replace while it was busy
+# would have stopped it first, so the file shows that --start replaced nothing until it was done. (The settle
+# time, 120 s here, is only hang protection.)
 touch "$WORK/gamma-busy"
-tmux -L "$SOCKET" send-keys -t "=smoke:gamma" "while [ -e '$WORK/gamma-busy' ]; do sleep 0.1; done" Enter
+rm -f "$WORK/gamma-settled"
+tmux -L "$SOCKET" send-keys -t "=smoke:gamma" \
+  "bash -c \"while [ -e '$WORK/gamma-busy' ]; do sleep 0.1; done; : >'$WORK/gamma-settled'\"" Enter
 wait_for 30 pane_has_children gamma
-gamma_busy_pane="$(tmux -L "$SOCKET" display -p -t "=smoke:gamma" '#{pane_pid}')"
 BOSUN_RELAUNCH_SETTLE_SECONDS=120 live --start gamma 'after the shell settled' >"$WORK/gamma-start.out" 2>&1 &
 gamma_start=$!
-BG_PIDS="$BG_PIDS $gamma_start"
+bg_started "$gamma_start"
 check "--start waits for a briefly busy shell, saying so" \
   wait_for 30 grep -q "gamma: the pane runs a command; waiting up to 120s for it to end" "$WORK/gamma-start.out"
-check "... replacing nothing while it is busy" bash -c '
-  kill -0 "$1" && [ "$(tmux -L "$2" display -p -t =smoke:gamma "#{pane_pid}")" = "$3" ] && ! grep -q "Claude is running" "$4"' \
-  _ "$gamma_start" "$SOCKET" "$gamma_busy_pane" "$WORK/gamma-start.out"
 rm -f "$WORK/gamma-busy"
-wait "$gamma_start"
+bg_done "$gamma_start"
 check "... and starts once it settled" contains "$(cat "$WORK/gamma-start.out")" "Claude is running in smoke:gamma"
+check "... having replaced nothing while it was busy: the busy command ran to its end" test -e "$WORK/gamma-settled"
 kill "$alpha_pid"
 wait_for 30 bash -c '! pgrep -P "$(tmux -L "$1" display -p -t =smoke:alpha "#{pane_pid}")" >/dev/null' _ "$SOCKET"
 drain_prompt="$(bash -c 'source "$1/lib/common.sh"; load_config; printf %s "$BOSUN_DRAIN_PROMPT"' _ "$ROOT")"
@@ -3512,18 +3563,27 @@ out="$(BOSUN_CONFIG_DIR="$SETUP_CFG" BOSUN_NETWORK_PROBE_URL=file:///dev/null "$
 check "morning --dry-run would hold the keep-awake" contains "$out" "dry-run: would hold keep-awake for 5 minutes"
 check "... but starts no caffeinate" test ! -f "$BOSUN_STATE_DIR/keep-awake-smoke.pid"
 check "it waits for the network" contains "$out" "network is up"
-# With no network it probes every 5 seconds, but sleeps no longer than what is left of its timeout: what it asks
-# of sleep, written down by a stand-in that returns at once (no clock to race), is never more than its 3 s timeout,
-# where a sleep to its next probe would be 5. The stand-in is in ~/.local/bin, where bosun looks first, for this one
-# run, and acts only for what runs with SMOKE_SLEEP_ASKED set (this morning and what it starts): any other process
-# gets the real sleep.
-printf '#!/bin/sh\n[ -n "${SMOKE_SLEEP_ASKED:-}" ] || exec /bin/sleep "$@"\necho "$*" >>"$SMOKE_SLEEP_ASKED"\n' >"$HOME/.local/bin/sleep"
+# With no network it probes every 5 seconds, but sleeps no longer than what is left of its timeout. A stand-in that
+# returns at once (no clock to race) writes down what the morning's own process asks of sleep, which in a dry run is
+# only its network wait: each ask what is left of its 3 s timeout, 1 to 3 s, where a sleep to its next probe would
+# ask 5. Every other sleep gets the real one: one asked by what the morning starts (the setup), by a subshell of it
+# (a timeout's timer), or by any process outside this run (SMOKE_SLEEP_ASKED unset). The stand-in is in
+# ~/.local/bin, where bosun looks first, for this one run.
+cat >"$HOME/.local/bin/sleep" <<'SLEEP'
+#!/bin/sh
+morning() { case "$(ps -o command= -p "$1")" in */libexec/bosun-morning*) return 0 ;; esac; return 1; }
+if [ -n "${SMOKE_SLEEP_ASKED:-}" ] && morning "$PPID" && ! morning "$(ps -o ppid= -p "$PPID" | tr -d ' ')"; then
+  echo "$*" >>"$SMOKE_SLEEP_ASKED"
+  exit 0
+fi
+exec /bin/sleep "$@"
+SLEEP
 chmod +x "$HOME/.local/bin/sleep"
 rm -f "$WORK/sleep-asked.log"
 out_down="$(SMOKE_SLEEP_ASKED="$WORK/sleep-asked.log" BOSUN_CONFIG_DIR="$SETUP_CFG" BOSUN_NETWORK_PROBE_URL=file:///nonexistent-probe BOSUN_NETWORK_TIMEOUT=3 "$BOSUN" morning --dry-run --awake-minutes 5 2>&1)"
 rm -f "$HOME/.local/bin/sleep"
-check "... and gives up once its timeout is over, never sleeping past it to its next 5-second probe" bash -c '
-  grep -q "network still down after 3s; continuing" <<<"$1" && [ -s "$2" ] && awk "\$1 > 3 { bad = 1 } END { exit bad }" "$2" ||
+check "... and gives up once its timeout is over, each wait what was left of it, never its next 5-second probe" bash -c '
+  grep -q "network still down after 3s; continuing" <<<"$1" && [ -s "$2" ] && ! grep -qvx "[123]" "$2" ||
     { echo "asked of sleep: $(sort "$2" 2>/dev/null | uniq -c | tr "\n" " ")"; grep -i network <<<"$1"; exit 1; }' _ "$out_down" "$WORK/sleep-asked.log"
 check "it previews the setup steps" contains "$out" "aws profile good is valid, no login needed"
 check "it lists the windows it would start, with model and effort" contains "$out" "alpha (session, opus/medium) -> $REPO_A"
@@ -3788,7 +3848,7 @@ hold_lock "$BOSUN_STATE_DIR/windows.lock" quit-let-finish
 rm -f "$WORK/quit.out" "$WORK/quit.err"
 BOSUN_WINDOWS_LOCK_WAIT_SECONDS=120 "$BOSUN" quit --let-finish=1 --pause-morning </dev/null >"$WORK/quit.out" 2>"$WORK/quit.err" &
 quitting=$!
-BG_PIDS="$BG_PIDS $quitting"
+bg_started "$quitting"
 check "--let-finish waits (polling every BOSUN_QUIT_POLL_SECONDS) until alpha is done, though beta waits at a prompt, saying so" \
   wait_for 60 grep -q "Waiting for 1 busy window (alpha), up to 1 minute" "$WORK/quit.err"
 agent_status "$quit_alpha" idle
@@ -3797,7 +3857,7 @@ check "... then, alpha done, for the start holding the windows lock, saying so" 
 check "... having stopped nothing while it waits: the session, no quit.json, the console's marker" bash -c '
   kill -0 "$1" && tmux -L "$2" has-session -t =smoke && [ ! -e "$3/quit.json" ] && [ -f "$3/console/wanted" ]' _ "$quitting" "$SOCKET" "$BOSUN_STATE_DIR"
 release_lock quit-let-finish
-wait "$quitting"
+bg_done "$quitting"
 check "... and once the lock is free, it quits (exit 0): morning paused, Mac kept awake" test $? -eq 0
 check "... it said on stderr who it waited for, once, and that it waited for the lock" bash -c '
   [ "$(wc -l <"$1")" -eq 2 ] && [ "$(grep -c "Waiting for 1 busy window (alpha), up to 1 minute" "$1")" -eq 1 ]' _ "$WORK/quit.err"
@@ -4151,12 +4211,12 @@ BOSUN_CONFIG_DIR="$SET_CFG" BOSUN_STATE_DIR="$SET_STATE" BOSUN_LOG_DIR="$SET_STA
   'source "$1/lib/common.sh"; load_config; lock_here init 0 && echo held &&
     exec bash -c "for _ in \$(seq 1 3000); do [ -e \"\$1\" ] || exit 0; sleep 0.1; done" _ "$2"' _ "$ROOT" "$WORK/settings-lock-here.hold" >"$WORK/settings-lock-here.out" &
 set_init_holder=$!
-BG_PIDS="$BG_PIDS $set_init_holder"
+bg_started "$set_init_holder"
 wait_for 30 grep -q held "$WORK/settings-lock-here.out"
 check "while set holds init's lock, bosun init is refused at once" fails_with "bosun init is already running (in another terminal?), or bosun settings set is" env BOSUN_CONFIG_DIR="$SET_CFG" BOSUN_STATE_DIR="$SET_STATE" BOSUN_LOG_DIR="$SET_STATE/logs" "$BOSUN" init --answers /dev/null
 check "... and so is another set" fails_with "bosun init or another bosun settings set is running" settings_cmd set BOSUN_UPDATE_CHANNEL=main
 rm -f "$WORK/settings-lock-here.hold"
-wait "$set_init_holder" 2>/dev/null
+bg_done "$set_init_holder"
 
 check "a bad value is refused, naming the setting, with exit 2 (quietly: not an alert, below)" fails_with_status 2 "BOSUN_START_TIME" settings_cmd set BOSUN_START_TIME=25:00
 # (An unknown key is refused alike, settings.py's checks: test_settings.py; the --json refusal object is above.)
@@ -5170,12 +5230,13 @@ assert job.get("AbandonProcessGroup") is True, job.get("AbandonProcessGroup")
   mkdir "$UN_WORKTREES/billing.worktrees/fix-qty"
   # A window whose agent, stopped, starts a hook in a session of its own that writes a signal two seconds
   # later, as Claude Code starts its async SessionEnd hook, and a helper in its window's session that
-  # outlives it, as Claude Code's caffeinate does; it ends a second later. Uninstall must wait for the hook
-  # before it removes bosun's files, and not for the helper.
+  # outlives it, as Claude Code's caffeinate does, until the test removes its file (it ignores TERM, as the
+  # window's end would send it); the agent ends a second later. Uninstall must wait for the hook before it
+  # removes bosun's files, and not for the helper.
   cat >"$WORK/late-hook.py" <<'LATE'
 import os, sys, time
 os.setsid()
-time.sleep(2)
+time.sleep(2)  # timing: the hook's delay, which uninstall waits out
 os.makedirs(os.path.join(sys.argv[1], "signals"), exist_ok=True)
 with open(os.path.join(sys.argv[1], "signals", "w.jsonl"), "w") as signal:
     signal.write("{}\n")
@@ -5184,12 +5245,14 @@ with open(sys.argv[2], "w") as done:  # when it wrote, for the order below
 LATE
   cat >"$WORK/late-agent" <<'LATE'
 #!/bin/bash
-trap 'python3 "$1/late-hook.py" "$2" "$3" & (trap "" HUP TERM; exec sleep 60) & echo $! >"$4"; sleep 1; exit 0' HUP TERM
+trap 'python3 "$1/late-hook.py" "$2" "$3" & (trap "" HUP TERM; for _ in $(seq 1 3000); do [ -e "$4.hold" ] || exit 0; sleep 0.1; done) &
+  echo $! >"$4"; sleep 1; exit 0' HUP TERM
 : >"$1/late-ready"
 while :; do sleep 1; done
 LATE
   chmod +x "$WORK/late-agent"
   rm -f "$WORK/late-ready"
+  : >"$WORK/late-helper.hold"
   tmux -L "$SOCKET" new-session -d -s un-test -n w -- "$WORK/late-agent" "$WORK" "$WORK/un-state" "$WORK/late-written" "$WORK/late-helper"
   # tmux returns before the agent has set its trap: a stop that came first would end it with no hook to wait for.
   wait_for 30 test -e "$WORK/late-ready"
@@ -5207,7 +5270,7 @@ for line in sys.stdin:
       [ -n "$said" ] && [ "$wrote" -lt "$said" ]' _ "$WORK/late-written" "$WORK/un-timed.txt"
   check "... but not for a helper it left in its window's session" bash -c '
     kill -0 "$(cat "$2")" && ! grep -q "still running" <<<"$1"' _ "$UN_OUT" "$WORK/late-helper"
-  kill "$(cat "$WORK/late-helper")" 2>/dev/null
+  rm -f "$WORK/late-helper.hold"
   check "uninstall takes back the trust it gave" bash -c '! python3 "$1/lib/claude_state.py" trusted "$2"' _ "$ROOT" "$UN_REPO"
   check "... removes the empty worktrees folder a launch made" bash -c '
     [ ! -e "$1/exporter.worktrees" ] && grep -q "removed the empty worktrees folder bosun made, $1/exporter.worktrees" <<<"$2"' _ "$UN_WORKTREES" "$UN_OUT"

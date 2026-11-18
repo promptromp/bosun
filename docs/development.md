@@ -182,7 +182,9 @@ consulted then either; `BOSUN_SMOKE_NO_CACHE=1` only ignores the record, and sti
 
 A section either sets up what it uses itself or says `needs <id>`, and
 `tests/unit/test_smoke_sections.py` fails on a section without a marker, a taken id or a `needs` that names
-nothing above it. Every section begins by checking that the tools that reach outside the run
+nothing above it. That holds for a bosun session too: a section that starts one (after `no_session`, which records it as
+that section's) has it ended when a section that needs none of it begins, in a whole run as in a partial one, so a
+section that uses windows an earlier one left says `needs` that one. Every section begins by checking that the tools that reach outside the run
 (`osascript`, `aws`, `launchctl`, `pmset`, `sudo`, `open`, `caffeinate`, `codesign`, `ditto`, `spctl`) are
 stand-ins in the run's own folder, and the run stops if one would be the real one. The run's HOME and those
 stand-ins exist before the first section, and a section that points bosun at another HOME gets them there too.
