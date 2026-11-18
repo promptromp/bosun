@@ -434,15 +434,6 @@ launch_error() { # <name> <window_id> <fallback>
   if [ -n "$said" ]; then printf '%s\n' "${said#*"[launch] ERROR: "}"; else printf '%s\n' "$2"; fi
 }
 
-# Whether the pane whose process is <pane_pid> still runs its launch command (build_launch_command's
-# `<shell> -lic '... launch <window> ; exec <shell> -l'`), rather than the plain shell it execs after it.
-launch_running() { # <pane_pid>
-  case "$(ps -o command= -p "$1" 2>/dev/null)" in
-    *" launch "*) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
 # After an update's start of window <name>: waits until its agent runs and lasts AGENT_SETTLE_SECONDS,
 # or the launch has ended without one (it refused, or the agent exited at once), up to
 # BOSUN_START_TIMEOUT. Fails, printing why, in the second case; a launch still going by then counts as

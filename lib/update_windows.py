@@ -7,9 +7,10 @@ the windows answer with are lib/update_notes.py's files.
   restart that stopped an agent and never started it again), and the facts a turn asks for, from one
   listing of the session's windows (`bosun sessions --json`) and the Stop hook's signals.
 - turn() is one turn under update.lock; bring_along() is the update's own wait, a turn every
-  POLL_SECONDS. It ends once every window still waited for waits for me (a permission prompt, a
-  question), or at Ctrl-C (noted, never raised mid-restart), and leaves those windows to the check-in
-  loop (`bosun update advance`, each tick), recording that it handed them over (`handed_over`).
+  POLL_SECONDS (poll_seconds(): BOSUN_UPDATE_POLL_SECONDS, for tests, sets another). It ends once
+  every window still waited for waits for me (a permission prompt, a question), or at Ctrl-C (noted,
+  never raised mid-restart), and leaves those windows to the check-in loop (`bosun update advance`,
+  each tick), recording that it handed them over (`handed_over`).
 - The windows the last update still waited for when this one started (its record, kept in `carried`)
   are taken over (update_agents.take_over): brought along with this update's own.
 """
@@ -224,11 +225,17 @@ def waits_for_you(root: Path, state: UpdateState, windows: Sequence[str]) -> lis
     ]
 
 
+def poll_seconds() -> float:
+    """How long the update's wait waits between turns: POLL_SECONDS, or BOSUN_UPDATE_POLL_SECONDS (the
+    variable is for tests)."""
+    return float(os.environ.get("BOSUN_UPDATE_POLL_SECONDS") or POLL_SECONDS)
+
+
 def _waited(state_dir: Path, waiting: list[str], say: Callable[[str], None]) -> tuple[list[str], bool]:
-    """Turns every POLL_SECONDS until no window is waited for, every one still waited for waits for me
+    """Turns every poll_seconds() until no window is waited for, every one still waited for waits for me
     (update_agents.only_waiting_for_me), or Ctrl-C comes, saying which windows it waits for whenever
     that changes; the windows still waited for, and whether only those waiting for me are left."""
-    ctrl_c, said = _CtrlC(), list[str]()
+    ctrl_c, said, interval = _CtrlC(), list[str](), poll_seconds()
     with ctrl_c.noted():
         while waiting and not ctrl_c.asked:
             statuses = turn(state_dir, say)
@@ -239,7 +246,7 @@ def _waited(state_dir: Path, waiting: list[str], say: Callable[[str], None]) -> 
                 say(f"Waiting for {', '.join(waiting)} (Ctrl-C stops waiting)...")
                 said = waiting
             if waiting:
-                ctrl_c.wait(POLL_SECONDS)
+                ctrl_c.wait(interval)
     return waiting, False
 
 

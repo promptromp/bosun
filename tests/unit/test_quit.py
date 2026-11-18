@@ -252,6 +252,12 @@ class RunTest(unittest.TestCase):
         self.assertEqual(fake.slept, [5, 5])
         self.assertEqual(fake.steps[0], "quit.json paused=False")  # written once it is done, not before
 
+    def test_the_wait_polls_as_often_as_the_run_says(self) -> None:
+        fake = Fake([window("alpha", "busy")], [window("alpha", "busy")], [window("alpha")])
+        options = quit_cmd.Options("finish", 10, False, False, False, 180, STEPS, poll_seconds=0.5)
+        self.assertEqual(quit_cmd.run(options, fake.ports(), io.StringIO(), io.StringIO()), 0)
+        self.assertEqual(fake.slept, [0.5, 0.5])
+
     def test_the_wait_running_out_exits_3_naming_the_busy_windows_and_changes_nothing(self) -> None:
         fake = Fake([window("alpha", "busy"), window("beta")])
         status, out, _err = run(fake, "finish", minutes=1)

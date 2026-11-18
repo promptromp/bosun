@@ -7,6 +7,8 @@ import os
 import stat
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -135,28 +137,28 @@ class RunningTest(unittest.TestCase):
 
     def test_waiting_returns_at_once_when_none_runs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            slept: list[float] = []
-            console_token.wait_free(Path(tmp), sleep=slept.append)
-            self.assertEqual(slept, [])
+            told: list[bool] = []
+            console_token.wait_free(Path(tmp), say=lambda: told.append(True))
+            self.assertEqual(told, [])  # nothing to say: it did not wait
             self.assertFalse(console_token.running(Path(tmp)))  # and holds nothing afterwards
 
-    def test_waiting_polls_until_the_console_that_runs_ends(self) -> None:
+    def test_waiting_blocks_on_the_lock_until_the_console_that_runs_ends(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state = Path(tmp)
             holder = contextlib.ExitStack()
             holder.enter_context(console_token.serving(state, 8123))
-            slept: list[float] = []
             told: list[bool] = []
-
-            def sleep(seconds: float) -> None:
-                slept.append(seconds)
-                if len(slept) == 3:
-                    holder.close()  # the hand-run console ends
-
-            console_token.wait_free(state, say=lambda: told.append(True), sleep=sleep)
-            self.assertEqual(len(slept), 3)
-            self.assertEqual(slept, [console_token.WAIT_POLL_SECONDS] * 3)
-            self.assertEqual(told, [True])  # said once, not at every poll
+            waiter = threading.Thread(target=console_token.wait_free, args=(state, lambda: told.append(True)))
+            waiter.start()
+            waiter.join(0.3)
+            self.assertTrue(waiter.is_alive())  # still waiting while the hand-run console serves
+            self.assertEqual(told, [True])  # said once
+            started = time.monotonic()
+            holder.close()  # the hand-run console ends
+            waiter.join(5)
+            self.assertFalse(waiter.is_alive())
+            self.assertLess(time.monotonic() - started, 1)  # at once, not at a next poll
+            self.assertEqual(told, [True])
             self.assertFalse(console_token.running(state))
 
     def test_the_port_is_kept_while_it_serves(self) -> None:

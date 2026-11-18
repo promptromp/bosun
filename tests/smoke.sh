@@ -2886,9 +2886,12 @@ check "--start starts Claude in an idle window" contains "$out" "Claude is runni
 alpha_pid="$(claude_in alpha)"
 check "--start resumes the window's named session" grep -qx 11111111-0000-0000-0000-000000000002 "$WORK/live-claude.$alpha_pid.args"
 check "--start delivers the prompt" test "$(cat "$WORK/live-claude.$alpha_pid.prompt")" = "resume with this"
+started=$SECONDS
 out="$(live --start beta "x" 2>&1)"
 check "--start fails when Claude does not start" test $? -ne 0
 check "a failed start shows the window's output" contains "$out" "already running as pid $$"
+check "... as soon as its launch has ended, saying so, not at BOSUN_START_TIMEOUT (5 s here)" bash -c '
+  grep -q "but its launch ended without starting a Claude session" <<<"$1" && [ "$2" -lt 5 ]' _ "$out" "$((SECONDS - started))"
 out="$(live --new epsilon "$TRUST_REPO" hi 2>&1)"
 check "--new trusts a repo inside the mask before starting" contains "$out" "trusted: $TRUST_REPO"
 check "... and Claude starts there" contains "$out" "Claude is running in smoke:epsilon"
@@ -3176,6 +3179,8 @@ check "dry run prints the plan" contains "$out" "fake plan"
 check "dry run reports scratch ledger changes" contains "$out" "+ review:o/r#9"
 check "dry run reports blocked tool calls" contains "$out" "- Bash: gh pr merge x"
 check "dry run uses a scratch state dir" grep -q "^BOSUN_STATE_DIR=$BOSUN_STATE_DIR/dry-runs/" "$WORK/fake-claude.env"
+scratch_of_run() { sed -n 's/^BOSUN_STATE_DIR=//p' "$WORK/fake-claude.env"; } # the last rehearsal's scratch state
+first_rehearsal="$(scratch_of_run)"
 check "dry run turns on send dry-run" grep -qx "BOSUN_SEND_DRY_RUN=1" "$WORK/fake-claude.env"
 check "dry run puts this checkout's bosun first on PATH" grep -q "^PATH=$ROOT/bin:" "$WORK/fake-claude.env"
 check "dry run loads orchestrator settings and plugin" bash -c 'grep -qx -- --settings "$1" && grep -qx -- --plugin-dir "$1"' _ "$WORK/fake-claude.args"
@@ -3188,15 +3193,18 @@ check "dry run limits the connectors as the orchestrator's launch does" bash -c 
   [ "$(grep -A1 -x -- --settings "$1" | tail -1 | jq -c .allowedMcpServers)" = "[]" ] && ! grep -q ENABLE_CLAUDEAI "$2"' _ "$WORK/fake-claude.args" "$WORK/fake-claude.env"
 check "... and holds it to its plugins as its launch does (none of mine)" bash -c '
   [ "$(grep -A1 -x -- --settings "$1" | tail -1 | jq -c .enabledPlugins)" = "{}" ]' _ "$WORK/fake-claude.args"
-sleep 1
 env -u ENABLE_CLAUDEAI_MCP_SERVERS BOSUN_ORCHESTRATOR_CONNECTORS=acme-local "$BOSUN" chores morning --dry-run >/dev/null 2>&1
+second_rehearsal="$(scratch_of_run)"
 check "... with the orchestrator's list, and claude.ai's connectors on when it names any" bash -c '
   settings="$(grep -A1 -x -- --settings "$1" | tail -1)"
   [ "$(jq -c .allowedMcpServers <<<"$settings")" = "[{\"serverName\":\"acme-local\"}]" ] && grep -q PreToolUse <<<"$settings" &&
     grep -qx ENABLE_CLAUDEAI_MCP_SERVERS=true "$2"' _ "$WORK/fake-claude.args" "$WORK/fake-claude.env"
-sleep 1
 out="$("$BOSUN" chores morning --dry-run --continue 2>&1)"
-check "--continue starts from the previous rehearsal" contains "$out" "seeded from $BOSUN_STATE_DIR/dry-runs/"
+# The three run within a second or two of each other: a name a rehearsal of the same second has gets a suffix that
+# sorts after it, so each has its own folder and --continue seeds from the one just before.
+check "each rehearsal has a folder of its own, also when two start in the same second" bash -c '
+  [ "$1" != "$2" ] && [ "$2" != "$3" ] && [ "$1" != "$3" ]' _ "$first_rehearsal" "$second_rehearsal" "$(scratch_of_run)"
+check "--continue starts from the previous rehearsal" contains "$out" "seeded from $second_rehearsal/ledger.json"
 check "--continue sees earlier items as existing" contains "$out" "(0 change(s)"
 
 section chores-options "chores options" covers 'libexec/bosun-chores'
@@ -3397,6 +3405,10 @@ out="$(BOSUN_CONFIG_DIR="$SETUP_CFG" BOSUN_NETWORK_PROBE_URL=file:///dev/null "$
 check "morning --dry-run would hold the keep-awake" contains "$out" "dry-run: would hold keep-awake for 5 minutes"
 check "... but starts no caffeinate" test ! -f "$BOSUN_STATE_DIR/keep-awake-smoke.pid"
 check "it waits for the network" contains "$out" "network is up"
+# With no network it probes every 5 seconds, but sleeps no longer than what is left of its timeout.
+started=$SECONDS
+out_down="$(BOSUN_CONFIG_DIR="$SETUP_CFG" BOSUN_NETWORK_PROBE_URL=file:///nonexistent-probe BOSUN_NETWORK_TIMEOUT=1 "$BOSUN" morning --dry-run --awake-minutes 5 2>&1)"
+check "... and gives up once its timeout is over, not at its next 5-second probe" bash -c 'grep -q "network still down after 1s; continuing" <<<"$1" && [ "$2" -lt 5 ]' _ "$out_down" "$((SECONDS - started))"
 check "it previews the setup steps" contains "$out" "aws profile good is valid, no login needed"
 check "it lists the windows it would start, with model and effort" contains "$out" "alpha (session, opus/medium) -> $REPO_A"
 check "it names no agent update when no agent in use has update_args" bash -c '! grep -qE "updated |could not update|would run .*update" <<<"$1"' _ "$out"

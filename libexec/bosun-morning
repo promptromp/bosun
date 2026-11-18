@@ -179,14 +179,16 @@ start_keep_awake() {
   hold_keep_awake "$seconds"
 }
 
+# Probes every 5 seconds, never sleeping past what is left of BOSUN_NETWORK_TIMEOUT.
 wait_for_network() {
-  local deadline=$((SECONDS + BOSUN_NETWORK_TIMEOUT))
+  local deadline=$((SECONDS + BOSUN_NETWORK_TIMEOUT)) left
   until curl -fsS -o /dev/null -m 5 "$BOSUN_NETWORK_PROBE_URL"; do
-    [ "$SECONDS" -ge "$deadline" ] && {
+    left=$((deadline - SECONDS))
+    [ "$left" -le 0 ] && {
       log "network still down after ${BOSUN_NETWORK_TIMEOUT}s; continuing"
       return 1
     }
-    sleep 5
+    sleep "$((left < 5 ? left : 5))"
   done
   log "network is up"
 }

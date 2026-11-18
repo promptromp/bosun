@@ -32,6 +32,7 @@ from quit import (
     CONSOLE_STILL,
     CONSOLE_STOPPED,
     LOCK_BUSY,
+    POLL_SECONDS,
     Options,
     Ports,
     QuitError,
@@ -226,6 +227,7 @@ def main(argv: list[str]) -> int:
         args.json,
         round(args.lock_wait),
         STEPS_SECONDS,
+        float(os.environ.get("BOSUN_QUIT_POLL_SECONDS") or POLL_SECONDS),  # the variable is for tests
     )
     if args.error is not None:  # the wrapper's own refusal, in the shape its caller asked for
         return finish(options, failed_object(args.error, options), sys.stdout, sys.stderr)

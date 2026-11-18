@@ -853,6 +853,15 @@ build_launch_command() { # <window> [prompt] [kind] [model] [effort] [quiet] [ha
   launch_cmd+=(-- "$shell" -lic "$(printf '%q ' "${launch[@]}"); exec $(printf '%q' "$shell") -l")
 }
 
+# Whether the pane whose process is <pane_pid> still runs its launch command (build_launch_command's
+# `<shell> -lic '... launch <window> ; exec <shell> -l'`), rather than the plain shell it execs after it.
+launch_running() { # <pane_pid>
+  case "$(ps -o command= -p "$1" 2>/dev/null)" in
+    *" launch "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # The user's login shell, as tmux would pick it: $SHELL, else the user record.
 login_shell() {
   local shell="${SHELL:-}"

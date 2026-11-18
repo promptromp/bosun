@@ -237,8 +237,7 @@ Calls made from the research and the builder check, to check while reading:
   after a quit and a reboot with the marker gone. `bosun start` makes the marker; quit removes it and stops the process
   (`launchctl kill TERM`). `bosun console --url` prints its address with the token: the port the console recorded in its
   running lock and the stored token. The job (`--job`) never exits for a console run by hand that holds the port and
-  `console/running.lock`: it waits, polling every few seconds for the lock, says so once, and serves when the hand run
-  ends, instead of an exit that launchd would answer with a restart loop. `bosun doctor` has a line for the job with
+  `console/running.lock`: it waits, blocked on that lock, says so once, and serves the moment the hand run ends, instead of an exit that launchd would answer with a restart loop. `bosun doctor` has a line for the job with
   `BOSUN_CONSOLE_ALWAYS=1`: loaded, and serving while `console/wanted` is there.
 - **The job that runs `--now`.** `templates/launchd-now.plist` (`<BOSUN_LAUNCHD_LABEL>.now`, `now_label`) runs
   `bosun morning --now` through a login shell like bosun's other jobs, with `RunAtLoad` false and no schedule or
