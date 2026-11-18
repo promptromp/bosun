@@ -9,6 +9,7 @@ Also the hooks' order that goes with it (.pre-commit-config.yaml): the tests las
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 import time
@@ -63,6 +64,28 @@ class KeyTest(Checkout):
     def test_a_change_to_the_files_on_disk_changes_it(self) -> None:
         before = self.key()
         self.write("lib/a.py", "A = 2\n")  # unstaged
+        self.assertNotEqual(self.key(), before)
+
+    def test_a_same_size_edit_in_the_second_the_index_was_written_changes_it(self) -> None:
+        """git trusts an entry's stat only when the entry is older than the index file; one from the index's
+        own second is racy, and git compares its content. The key's copy of the index keeps the index's time,
+        or an edit of the same size in that second keeps the key: what the test above hit now and then, when
+        its commit, first key and edit fell in one second and the copy was made in the next. Made certain
+        here: git comparing only whole seconds and sizes, and the file, the entry and the index all of one
+        second in the past (the index set back after each write of it, as one written in that second)."""
+        git(self.root, "config", "core.checkStat", "minimal")
+        git(self.root, "config", "core.trustctime", "false")
+        path, then = self.root / "lib" / "a.py", int(time.time()) - 100
+        index = uh.index_file(self.root, self.env)
+        assert index is not None
+        os.utime(path, (then, then))
+        # The entry's stat in the index: that second, and the size.
+        git(self.root, "commit", "-q", "-a", "--allow-empty", "-m", "the time in the past")
+        os.utime(index, (then, then))
+        before = self.key()  # its `git write-tree` may write the index again
+        self.write("lib/a.py", "A = 2\n")  # the same size
+        os.utime(path, (then, then))
+        os.utime(index, (then, then))
         self.assertNotEqual(self.key(), before)
 
     def test_an_untracked_file_changes_it_and_an_ignored_one_does_not(self) -> None:
