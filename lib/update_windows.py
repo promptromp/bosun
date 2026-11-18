@@ -33,6 +33,7 @@ import update_facts
 import update_notes
 import update_plan
 import update_state
+import wait_knobs
 from update_agents import STATUS, Started
 from update_plan import Plan
 from update_state import UpdateState
@@ -227,8 +228,8 @@ def waits_for_you(root: Path, state: UpdateState, windows: Sequence[str]) -> lis
 
 def poll_seconds() -> float:
     """How long the update's wait waits between turns: POLL_SECONDS, or BOSUN_UPDATE_POLL_SECONDS (the
-    variable is for tests)."""
-    return float(os.environ.get("BOSUN_UPDATE_POLL_SECONDS") or POLL_SECONDS)
+    variable is for tests; lib/wait_knobs.py says what a bad value does)."""
+    return wait_knobs.seconds("BOSUN_UPDATE_POLL_SECONDS", POLL_SECONDS)
 
 
 def _waited(state_dir: Path, waiting: list[str], say: Callable[[str], None]) -> tuple[list[str], bool]:

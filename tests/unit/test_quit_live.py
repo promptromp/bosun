@@ -84,6 +84,12 @@ class PollSecondsTest(unittest.TestCase):
     def test_the_tests_knob_sets_it(self) -> None:
         self.assertEqual(self.options_of({"BOSUN_QUIT_POLL_SECONDS": "0.5"}).poll_seconds, 0.5)
 
+    def test_a_knob_that_is_no_positive_number_is_the_default(self) -> None:
+        for value in ("soon", "0", "-1", "nan"):
+            with self.subTest(value=value):
+                options = self.options_of({"BOSUN_QUIT_POLL_SECONDS": value})
+                self.assertEqual(options.poll_seconds, quit_core.POLL_SECONDS)
+
 
 class LiveTest(unittest.TestCase):
     """The helpers that touch the world: launchctl, the console job, the windows lock, bosun stop."""

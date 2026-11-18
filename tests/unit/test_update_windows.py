@@ -234,6 +234,11 @@ class BringAlongTest(Folder):
             self.bring_along()
         self.assertEqual(slept.call_count, 2)
 
+    def test_a_knob_that_is_no_positive_number_waits_the_default(self) -> None:
+        for value in ("soon", "0", "-1", "nan"):
+            with self.subTest(value=value), mock.patch.dict(os.environ, {"BOSUN_UPDATE_POLL_SECONDS": value}):
+                self.assertEqual(update_windows.poll_seconds(), update_windows.POLL_SECONDS)
+
     def test_the_windows_to_bring_along_are_pending_from_the_start(self) -> None:
         with self.turns(["orchestrator", "api"], ["api"], ["api"], []):
             done = self.bring_along()

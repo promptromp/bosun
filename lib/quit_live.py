@@ -27,6 +27,7 @@ import keep_awake
 import quit_state
 import run_locked
 import update_state
+import wait_knobs
 from quit import (
     CONSOLE_NONE,
     CONSOLE_STILL,
@@ -227,7 +228,7 @@ def main(argv: list[str]) -> int:
         args.json,
         round(args.lock_wait),
         STEPS_SECONDS,
-        float(os.environ.get("BOSUN_QUIT_POLL_SECONDS") or POLL_SECONDS),  # the variable is for tests
+        wait_knobs.seconds("BOSUN_QUIT_POLL_SECONDS", POLL_SECONDS),  # the variable is for tests
     )
     if args.error is not None:  # the wrapper's own refusal, in the shape its caller asked for
         return finish(options, failed_object(args.error, options), sys.stdout, sys.stderr)
