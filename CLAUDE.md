@@ -610,12 +610,14 @@ suite. The choice is `tools/smoke_select.py`; the two places that feed it are `c
 functions): a changed line, on either side of the diff, in a section selects it and the sections that need it; in a
 helper, the sections that call it; in the shared setup (before the first section, or an `always_run` part) or a
 helper it calls, the whole suite; a line the diff left alone that a change moved into another of those (a `section`
-line taken out or put in, a helper's `}` moved) selects both. The shell libraries are on the `all` list, and what
+line taken out or put in, a helper's `}` moved) selects both, and a helper now defined in another section (or no
+longer in the shared setup) selects its callers and both places. The shell libraries are on the `all` list, and what
 `lib/common.sh` names counts as every section's. `tests/unit/test_smoke_selection.py` fails on a tracked file that is
 none of covered, `all` or `ignore`, and on a section without `covers`, and says what to add;
 `tests/unit/test_smoke_covers.py` fails on a section that runs a bosun command its `covers` do not name, as it
 reads a run: `"$BOSUN" <cmd>`, `bosun-<cmd>` or `bosun <cmd>` where a command starts, `"$1" <cmd>` in a `bash -c`
-whose arguments pass bosun as `$1`, and the command after a helper that runs `"$BOSUN" "$@"`; in the section's lines
+whose arguments pass bosun as `$1` (`"${@:N}" <cmd>`: as `$N` or after), and the command after a helper that runs
+`"$BOSUN" "$@"` or a path ending in `bin/bosun` with `"$@"`; in the section's lines
 or in a helper it calls where a command starts or as check's (and the other runners') command (a message read as a
 run goes in its `ALLOWED`, by the exact line, with why); and on the shared setup calling a helper a section defines. A test must not write into
 the repository: the run then records no pass and names the file. In `tests/smoke.sh`, a new section begins with

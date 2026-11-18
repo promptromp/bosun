@@ -195,8 +195,9 @@ weights). `tests/unit/test_smoke_selection.py` fails on a file that is none of t
 add; the same for a section without `covers`. `tests/unit/test_smoke_covers.py` fails on a section that runs a bosun
 command its `covers` do not name, since a change to that command would otherwise not run it. What it reads as a
 run, and nothing more: `"$BOSUN" <cmd>`, `bosun-<cmd>` or `bosun <cmd>` where a command starts; `"$1" <cmd>` (any
-digit) inside a `bash -c '...'` whose arguments after its `_` pass bosun at that place; and the command after a
-helper that runs `"$BOSUN" "$@"` (`dkg kg import`). It reads those in the section's own lines and in every helper
+digit) inside a `bash -c '...'` whose arguments after its `_` pass bosun at that place, or `"${@:2}" <cmd>` (any
+number) when they pass it at that place or after; and the command after a helper that runs `"$BOSUN" "$@"`, or a
+path ending in `bin/bosun` with `"$@"` (`dkg kg import`, `bb ledger list`). It reads those in the section's own lines and in every helper
 it calls where a command starts or as the command `check`, `fails_with`, `fails_with_status`, `refused_quietly`,
 `wait_for` or `exits_0_saying_nothing` runs; a call in another shape is not followed. A message the patterns read
 as a run goes in that test's `ALLOWED`, by the command and its exact line, with why. It also fails when the shared
@@ -210,7 +211,9 @@ line of the shared setup that holds no code on either side (a comment, a blank l
 also move lines it left alone: a `section` line taken out joins its checks to whatever came before it (the section
 above, or an `always_run` part's shared setup), one put in splits a section, a helper's `}` moved takes code into
 or out of the helper. Each such line selects what it was in and what it is in now, so a section split in two runs
-both halves, and a line that was or now is shared setup runs the whole suite.
+both halves, and a line that was or now is shared setup runs the whole suite. A `section` line put in just before a
+helper moves only where the helper is defined, so that a run without the new section lacks it: that selects the
+sections that call the helper and the places it was and is defined in (the shared setup's: the whole suite).
 
 `BOSUN_SMOKE_FULL=1 git push` forces the whole suite (even for a tree that passed it: the pass record is not
 consulted then either; `BOSUN_SMOKE_NO_CACHE=1` only ignores the record, and still runs just the sections the change reaches). A partial run never records the tree as passed: only a whole one does.
