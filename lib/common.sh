@@ -862,6 +862,15 @@ launch_running() { # <pane_pid>
   esac
 }
 
+# Where launchd's PATH finds each <tool>, a line each in order, "-" for one it does not find (a line of its own,
+# so that a tool missing at the end of the list is not lost to $(...)'s trimming): looked up in a shell with
+# nothing but HOME, as launchd starts one, which takes common.sh's own PATH.
+launchd_paths() { # <tool>...
+  # shellcheck disable=SC2016  # the shell env starts expands these
+  env -i HOME="$HOME" /bin/bash -c 'source "$1/lib/common.sh"; shift; for tool; do command -v "$tool" || echo -; done' \
+    _ "$BOSUN_ROOT" "$@"
+}
+
 # The user's login shell, as tmux would pick it: $SHELL, else the user record.
 login_shell() {
   local shell="${SHELL:-}"

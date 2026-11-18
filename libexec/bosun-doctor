@@ -51,18 +51,16 @@ check_bypass_warning() {
   esac
 }
 
-# The tools, each looked up as launchd's PATH finds it: one shell with nothing but HOME, as launchd starts one,
-# which prints a line per tool (empty for one not found).
+# The tools, each looked up as launchd's PATH finds it (launchd_paths: one launchd-like shell for all of them). A
+# tool the answer has no line for counts as not found, as one it does not find does.
 check_tools() {
-  local tools=(tmux ruby python3 jq curl caffeinate pmset "$BOSUN_CLAUDE_BIN") paths tool path i=0
-  # shellcheck disable=SC2016  # the shell env starts expands these
-  paths="$(env -i HOME="$HOME" /bin/bash -c 'source "$1/lib/common.sh"; shift; for tool; do echo "$(command -v "$tool")"; done' \
-    _ "$BOSUN_ROOT" "${tools[@]}")"
-  while IFS= read -r path; do
-    tool="${tools[$i]}"
-    i=$((i + 1))
-    if [ -n "$path" ]; then ok "$tool -> $path"; else fail "$tool not found on launchd PATH"; fi
-  done <<<"$paths"
+  local tools=(tmux ruby python3 jq curl caffeinate pmset "$BOSUN_CLAUDE_BIN") path i
+  local -a paths=()
+  while IFS= read -r path; do paths+=("$path"); done < <(launchd_paths "${tools[@]}")
+  for i in "${!tools[@]}"; do
+    path="${paths[$i]:--}"
+    if [ "$path" != - ]; then ok "${tools[$i]} -> $path"; else fail "${tools[$i]} not found on launchd PATH"; fi
+  done
 }
 
 # One window from the window list: its folder, trust, and which session it will resume. Its agent is the list's
@@ -118,27 +116,35 @@ check_config_keys() {
 }
 
 check_config() {
-  local name dir kind harness queries="" fact i=0
+  local name dir kind harness queries="" fact answer answered=1 i=0
   local -a names=() facts=()
   if [ -f "$BOSUN_CONFIG_DIR/bosun.env" ]; then ok "bosun.env"; else warn "no bosun.env; using defaults"; fi
   check_config_keys
   if [ "$SPECS_READ" != 1 ]; then
-    fail "$SPECS"
+    fail "$SPECS_ERROR"
     return
   fi
   ok "sessions manifest: $BOSUN_SESSIONS_FILE"
   # Each window's session name, and what its agent says of it (whether it trusts the folder, the session that
-  # name resumes, whether that one runs), asked once for every window: a line each, in the list's order. A
-  # window the answer has no line for is untrusted with no session, as each question failing alone was.
+  # name resumes, whether that one runs), asked once for every window: a line each, in the list's order. An
+  # answer that fails, or lacks a window's line (no python3, say), is one failure, saying why, and no window's.
   while IFS=$'\t' read -r name dir kind _ _ harness; do
     if [ "$kind" = checkin ]; then names+=(-); else names+=("$(expected_session_name "$name")"); fi
     queries+="$harness"$'\t'"$dir"$'\t'"${names[$i]}"$'\n'
     i=$((i + 1))
   done <<<"$SPECS"
-  while IFS= read -r fact; do facts+=("$fact"); done < <(printf '%s' "$queries" | agent_state windows 2>/dev/null)
+  answer="$(printf '%s' "$queries" | agent_state windows 2>/dev/null)" || answered=0
+  if [ -n "$answer" ]; then
+    while IFS= read -r fact; do facts+=("$fact"); done <<<"$answer"
+  fi
+  if [ "$answered" = 0 ] || [ "${#facts[@]}" -ne "$i" ]; then
+    # Asked again for its reason: it only reads.
+    fail "could not ask the windows' agents whether they trust their folders and which session each resumes (lib/agent_state.py windows): $(printf '%s' "$queries" | agent_state windows 2>&1 >/dev/null | tail -n 1)"
+    return
+  fi
   i=0
   while IFS=$'\t' read -r name dir kind _ _ harness; do
-    check_window "$name" "$dir" "$kind" "$harness" "${names[$i]}" "${facts[$i]:-no	-	-}"
+    check_window "$name" "$dir" "$kind" "$harness" "${names[$i]}" "${facts[$i]}"
     i=$((i + 1))
   done <<<"$SPECS"
 }
@@ -660,21 +666,40 @@ show_part() { # <check>
   counted="$(cat "$PARTS_DIR/$part_index.failures" 2>/dev/null)" || exit "$((status > 0 ? status : 1))"
   failures=$((failures + counted))
 }
-end_parts() { # what still runs when doctor ends early is stopped, by the pids it started (and reaped quietly)
+# What still runs when doctor ends early (a check's die, Ctrl-C, a TERM) is stopped by pid, never by a pattern:
+# each check that has not been shown is frozen, so that it starts nothing more, then whatever it runs, however
+# deep (descendants), and the check itself are told to stop, and it is reaped quietly.
+end_parts() {
   local pid
   for pid in ${part_pids[@]+"${part_pids[@]}"}; do
-    [ -z "$pid" ] || { kill "$pid" && wait "$pid"; } 2>/dev/null
+    if [ -z "$pid" ] || ! kill -STOP "$pid" 2>/dev/null; then continue; fi
+    # shellcheck disable=SC2046  # a pid each
+    kill $(descendants "$pid") "$pid" 2>/dev/null
+    { kill -CONT "$pid" && wait "$pid"; } 2>/dev/null
   done
   [ -z "$PARTS_DIR" ] || rm -rf "$PARTS_DIR"
 }
 
-# The window list, read once for the checks that go through it (check_config says why it cannot be read).
-SPECS_READ=1
-SPECS="$(window_specs 2>&1)" || SPECS_READ=0
+# The window list, read once for the checks that go through it, its stdout only; when it cannot be read,
+# check_config fails with what it said (without a temporary folder, as before, both streams).
+read_specs() {
+  SPECS_READ=1 SPECS_ERROR=""
+  if [ -z "$PARTS_DIR" ]; then
+    SPECS="$(window_specs 2>&1)" || SPECS_READ=0
+    SPECS_ERROR="$SPECS"
+    return 0
+  fi
+  SPECS="$(window_specs 2>"$PARTS_DIR/specs.err")" || SPECS_READ=0
+  SPECS_ERROR="${SPECS:+$SPECS$'\n'}$(cat "$PARTS_DIR/specs.err")"
+}
+
 need_profiles # read here, once, for every check to inherit
 part_pids=()
 PARTS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/bosun-doctor.XXXXXX" 2>/dev/null)" || PARTS_DIR=""
 trap end_parts EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+read_specs
 if [ -n "$PARTS_DIR" ]; then
   PASS=start part_index=0
   report

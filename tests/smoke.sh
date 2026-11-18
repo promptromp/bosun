@@ -1010,6 +1010,8 @@ check "... or - when that is empty" test "$(BOSUN_MODEL="" fnc harness_default_m
 check "harness_bin of an agent with no profile exits 1 and prints nothing" bash -c 'source "$1/lib/common.sh"; load_config; out="$(harness_bin acme-agent 2>&1)" && exit 1; [ -z "$out" ]' _ "$ROOT"
 check "... as does harness_default_model" bash -c 'source "$1/lib/common.sh"; load_config; out="$(harness_default_model acme-agent 2>&1)" && exit 1; [ -z "$out" ]' _ "$ROOT"
 check "known_harnesses lists the agents in the order of AGENTS" test "$(fn known_harnesses)" = "claude codex agy"
+check "launchd_paths gives a line per tool, - for one launchd's PATH does not find, in the middle and at the end" \
+  test "$(fn launchd_paths jq acme-missing-tool tmux acme-missing-last | sed 's#^/.*/##' | paste -sd' ' -)" = "jq - tmux -"
 check "profile_field reads a column by its name" test "$(fn profile_field codex flags_key)" = BOSUN_CODEX_FLAGS
 check "find_window finds an early match in a long listing, exit 0 under pipefail" bash -c 'set -o pipefail; source "$1/lib/common.sh"; tmux_cmd() { printf "w1\t42 @1\n"; awk "BEGIN { for (i = 0; i < 300000; i++) print \"x\t1 @2\" }"; }; out="$(find_window w1)"; rc=$?; [ "$out" = "42 @1" ] && [ "$rc" = 0 ]' _ "$ROOT"
 check "window_harness finds an early match in a long window list, as it does under pipefail" bash -c 'set -o pipefail; source "$1/lib/common.sh"; load_config; window_specs() { printf "w1\t\t\t\t\tcodex\n"; awk "BEGIN { for (i = 0; i < 300000; i++) print \"x\" }"; }; out="$(window_harness w1)"; rc=$?; [ "$out" = codex ] && [ "$rc" = 0 ]' _ "$ROOT"
@@ -1720,6 +1722,51 @@ check "doctor without a temporary folder runs its checks one after another and s
   said="$(TMPDIR=/nonexistent "$2" doctor 2>&1)"; status=$?
   [ "$status" = "$3" ] && [ "$(untimed <<<"$said")" = "$(untimed <<<"$1")" ] || { diff <(untimed <<<"$1") <(untimed <<<"$said"); exit 1; }' \
   _ "$out" "$BOSUN" "$out_status"
+# Its tools as launchd's PATH finds them: claude, the last of the list, not found is a failure of its own (a line per
+# tool, however many at the end are missing; launchd_paths in common-functions for one in the middle).
+out_missing="$(BOSUN_CLAUDE_BIN=acme-missing-claude "$BOSUN" doctor 2>&1)"
+missing_status=$?
+check "doctor fails a claude that launchd's PATH does not find, the last tool of its list, and exits 1" bash -c '
+  grep -qxF "  FAIL  acme-missing-claude not found on launchd PATH" <<<"$1" && [ "$2" = 1 ]' _ "$out_missing" "$missing_status"
+# The windows' agents asked at once (lib/agent_state.py windows): an answer that fails as a whole (no python3, say)
+# is one failure saying so, not a trust failure and a new session for every window. A python3 that fails only for
+# that, for one doctor run.
+printf '#!/bin/sh\ncase "$1 $2" in */agent_state.py\\ windows) echo "acme: agent_state could not start" >&2; exit 1 ;; esac\nexec "%s" "$@"\n' \
+  "$(command -v python3)" >"$HOME/.local/bin/python3"
+chmod +x "$HOME/.local/bin/python3"
+out_unasked="$("$BOSUN" doctor 2>&1)"
+rm -f "$HOME/.local/bin/python3"
+check "doctor says once that the windows' agents could not be asked, and why, and nothing of each window's trust" bash -c '
+  [ "$(grep -c "FAIL  could not ask the windows.* agents whether they trust their folders" <<<"$1")" = 1 ] &&
+    grep -q "(lib/agent_state.py windows): acme: agent_state could not start$" <<<"$1" &&
+    ! grep -qE "does not trust|no session with this exact name" <<<"$1"' _ "$out_unasked"
+# The window list is read once, its stdout only: what it says on stderr while it works (here the orchestrator's
+# check-in loop reading a word where the minutes go) is no window of the connectors' or the models' lines.
+check "doctor's window list is the list's stdout: its stderr is no window" bash -c '
+  ! sed -n "/^Connectors/,/^Schedule/p" <<<"$1" | grep -q "integer expression expected"' \
+  _ "$("${ORCH[@]}" BOSUN_CHECKIN_MINUTES=abc "$BOSUN" doctor 2>/dev/null)"
+# doctor cut short (a TERM here; Ctrl-C ends it the same way) stops what its checks run, by pid: here a claude that
+# hangs on `auth status`, which preflight and the login check ask (their own timeout is 30 s).
+cat >"$WORK/hang-claude" <<FAKE
+#!/bin/bash
+case "\$1" in
+  --version) echo "2.0.0 (Claude Code)" ;;
+  auth) echo \$\$ >>"$WORK/hang-claude.pids"; exec sleep 60 ;;
+esac
+FAKE
+chmod +x "$WORK/hang-claude"
+rm -f "$WORK/hang-claude.pids"
+BOSUN_CLAUDE_BIN="$WORK/hang-claude" "$BOSUN" doctor >/dev/null 2>&1 &
+hung_doctor=$!
+wait_for 30 test -s "$WORK/hang-claude.pids"
+kill -TERM "$hung_doctor"
+wait "$hung_doctor" 2>/dev/null
+none_left() { # <pid file>: none of the pids in it runs
+  local pid
+  while read -r pid; do ! kill -0 "$pid" 2>/dev/null || return 1; done <"$1"
+}
+check "doctor cut short leaves nothing its checks started running" wait_for 5 none_left "$WORK/hang-claude.pids"
+while read -r hung; do kill "$hung" 2>/dev/null; done <"$WORK/hang-claude.pids"
 rm -f "$BOSUN_CONFIG_DIR/bosun.env"
 mkdir -p "$HOME/.claude"
 echo '{"allowedMcpServers": [{"serverName": "acme-local"}]}' >"$HOME/.claude/settings.json"
