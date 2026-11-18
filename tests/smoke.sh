@@ -2277,7 +2277,7 @@ printf '#!/bin/sh\necho "2.0.0 (Claude Code)"\n' >"$WORK/fake-claude"
 chmod +x "$WORK/fake-claude"
 export BOSUN_CLAUDE_BIN="$WORK/fake-claude"
 
-section tmux-session "tmux session (isolated socket, dry-run windows)" covers 'libexec/bosun-attach,libexec/bosun-launch,libexec/bosun-start,libexec/bosun-stop,libexec/bosun-send,libexec/bosun-refresh,libexec/bosun-ledger,lib/run_locked.py'
+section tmux-session "tmux session (isolated socket, dry-run windows)" covers 'libexec/bosun-attach,libexec/bosun-launch,libexec/bosun-start,libexec/bosun-stop,libexec/bosun-send,libexec/bosun-refresh,libexec/bosun-ledger,lib/run_locked.py,libexec/bosun-watchdog,libexec/bosun-sessions,libexec/bosun-setup'
 no_session
 "$BOSUN" start >/dev/null 2>&1
 wait_for 30 has_windows "alpha beta gamma "
@@ -3115,7 +3115,7 @@ check "--check passes once trusted" "$BOSUN" trust --check "$TRUST_REPO"
 check "--revoke removes it" bash -c '"$1" trust --revoke "$2" && ! "$1" trust --check "$2"' _ "$BOSUN" "$TRUST_REPO"
 check "--any trusts any folder" "$BOSUN" trust --any "$REPO_B"
 
-section send-new-start "send --new and --start (fake Claude that registers itself)" needs folder-trust covers 'lib/plugins_claude.py,libexec/bosun-delegate,libexec/bosun-ledger,libexec/bosun-refresh,libexec/bosun-send,libexec/bosun-start,libexec/bosun-stop,libexec/bosun-trust'
+section send-new-start "send --new and --start (fake Claude that registers itself)" needs folder-trust covers 'lib/plugins_claude.py,libexec/bosun-delegate,libexec/bosun-ledger,libexec/bosun-refresh,libexec/bosun-send,libexec/bosun-start,libexec/bosun-stop,libexec/bosun-trust,libexec/bosun-launch'
 no_session
 cat >"$WORK/live-claude" <<FAKE
 #!/bin/bash
@@ -4481,7 +4481,7 @@ plain_fake pmset 0
 plain_fake sudo 1
 plain_fake caffeinate 0
 
-section console "console (local server on a free port, fixture ledger)" covers 'libexec/bosun-console,libexec/bosun-kg,console/**,tests/fixtures/console/**,tests/fixtures/knowledge/**,lib/console_*.py'
+section console "console (local server on a free port, fixture ledger)" covers 'libexec/bosun-console,libexec/bosun-kg,console/**,tests/fixtures/console/**,tests/fixtures/knowledge/**,lib/console_*.py,libexec/bosun-ledger'
 CONSOLE_STATE="$WORK/console-state"
 mkdir -p "$CONSOLE_STATE"
 cp "$ROOT/tests/fixtures/console/acme-ledger.json" "$CONSOLE_STATE/ledger.json"
@@ -5394,7 +5394,7 @@ assert job.get("AbandonProcessGroup") is True, job.get("AbandonProcessGroup")
     fail_check "the fake curl and the stand-ins for ditto, codesign, spctl, osascript, open, swift and iconutil are not first on PATH; skipped the app tests"
   fi
 
-  section uninstall "uninstall (fake launchctl, pmset and sudo, test label)" needs install,app covers 'uninstall.sh,install.sh,lib/claude_state.py,lib/hook.py,libexec/bosun-uninstall,libexec/bosun-trust'
+  section uninstall "uninstall (fake launchctl, pmset and sudo, test label)" needs install,app covers 'uninstall.sh,install.sh,lib/claude_state.py,lib/hook.py,libexec/bosun-uninstall,libexec/bosun-trust,templates/launchd*.plist'
   # Its own session and state: it would otherwise stop and delete what the rest of this run uses.
   un() {
     BOSUN_CONFIG_DIR="$INSTALL_CFG" BOSUN_STATE_DIR="$WORK/un-state" BOSUN_LOG_DIR="$WORK/un-state/logs" \

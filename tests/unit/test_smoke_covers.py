@@ -2,21 +2,27 @@
 
 The selection (tools/smoke_select.py) runs a section when a changed file matches its `covers` or depends on
 one that does. A section that runs `bosun init` without covering libexec/bosun-init does not run when
-bosun-init changes, though it would show that change failing. So every command a section runs, in its own
-lines, in a helper it defines, or through a helper it calls (one of the shared setup's or of its own, all the
-way), must match one of its own `covers` globs. What counts as running a command:
+bosun-init changes, though it would show that change failing. So every command a section runs must match one
+of its own `covers` globs. What this reads as running a command, in a section's own lines, in a helper it
+defines, and in a helper it calls (the shared setup's or its own, all the way):
 
-- `"$BOSUN" ledger`, `bosun-ledger`, `bosun ledger` where a command starts (the patterns the selection reads,
-  smoke_select.SHELL_CALL), anywhere in the code (comments aside);
-- a helper called where a command starts, or as the command a check runs (`check "..." helper`, `fails_with
-  "..." helper`, `wait_for 30 helper`): its own code, read the same way;
-- a helper that runs `"$BOSUN" "$@"` (`dkg kg import`): the word after it is the command it runs.
+- `"$BOSUN" ledger`, `bosun-ledger`, or `bosun ledger` where a command starts (the patterns the selection
+  reads, smoke_select.SHELL_CALL), anywhere in the code (comments aside);
+- `"$1" ledger` (`$1`, `"${1}"`, any digit) inside a `bash -c '...'` whose arguments after its `_` pass bosun
+  at that place (`"$BOSUN"`, or a path that ends in `/bin/bosun`);
+- a helper that runs `"$BOSUN" "$@"` (`dkg kg import`): the word after it.
 
-A command a section names only in a message is no run; ALLOWED lists the few places where the patterns read
-one, each with why."""
+A helper counts as called where a command starts, or as the command check, fails_with, fails_with_status,
+refused_quietly, wait_for or exits_0_saying_nothing runs; a call in another shape (an alias, another runner, a
+name built at run time) is not followed. A command a section names only in a message is no run: ALLOWED lists
+those places, each by the command and its exact line (as tests/unit/test_smoke_timing.py does), with why.
+
+And the shared setup may only call the helpers it defines: a section's helper is defined only in a run that
+runs that section, and the selection reads the shared setup's calls so (smoke_select.Suite)."""
 
 from __future__ import annotations
 
+import bisect
 import re
 import sys
 import unittest
@@ -25,7 +31,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
-import shell_library  # noqa: E402
 import smoke_select as ss  # noqa: E402
 
 
@@ -38,18 +43,49 @@ RUNNER = (
 )
 COMMAND_START = rf"(?:^|[;&|({{`!]|\$\(|\b(?:then|do|else|elif|if|while|until|time)\b)\s*{RUNNER}?"
 BOSUN_RUNNER = re.compile(r"\"\$\{?BOSUN\w*\}?\"\s+\"\$@\"")  # a helper whose arguments are a bosun command's
-# (section, command): where the patterns read a run that is not one, and why.
+# `bash -c '<script>' _ <arguments>` (the script's quotes as the suite writes them: '\'' inside).
+BASH_C = re.compile(r"\bbash\s+-c\s+'(?P<script>(?:[^']|'\\'')*)'\s+_(?P<args>[^\n]*)")
+# The arguments, up to the first unquoted `;`, `|`, `&`, `)`, `<` or `>`.
+ARGUMENTS = re.compile(r"^(?:\s+(?:\"(?:[^\"\\]|\\.)*\"|'[^']*'|[^\s;&|)<>\"']+))*")
+ARGUMENT = re.compile(r"\"(?:[^\"\\]|\\.)*\"|'[^']*'|\S+")
+IS_BOSUN = re.compile(r"^\"?(?:\$\{?BOSUN\}?|\S*/bin/bosun)\"?$")
+# (command, the whole line without its indent): where the patterns read a run that is not one, and why.
 ALLOWED: dict[tuple[str, str], str] = {
-    ("orchestrator", "libexec/bosun-kg"): "a jq check that the settings allow `Bash(bosun kg propose:*)`",
     (
-        "expired-login",
+        "libexec/bosun-kg",
+        (
+            'jq -e "(.permissions.allow | index(\\"Bash(bosun kg propose:*)\\") and index(\\"Bash(bosun '
+            'kg lookup:*)\\") and index(\\"Bash(bosun kg add-entity:*)\\"))'
+        ),
+    ): "the orchestrator section's jq check that the settings allow `Bash(bosun kg propose:*)`",
+    (
         "libexec/bosun-refresh",
-    ): "doctor's advice, grepped for: `restart the window (bosun refresh orch)`",
+        (
+            'check "doctor fails the window, saying what to do" bash -c \'grep -qF "FAIL  window orch '
+            'no-credit every reply since" <<<"$1" && grep -qF "then tell it to carry on (bosun send '
+            "orch ...); or use your subscription: remove the API key (ANTHROPIC_API_KEY in your shell "
+            "profile, or apiKeyHelper in ~/.claude/settings.json), restart the window (bosun refresh "
+            'orch), then /login in it" <<<"$1"\' _ "$(LC doctor)"'
+        ),
+    ): "expired-login greps doctor's advice: `restart the window (bosun refresh orch)`",
     (
-        "expired-login",
         "libexec/bosun-send",
-    ): "doctor's advice, grepped for: `tell it to carry on (bosun send orch ...)`",
-    ("settings", "libexec/bosun-update"): "a log grepped for the refusal's words, `bosun update is running`",
+        (
+            'check "doctor fails the window, saying what to do" bash -c \'grep -qF "FAIL  window orch '
+            'no-credit every reply since" <<<"$1" && grep -qF "then tell it to carry on (bosun send '
+            "orch ...); or use your subscription: remove the API key (ANTHROPIC_API_KEY in your shell "
+            "profile, or apiKeyHelper in ~/.claude/settings.json), restart the window (bosun refresh "
+            'orch), then /login in it" <<<"$1"\' _ "$(LC doctor)"'
+        ),
+    ): "expired-login greps doctor's advice: `tell it to carry on (bosun send orch ...)`",
+    (
+        "libexec/bosun-update",
+        (
+            'check "a refusal is never logged as an error (the watchdog alerts on those)" bash -c \'! '
+            'grep -rqE "25:00|bosun update is running|needs your password" "$1/logs" 2>/dev/null\' _ '
+            '"$SET_STATE"'
+        ),
+    ): "settings greps the logs for the refusal's words, `bosun update is running`",
 }
 
 
@@ -58,26 +94,47 @@ def commands() -> dict[str, str]:
     return {p.name[len("bosun-") :]: f"libexec/{p.name}" for p in (ROOT / "libexec").glob("bosun-*")}
 
 
+class Code:
+    """A node's code (comments blanked) with the line each character came from."""
+
+    def __init__(self) -> None:
+        self.text = ""
+        self.starts: list[int] = []  # where each line begins in text
+        self.numbers: list[int] = []  # and its number in the file
+
+    def add(self, number: int, line: str) -> None:
+        self.starts.append(len(self.text))
+        self.numbers.append(number)
+        self.text += line + "\n"
+
+    def line_at(self, offset: int) -> int:
+        return self.numbers[bisect.bisect_right(self.starts, offset) - 1]
+
+
 class SuiteRuns:
     """What the sections of tests/smoke.sh run, through their helpers too."""
 
     def __init__(self, text: str) -> None:
         self.suite = ss.Suite(text)
         self.commands = commands()
-        self.code: dict[tuple[str, str], str] = {}
+        self.code: dict[tuple[str, str], Code] = {}
         for number in range(1, len(self.suite.script.lines) + 1):
             region = self.suite.region(number)
             if region is not None:
-                line = self.suite.script.code_lines[number - 1]
-                self.code[region] = self.code.get(region, "") + line + "\n"
+                self.code.setdefault(region, Code()).add(number, self.suite.script.code_lines[number - 1])
         helpers = sorted(set(self.suite.helper_at.values()), key=len, reverse=True)
         names = "|".join(map(re.escape, helpers))
         self.call = re.compile(
             rf"{COMMAND_START}(?P<helper>{names})(?=[\s;&|)]|$)(?:\s+(?P<arg>[a-z][a-z0-9-]*))?", re.MULTILINE
         )
         self.runners = {
-            name for (kind, name), code in self.code.items() if kind == "helper" and BOSUN_RUNNER.search(code)
+            name
+            for (kind, name), code in self.code.items()
+            if kind == "helper" and BOSUN_RUNNER.search(code.text)
         }
+
+    def line(self, number: int) -> str:
+        return self.suite.script.lines[number - 1].strip()
 
     def own(self, sid: str) -> set[tuple[str, str]]:
         """A section's own code: its lines, and the helpers defined in them."""
@@ -86,34 +143,89 @@ class SuiteRuns:
             ("helper", name) for n, name in self.suite.helper_at.items() if n in mine
         }
 
-    def runs(self, sid: str) -> dict[str, str]:
-        """Each command section <sid> runs -> where (its own code, or the helper that runs it)."""
-        found: dict[str, str] = {}
+    def runs(self, sid: str) -> dict[tuple[str, int], str]:
+        """(command, line) -> where, for each command section <sid> runs (its own code, or the helper that
+        runs it)."""
+        found: dict[tuple[str, int], str] = {}
         todo = list(self.own(sid))
         seen = set(todo)
         while todo:
             node = todo.pop()
-            where = (
-                "its own code" if node[0] == "section" or node in self.own(sid) else f"the helper {node[1]}"
-            )
-            for command in self.direct(self.code.get(node, "")):
-                found.setdefault(command, where)
-            for match in self.call.finditer(self.code.get(node, "")):
-                helper = ("helper", match["helper"])
-                if match["helper"] in self.runners and match["arg"] in self.commands:
-                    found.setdefault(self.commands[match["arg"]], f"the helper {match['helper']}")
+            code = self.code.get(node, Code())
+            where = "its own code" if node in self.own(sid) else f"the helper {node[1]}"
+            for command, number in self.direct(code):
+                found.setdefault((command, number), where)
+            for helper in self.helper_calls(code, found, where):
                 if helper not in seen:
                     seen.add(helper)
                     todo.append(helper)
         return found
 
-    def direct(self, code: str) -> set[str]:
-        found = set()
-        for match in ss.SHELL_CALL.finditer(code):
+    def helper_calls(
+        self, code: Code, found: dict[tuple[str, int], str], where: str
+    ) -> list[tuple[str, str]]:
+        """The helpers <code> calls; a bosun runner's command goes in <found> as it is read."""
+        calls = []
+        for match in self.call.finditer(code.text):
+            number = code.line_at(match.start("helper"))
+            if match["helper"] in self.runners and match["arg"] in self.commands:
+                found.setdefault(
+                    (self.commands[match["arg"]], number), f"the helper {match['helper']} ({where})"
+                )
+            calls.append(("helper", match["helper"]))
+        return calls
+
+    def direct(self, code: Code) -> list[tuple[str, int]]:
+        """The commands <code> runs itself: the selection's patterns, and bosun passed into a `bash -c`."""
+        found = []
+        for match in ss.SHELL_CALL.finditer(code.text):
             command = match["dash"] or match["var"] or match["shell"]
             if command in self.commands:
-                found.add(self.commands[command])
+                found.append((self.commands[command], code.line_at(match.start())))
+        for match in BASH_C.finditer(code.text):
+            found.extend(self.passed_in(code, match))
         return found
+
+    def passed_in(self, code: Code, match: re.Match[str]) -> list[tuple[str, int]]:
+        """The commands a `bash -c` runs through bosun passed in as a positional parameter."""
+        runs = (
+            run
+            for place in bosun_places(match["args"])
+            for run in re.finditer(positional_run(place), match["script"])
+        )
+        return [
+            (self.commands[run["cmd"]], code.line_at(match.start("script") + run.start()))
+            for run in runs
+            if run["cmd"] in self.commands
+        ]
+
+    def shared_calls_to_sections(self) -> list[str]:
+        """The shared setup's calls (where a command starts) to a helper a section defines."""
+        defined_in_sections = {name for n, name in self.suite.helper_at.items() if n in self.suite.section_at}
+        code = self.code.get((ss.HARNESS, ""), Code())
+        return [
+            f"line {code.line_at(match.start('helper'))}: {match['helper']}"
+            for match in self.call.finditer(code.text)
+            if match["helper"] in defined_in_sections
+        ]
+
+
+def positional_run(place: str) -> str:
+    """`"$1" <cmd>` (or `$1`, `"${1}"`), not an assignment's value (`want="$1" status`)."""
+    quoted = rf'(?<![\w$=])"\$\{{?{place}\}}?"'
+    bare = rf'(?<![\w$="])\$\{{?{place}\}}?(?![\w"}}])'
+    return rf"(?:{quoted}|{bare})\s+(?P<cmd>[a-z][a-z0-9-]*)"
+
+
+def bosun_places(args: str) -> list[str]:
+    """The positional parameters (1, 2, ...) a `bash -c`'s arguments after `_` pass bosun at, up to the first
+    unquoted `;`, `|`, `&`, `)`, `<` or `>`."""
+    places = []
+    prefix = ARGUMENTS.match(args)
+    for place, argument in enumerate(ARGUMENT.findall(prefix.group(0) if prefix else ""), 1):
+        if IS_BOSUN.match(argument):
+            places.append(str(place))
+    return places
 
 
 class CoversTest(unittest.TestCase):
@@ -125,32 +237,48 @@ class CoversTest(unittest.TestCase):
 
     def test_every_command_a_section_runs_is_in_its_covers(self) -> None:
         missing = [
-            f"{section.id}: {command} (run by {where})"
+            f"{section.id}: {command} (line {number}, run by {where})"
             for section in self.runs.suite.sections
-            for command, where in sorted(self.runs.runs(section.id).items())
+            for (command, number), where in sorted(self.runs.runs(section.id).items())
             if not any(ss.matches(command, glob) for glob in section.covers)
-            and (section.id, command) not in ALLOWED
+            and (command, self.runs.line(number)) not in ALLOWED
         ]
         self.assertEqual(
             missing,
             [],
             "\n\nThese sections run a bosun command their `covers` do not name, so a change to the command "
             "would not run them. Add the command (libexec/bosun-<name>) to the section's `covers '...'` in "
-            "tests/smoke.sh; if the patterns read a run that is not one (a message), add it to ALLOWED in "
-            "tests/unit/test_smoke_covers.py with why:",
+            "tests/smoke.sh; if the patterns read a run that is not one (a message), add the command and the "
+            "whole line to ALLOWED in tests/unit/test_smoke_covers.py, with why:",
         )
 
-    def test_each_allowed_place_is_still_read_as_a_run(self) -> None:
-        """An allowance that no longer matches anything is left over: remove it."""
-        for sid, command in ALLOWED:
-            with self.subTest(section=sid, command=command):
-                self.assertIn(command, self.runs.runs(sid))
+    def test_each_allowed_line_is_in_the_suite_once_and_still_read_as_that_run(self) -> None:
+        """An allowance whose line changed, went or was copied is looked at again."""
+        lines = [line.strip() for line in self.runs.suite.script.lines]
+        runs = {
+            (command, self.runs.line(number))
+            for s in self.runs.suite.sections
+            for command, number in self.runs.runs(s.id)
+        }
+        for command, line in ALLOWED:
+            with self.subTest(line=line):
+                self.assertEqual(lines.count(line), 1)
+                self.assertIn((command, line), runs)
+
+    def test_the_shared_setup_calls_no_helper_a_section_defines(self) -> None:
+        self.assertEqual(
+            self.runs.shared_calls_to_sections(),
+            [],
+            "\n\nThe shared setup (outside the sections, or an always_run part) calls a helper a section "
+            "defines: it does not exist in a run that skips that section, and the selection would not see "
+            "the call. Move the helper to the shared setup:",
+        )
 
 
 class ReadingTest(unittest.TestCase):
     """What the guard counts as running a command, on a made-up suite."""
 
-    SUITE = """\\
+    SUITE = """\
 #!/bin/bash
 L() { "$BOSUN" ledger "$@"; }
 dkg() { BOSUN_CONFIG_DIR=x "$BOSUN" "$@"; }
@@ -164,16 +292,36 @@ echo "run bosun doctor first"  # a message
 section three "three" covers 'x'
 out="$("$BOSUN" init --answers x)"
 fails_with "busy" q --stop-now
+check "facts" bash -c 'out="$("$2" watchdog --facts)"; [ -n "$out" ]
+  "$2" sessions --json >/dev/null' _ "$ROOT" "$BOSUN" 2>&1
+check "local is no run" bash -c 'local want="$1" status' _ "$BOSUN"
+section four "four" covers 'x'
+helper4() { :; }
+always_run
+helper4
 """
 
-    def test_runs_direct_through_a_helper_and_through_a_bosun_runner(self) -> None:
+    def test_runs_direct_through_a_helper_a_bosun_runner_and_a_bash_c(self) -> None:
         runs = SuiteRuns(self.SUITE)
-        self.assertEqual(sorted(runs.runs("one")), ["libexec/bosun-ledger"])
-        self.assertEqual(sorted(runs.runs("two")), ["libexec/bosun-kg"])
-        self.assertEqual(sorted(runs.runs("three")), ["libexec/bosun-init", "libexec/bosun-quit"])
+
+        def commands(sid: str) -> list[str]:
+            return sorted({command for command, _ in runs.runs(sid)})
+
+        self.assertEqual(commands("one"), ["libexec/bosun-ledger"])
+        self.assertEqual(commands("two"), ["libexec/bosun-kg"])
         self.assertEqual(
-            shell_library.calls("printf '%q'", {"q"}), {"q"}
-        )  # (what the loose reading would see)
+            commands("three"),
+            ["libexec/bosun-init", "libexec/bosun-quit", "libexec/bosun-sessions", "libexec/bosun-watchdog"],
+        )
+        self.assertEqual(sorted(n for c, n in runs.runs("three") if c == "libexec/bosun-sessions"), [15])
+
+    def test_the_shared_setup_calling_a_section_s_helper_is_found(self) -> None:
+        self.assertEqual(SuiteRuns(self.SUITE).shared_calls_to_sections(), ["line 20: helper4"])
+
+    def test_bosun_s_places_in_a_bash_c_s_arguments(self) -> None:
+        self.assertEqual(bosun_places(' "$ROOT" "$BOSUN" 2>&1'), ["2"])
+        self.assertEqual(bosun_places(' "$WORK/u/bin/bosun" x'), ["1"])
+        self.assertEqual(bosun_places(' "$ROOT"; echo "$BOSUN"'), [])  # (after the `;`: another command's)
 
 
 if __name__ == "__main__":
