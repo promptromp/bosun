@@ -470,7 +470,7 @@ tests, which come last (CI's `lint` job runs a copy with `fail_fast: false`, so 
   commit pays nearly the full run (about a minute); that is the selection being right, not loose, and a
   docs edit pays about ten seconds. Before a push, the smoke sections the change can reach, three shards side by side (end to end
   only; the build-out setting: see below; skipped if this exact tree passed a whole run here in the last 24 hours,
-  left to the merge queue when they take more than three minutes); in CI, every
+  left to the merge queue when the hook would take more than three minutes on them); in CI, every
   unit test, and the smoke sections the change reaches in the merge queue (the whole suite nightly), split over
   three macOS runners.
 
@@ -582,14 +582,16 @@ in the merge queue, and all of it nightly, in three shards. `--shard K/N` runs s
 (the whole suite, or what `--only`, `--last-failed` or `--changed` chose), each section in exactly one shard, with what
 it `needs` run again as for `--only`, and the summary names the shard. The shards are balanced by
 `tests/smoke_weights.txt`, seconds per section (`tools/smoke_shard.py` has the split; a section it does not list
-counts as the median). Every run records how long each section took when it passed, in
-`tests/.smoke-cache/durations`; after a whole run, `python3 tools/smoke_shard.py --script tests/smoke.sh --weights
+counts as the median). Every run but a `--jobs` one records how long each section took when it passed, in
+`tests/.smoke-cache/durations`; after a whole serial run, `python3 tools/smoke_shard.py --script tests/smoke.sh --weights
 tests/smoke_weights.txt --record tests/.smoke-cache/durations` writes the weights anew: do it when sections are added
 or grow, so the shards stay even. `uninstall-files`, which checks what the run left behind, runs in every shard
 (`EVERY_SHARD` there), so the shards together check what a whole run leaves. `--jobs N` runs the N shards side by
-side on this machine (each `--shard K/N` in its own process and process group, its cache files merged after; with `-x`
-the first to fail stops the others; `--with-unit` runs the unit tests once, first), with any way to choose sections
-but not with `--shard` or `--list`; a whole run with it records its tree as a whole run does.
+side on this machine (each `--shard K/N` in its own process and process group, with SIGINT at its default as in a
+serial run; their results merged into the cache after, not their durations, which are times under each other's load;
+with `-x` the first to fail stops the others, which are said, not counted; `--with-unit` runs the unit tests once,
+first; on Ctrl-C the shards are stopped and waited for), with any way to choose sections but not with `--shard` or
+`--list`; a whole run with it records its tree as a whole run does.
 The pre-push hook (`tests/smoke.sh --pre-push --jobs 3`) does less, for the build-out phase only: it skips the suite
 when that exact tree (uncommitted and untracked files included) passed a whole run in this checkout in the last
 24 hours (`BOSUN_SMOKE_NO_CACHE=1` ignores that record, `BOSUN_SMOKE_FULL=1` forces the whole suite; what the record is and why it can only make a run longer:
@@ -598,23 +600,20 @@ when that exact tree (uncommitted and untracked files included) passed a whole r
 section, or why it chose everything; `--changed <ref>` alone runs what it chose), failing closed to the whole suite: a changed file that matches the select-everything list, that
 no section covers and no `ignore` rule lists, an `origin/main` that does not resolve. The hook leaves the whole
 suite to the merge queue, whose smoke job makes the same choice and runs it there (so a push does not wait about 15
-minutes for what the queue does anyway), and so it does a selection whose sections take more than
-`BOSUN_SMOKE_DEFER_SECONDS` (180 by default, by `tests/smoke_weights.txt`; a build-out setting too); `BOSUN_SMOKE_FULL=1`
-runs the whole suite before the push. This goes back to the whole suite on every push once the project is past its release
+minutes for what the queue does anyway), and so it does a selection the hook would take more than
+`BOSUN_SMOKE_DEFER_SECONDS` to run (180 by default; the sections' serial time by `tests/smoke_weights.txt` over the
+hook's three shards; a build-out setting too); `BOSUN_SMOKE_FULL=1` runs the whole suite before the push. This goes back to the whole suite on every push once the project is past its release
 (`--pre-push` without the selection); CI's merge queue makes the same selection, and its nightly run the whole
 suite. The choice is `tools/smoke_select.py`; the two places that feed it are `covers` on each
 `section` line and `tests/smoke_selection.txt` (`all <glob>`: the whole suite; `ignore <glob>`: no section reaches it).
-The shell libraries (`lib/common.sh`, `lib/agents.sh`, `lib/launch/*.sh`, `lib/harnesses/*.sh`, `lib/platforms/*.sh`)
-are read function by function by `tools/shell_library.py` (pure; the Mac VM's selection reads them with it too): a
-change reaches the sections that use the function it is in, or that names what changed; a top-level assignment what
-reads its variable; any other top-level line, a library that does not read as functions, or a line that cannot be
-placed, the whole suite; a call by a built name (`"$fn"`, `eval`) may call any function of its process. Write the
-libraries in shfmt's layout (`name() {` ... `}` at the function's indentation), or the selection runs everything.
-`tests/smoke.sh` is read the same way: a changed line in a section selects it and those that need it, in a helper the
-sections that use it, in the shared setup (before the first section, or an `always_run` part) the whole suite. Data
-files (`orchestrator/`, `templates/`) reach the code that names them by path, Python's strings too.
-`tests/unit/test_smoke_selection.py` fails on a tracked file that is none of covered, `all` or `ignore`, and on a
-section without `covers`, and says what to add. A test must not write into
+`tests/smoke.sh` itself is read section by section (`tools/shell_library.py`, a pure reader of a shell file's
+functions and top-level statements): a changed line, on either side of the diff, in a section selects it and the
+sections that need it; in a helper, the sections that call it; in the shared setup (before the first section, or an
+`always_run` part) or a helper it calls, the whole suite. The shell libraries are on the `all` list, and what
+`lib/common.sh` names counts as every section's. `tests/unit/test_smoke_selection.py` fails on a tracked file that is
+none of covered, `all` or `ignore`, and on a section without `covers`, and says what to add;
+`tests/unit/test_smoke_covers.py` fails on a section that runs a bosun command (`"$BOSUN" <cmd>`, `bosun <cmd>`,
+itself or through a helper) its `covers` do not name (a message read as a run goes in its `ALLOWED`, with why). A test must not write into
 the repository: the run then records no pass and names the file. In `tests/smoke.sh`, a new section begins with
 `section <id> "<name>" [needs <id>,...] covers '<glob>,...'` (unique kebab-case id, and the files it runs or reads:
 its command, the lib modules it exercises, a template or a fixture; what imports or runs those is followed by the
