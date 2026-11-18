@@ -7,9 +7,7 @@ on the commit, with what to add:
   reached by the `covers` of a section (directly, or through the code that depends on it), or the test
   fails and names it;
 - every section has a `covers '<glob>,...'` clause, and every glob of it and of the selection file matches
-  a file (a renamed or deleted file leaves a glob that selects nothing);
-- every shell library reads as functions (tools/shell_library.py): one that did not would make every push run
-  the whole suite.
+  a file (a renamed or deleted file leaves a glob that selects nothing).
 
 Like test_impacted_rules.py for the commit hook's tests: a new file cannot fall silently outside it."""
 
@@ -47,10 +45,9 @@ class SelectionRulesTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.files = repository_files()
-        suite = (ROOT / "tests" / "smoke.sh").read_text()
-        cls.sections = ss.parse_sections(suite)
+        cls.sections = ss.parse_sections((ROOT / "tests" / "smoke.sh").read_text())
         cls.rules = ss.parse_rules((ROOT / "tests" / "smoke_selection.txt").read_text())
-        cls.graph = ss.Graph(ROOT, cls.files, ss.Suite(suite))
+        cls.graph = ss.Graph(ROOT, cls.files)
 
     def test_every_file_is_covered_listed_or_ignored(self) -> None:
         unknown = [
@@ -102,24 +99,12 @@ class SelectionRulesTest(unittest.TestCase):
         ]
         self.assertEqual(dead, [], "\n\nThese rules of tests/smoke_selection.txt match no file. Remove them:")
 
-    def test_every_shell_library_reads_as_functions(self) -> None:
-        self.assertEqual(
-            self.graph.unreadable,
-            [],
-            "\n\nA shell library that does not read as functions (tools/shell_library.py) makes every change "
-            "run the whole suite. Write it in shfmt's layout (`name() {` ... `}` at the function's "
-            "indentation), or fix what does not close:",
-        )
-        self.assertGreater(len(self.graph.functions), 200)
-
-    def test_a_command_a_library_function_runs_reaches_the_sections_that_use_that_function(self) -> None:
-        """lib/common.sh's build_launch_command runs `"$BOSUN_CMD" launch`: a change to bosun-launch reaches
-        the sections of every command that starts a window through it, not a command's that does not."""
-        self.assertIn(ss.fn("build_launch_command"), self.graph.callers["libexec/bosun-launch"])
+    def test_a_command_common_sh_runs_runs_everything_and_the_others_do_not(self) -> None:
+        """common.sh runs `"$BOSUN_CMD" launch`: every section that starts a window reaches it."""
         launch = ss.plan_for(["libexec/bosun-launch"], self.sections, self.rules, self.graph)
-        self.assertFalse(launch.full, launch.reason)
-        self.assertIn("tmux-session", launch.picked)  # bosun start, through build_launch_command
-        self.assertNotIn("app", launch.picked)
+        self.assertTrue(launch.full and not launch.unknown, launch.reason)
+        self.assertIn("libexec/bosun-launch", self.graph.common_commands)
+        self.assertNotIn("libexec/bosun-app", self.graph.common_commands)
         self.assertFalse(ss.plan_for(["libexec/bosun-app"], self.sections, self.rules, self.graph).full)
 
     def test_a_new_command_nothing_covers_is_flagged_not_covered_by_syntax(self) -> None:
@@ -135,27 +120,14 @@ class SelectionRulesTest(unittest.TestCase):
         self.assertIn("add it to a section's `covers", plan.reason)
         self.assertIn("tests/smoke_selection.txt", plan.reason)
 
-    def test_the_dispatcher_runs_everything_and_so_does_a_library_or_the_suite_changed_in_full(self) -> None:
-        """bin/bosun is on the select-everything list; lib/common.sh changed in full (no diff says which
-        lines) changes its top-level code, which runs wherever it is sourced; tests/smoke.sh, the same."""
-        for path, reason in (
-            ("bin/bosun", "select-everything list"),
-            ("lib/common.sh", "top-level code"),
-            ("tests/smoke.sh", "cannot be read"),
-        ):
+    def test_the_shell_libraries_the_dispatcher_and_the_suite_with_no_diff_run_everything(self) -> None:
+        for path in ("lib/common.sh", "lib/agents.sh", "lib/launch/claude.sh", "bin/bosun", "tests/smoke.sh"):
             with self.subTest(path=path):
                 plan = ss.plan_for([path], self.sections, self.rules, self.graph)
                 self.assertTrue(plan.full and not plan.unknown, plan.reason)
-                self.assertIn(reason, plan.reason)
-
-    def test_the_orchestrator_s_files_reach_the_sections_whose_code_reads_them_not_everything(self) -> None:
-        """Data the code reads: the task files through lib/delegate.py and `bosun delegate`."""
-        plan = ss.plan_for(["orchestrator/tasks/review.md"], self.sections, self.rules, self.graph)
-        self.assertFalse(plan.full, plan.reason)
-        self.assertIn("delegate", plan.picked)
-        self.assertLess(len(plan.picked) + len(plan.needed), len(self.sections))
 
     def test_the_weights_reach_nothing(self) -> None:
+        """They only balance the shards of a split run: a section moved between shards still runs."""
         plan = ss.plan_for(["tests/smoke_weights.txt"], self.sections, self.rules, self.graph)
         self.assertEqual((plan.full, plan.picked, plan.ignored), (False, {}, ["tests/smoke_weights.txt"]))
 

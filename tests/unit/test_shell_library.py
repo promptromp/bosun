@@ -1,8 +1,8 @@
-"""A shell script read function by function (tools/shell_library.py): its functions and statements, what keeps
-a script from reading as them, the calls a piece of code makes and the ones by a name it builds.
+"""A shell script read as its functions and top-level statements (tools/shell_library.py), what keeps it from
+reading as them, a diff's hunks mapped to the functions they changed, and the calls a piece of code makes.
 
-The rule under test is the selection's: the reader can only find more (a word that might be a call is one),
-and whatever it cannot read is a problem its caller fails closed on."""
+The rule under test is the selection's: whatever the reader cannot read or place is the whole file (None), and
+a word that might be a call is one."""
 
 from __future__ import annotations
 
@@ -42,9 +42,7 @@ class FunctionsTest(unittest.TestCase):
         )
         self.assertEqual(spans(script), [("one", 2, 2), ("two", 3, 6)])
         # (a body on the next line is not shfmt's layout: it reads as top-level code, which fails closed)
-        self.assertEqual(
-            [(st.first, st.assigns) for st in script.statements], [(7, ()), (8, ()), (9, ()), (10, ())]
-        )
+        self.assertEqual([st.first for st in script.statements], [7, 8, 9, 10])
 
     def test_the_function_keyword_and_a_subshell_body(self) -> None:
         script = read(
@@ -111,49 +109,27 @@ class FunctionsTest(unittest.TestCase):
 
 
 class StatementsTest(unittest.TestCase):
-    def test_assignments_name_what_they_assign(self) -> None:
+    def test_top_level_code_is_statements_each_with_the_lines_it_runs_on_over(self) -> None:
         script = read(
             """\
             ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-            A="" B="" C=1 # several
             LIST="one
               two"
-            ARR=(a
-              b)
-            export PATH="$HOME/bin:$PATH"
-            X=1; Y=2
-            """
-        )
-        found = [(s.first, s.last, s.assigns, s.exported) for s in script.statements]
-        self.assertEqual(
-            found,
-            [
-                (1, 1, ("ROOT",), False),
-                (2, 2, ("A", "B", "C"), False),
-                (3, 4, ("LIST",), False),
-                (5, 6, ("ARR",), False),
-                (7, 7, ("PATH",), True),
-                (8, 8, ("X", "Y"), False),
-            ],
-        )
-
-    def test_any_other_code_is_a_statement_that_assigns_nothing(self) -> None:
-        script = read(
-            """\
             case "$x" in
               a) V=1 ;;
             esac
-            source "$ROOT/lib/agents.sh"
-            V=1 some_command
-            unset V
-            export V
+            ARR=(a
+              b)
             make |
               tee log
+            f() { :; }
+            X=1; Y=2
             """
         )
-        found = [(s.first, s.last, s.assigns) for s in script.statements]
-        self.assertEqual(found, [(1, 3, ()), (4, 4, ()), (5, 5, ()), (6, 6, ()), (7, 7, ()), (8, 9, ())])
-        self.assertTrue(script.statements[4].exported)
+        self.assertEqual(
+            [(st.first, st.last) for st in script.statements],
+            [(1, 1), (2, 3), (4, 6), (7, 8), (9, 10), (12, 12)],
+        )
 
     def test_at_says_which_function_or_statement_a_line_is_in(self) -> None:
         script = read("V=1\n\n# note\nf() {\n  :\n}\n")
@@ -192,57 +168,64 @@ class CallsTest(unittest.TestCase):
         code = 'python3 "$ROOT/lib/orphans.py"\n"$BOSUN" bosun-orphans\necho "$run_step" load_configs\n'
         self.assertEqual(sl.calls(code, self.NAMES), set())
 
-    def test_mentions_is_a_variable_s_use(self) -> None:
-        self.assertTrue(sl.mentions('echo "${NAME:-x}"', "NAME"))
-        self.assertTrue(sl.mentions("for v in NAME OTHER", "NAME"))
-        self.assertFalse(sl.mentions("echo $NAMES", "NAME"))
+
+LIBRARY = """\
+A=1
+one() {
+  echo one
+}
+
+two() {
+  echo two
+  echo more
+}
+"""
 
 
-class ComputedTest(unittest.TestCase):
-    NAMES = frozenset({"codex_args", "run_step", "load_config"})
+class HunksTest(unittest.TestCase):
+    """A diff's hunks mapped to the functions they changed, the whole file (None) when that cannot be said."""
 
-    def computed(self, text: str) -> list[str]:
-        script = read(text)
-        return script.computed(range(1, len(script.lines) + 1), self.NAMES)
+    def test_a_git_diff_s_hunks(self) -> None:
+        diff = "diff --git a/x b/x\n@@ -3 +3 @@\n-a\n+b\n@@ -7,0 +8,2 @@\n+c\n+d\n@@ -12,3 +13,0 @@\n"
+        self.assertEqual(sl.parse_hunks(diff), ((3, 1, 3, 1), (7, 0, 8, 2), (12, 3, 13, 0)))
 
-    def test_eval_a_variable_and_a_command_s_output_are_names_no_reading_can_tell(self) -> None:
-        self.assertEqual(self.computed('eval "$x"\n'), ["line 1: eval"])
-        self.assertEqual(self.computed('f() { local fn="$(pick)"; "$fn" a; }\n'), ['line 1: "$fn"'])
-        self.assertEqual(self.computed('"$(pick)" --version\n'), ['line 1: "$(pick)"'])
-        self.assertEqual(self.computed("x=1 $cmd\n"), ["line 1: $cmd"])
+    def test_lines_changed_in_functions_name_them(self) -> None:
+        new = sl.read(LIBRARY.replace("echo one", "echo 1").replace("echo more", "echo much"))
+        self.assertEqual(sl.changed_functions(new, [(3, 1, 3, 1), (8, 1, 8, 1)]), {"one", "two"})
+        self.assertEqual(sl.changed_functions(new, [(3, 1, 3, 1)], old=sl.read(LIBRARY)), {"one"})
 
-    def test_a_name_glued_from_an_expansion_that_could_spell_a_function(self) -> None:
-        self.assertEqual(self.computed('wrap "${agent}_args"\n'), ['line 1: "${agent}_args"'])
-        self.assertEqual(self.computed('echo "run_$mode"\n'), ['line 1: "run_$mode"'])
-        self.assertEqual(self.computed('sleep "${n}s"; echo "v$version"\n'), [])  # (no function's name)
-
-    def test_names_the_caller_wrote_programs_and_paths_are_not_computed(self) -> None:
-        for text in (
-            '"$@"\n',
-            '"$1" x\n',
-            '"${@:2}"\n',
-            '"$BOSUN" ledger\n',
-            '"${BOSUN_CMD}" launch\n',
-            '"${ARGS[@]}"\n',
-            '"$ROOT/bin/bosun" x\n',
-            'done <<<"$table"\n',
-            "done < <(list)\n",
-            'echo x >"$file"\n',
+    def test_a_line_outside_every_function_is_the_whole_file_even_a_comment(self) -> None:
+        for new, hunk in (
+            (LIBRARY.replace("A=1", "A=2"), (1, 1, 1, 1)),
+            (LIBRARY.replace("\n\ntwo", "\n# two\ntwo"), (5, 1, 5, 1)),
+            (LIBRARY.replace("echo one", "echo 1"), (40, 1, 40, 1)),  # past the end
         ):
-            with self.subTest(text=text):
-                self.assertEqual(self.computed(text), [])
+            with self.subTest(hunk=hunk):
+                self.assertIsNone(sl.changed_functions(sl.read(new), [hunk]))
 
-    def test_a_variable_that_only_holds_what_is_written_out_is_no_computed_name(self) -> None:
-        self.assertEqual(self.computed('for sh in /bin/bash bash; do "$sh" -c :; done\n'), [])
-        self.assertEqual(self.computed('f() { local w; w=(sudo pmset x); "${w[@]}"; }\n'), [])
-        self.assertEqual(self.computed('f() { local fn="$1"; "$fn"; }\n'), [])
+    def test_a_change_is_a_change_however_small(self) -> None:
+        """No comparison: a hunk is a change, spacing inside a string or a joined line too."""
+        new = sl.read(LIBRARY.replace("echo two\n  echo more", "echo two;  echo more"))
+        self.assertEqual(sl.changed_functions(new, [(7, 2, 7, 1)], old=sl.read(LIBRARY)), {"two"})
+
+    def test_lines_taken_out(self) -> None:
+        old = sl.read(LIBRARY)
+        taken = LIBRARY.replace("  echo more\n", "")
+        self.assertEqual(sl.changed_functions(sl.read(taken), [(8, 1, 7, 0)], old=old), {"two"})
         self.assertEqual(
-            self.computed('f() { local w=(sudo); w=("$(pick)"); "${w[@]}"; }\n'), ['line 1: "${w[@]}"']
-        )
+            sl.changed_functions(sl.read(taken), [(8, 1, 7, 0)]), {"two"}
+        )  # within two: on both sides
+        top = LIBRARY.replace("A=1\n", "")
+        self.assertIsNone(sl.changed_functions(sl.read(top), [(1, 1, 0, 0)], old=old))
+        between = "one() {\n  echo one\n}\ntwo() {\n  echo two\n}\n"  # (a statement between them taken out)
+        self.assertIsNone(
+            sl.changed_functions(sl.read(between), [(4, 1, 3, 0)])
+        )  # no old file: not within one
 
-    def test_the_lines_asked_about_only(self) -> None:
-        script = read('eval x\n"$fn"\n')
-        self.assertEqual(script.computed([2], self.NAMES), ['line 2: "$fn"'])
+    def test_a_side_that_does_not_read_is_the_whole_file(self) -> None:
+        broken = sl.read(LIBRARY.replace("echo one", "echo 'one"))
+        self.assertIsNone(sl.changed_functions(broken, [(3, 1, 3, 1)]))
+        self.assertIsNone(sl.changed_functions(sl.read(LIBRARY), [(3, 1, 3, 1)], old=broken))
 
 
 if __name__ == "__main__":

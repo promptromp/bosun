@@ -1,8 +1,4 @@
-"""A shell script read function by function: pure, text in, structure out.
-
-The smoke suite's selection (tools/smoke_select.py) reads bosun's shell libraries with it (lib/common.sh,
-lib/agents.sh, lib/launch/*.sh, lib/harnesses/*.sh, lib/platforms/*.sh) and tests/smoke.sh's helpers, so
-that a change reaches the sections that use the function it changed, not every section that sources the file.
+"""A shell script read as its functions and top-level statements: pure, text in, structure out.
 
 `read(text)` gives a `Script`:
 
@@ -11,28 +7,30 @@ that a change reaches the sections that use the function it changed, not every s
   first line after it that begins, outside any quote or here-document, with `}` at the indentation of its
   first line (shfmt's layout);
 - its statements: the code outside the functions, each a command with the lines it runs on over (a quote, an
-  array, a `case`, a here-document, a `\\` at the end of a line, or a line that ends in `|`, `&&` or `||`); a
-  statement that is assignments and nothing else (`NAME=...`, `export NAME=...`) names what it assigns;
+  array, a `case`, a here-document, a `\\` at the end of a line, or a line that ends in `|`, `&&` or `||`);
+- its code: the text with its comments blanked out, line for line;
 - its problems: what keeps it from reading as that (a quote, a `$(`, a `case` or a here-document that does
   not close, a function with no end or whose braces do not balance). Whoever reads a script with a problem
   fails closed.
 
-What a piece of code calls is read loosely, which can only find more: `calls(code, names)` is every word of
-it that is one of the names, in strings too (`bash -c '...; load_config'`). Where code calls a function by a
-name it builds, no reading can say which: `Script.computed(lines, names)` lists those places: `eval`; a
-command whose name is a variable or a command's output (`"$fn"`, `"$(pick)"`), other than the positional
-parameters, whose names the caller wrote, an upper-case variable, which holds a program by this repository's
-convention (`"$BOSUN" ledger`), and a path (a function's name has no `/`); and a word that glues an
-expansion to letters that could spell one of the names (`"${kind}_args"` and codex_args).
+`changed_functions(new, hunks, old)` maps a diff's hunks (`parse_hunks` of a `git diff -U0`) to the functions
+they changed, on both sides when the old file is given, failing closed: None (the whole file) when a changed
+line is outside every function, cannot be placed, or a side has a problem. Without the old file, lines a hunk
+only took out count as a function's when the lines on either side of where they were are both in it. A
+changed line is a change: nothing is compared.
+
+`calls(code, names)` is every word of the code that is one of the names, in strings too (`bash -c '...; f'`):
+loose, so it can only find more calls than there are.
 
 The scan knows bash's quoting (single, double, `$'...'`), `$(...)`, backquotes, `${...}`, `$((...))`,
-here-documents, comments and `case` patterns. Plain python3 3.9 is enough, as for the tool that uses it.
+here-documents, comments and `case` patterns. Plain python3 3.9 is enough, as for the tools that use it
+(tools/smoke_select.py reads tests/smoke.sh's helpers with it).
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Collection, Iterable, Sequence
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass, field
 from functools import cached_property
 
@@ -45,20 +43,13 @@ DEFINITION = re.compile(
     r"|(?P<name>[A-Za-z_][\w-]*)[ \t]*\([ \t]*\))[ \t]*(?P<body>[{(])"
 )
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=")
-DECLARES = frozenset({"export", "readonly", "declare", "typeset"})
-EXPORT_OPTION = re.compile(r"^-[a-zA-Z]*x")
 # Words after which a command (or a reserved word, `fi }`) may still stand.
 RESERVED = frozenset(
     {"then", "do", "else", "elif", "if", "while", "until", "!", "time", "{", "}", "fi", "done"}
 )
 RUN = re.compile(r"[^\s\\'\"`$()#<>;&|]+")  # ordinary characters of a word, in code
 HEREDOC = re.compile(r"<<(-?)[ \t]*(?:'([^'\n]*)'|\"([^\"\n]*)\"|\\?([A-Za-z0-9_.-]+))")
-VARIABLE_WORD = re.compile(r'^"?\$\{?(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?:\[[@*]\])?\}?"?$')
-POSITIONAL = re.compile(r'^"?\$(?:[@*0-9]|\{(?:[@*]|[0-9]+)(?::[0-9]+)?\})"?$')
-UPPER_VARIABLE = re.compile(r'^"?\$(?:[A-Z_][A-Z0-9_]*|\{[A-Z_][A-Z0-9_]*(?:\[[@*]\])?\})"?$')
-# A word of letters, digits, `_`, expansions and double quotes, as the pieces of a function's name could be.
-GLUED = re.compile(r"(?:[A-Za-z0-9_\"]|\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*)+")
-PIECE = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*|\"|[A-Za-z0-9_]+")
+HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", re.MULTILINE)
 WORDY = frozenset({"top", "subst", "paren", "array", "case", "backquote"})  # where words and commands are
 WHAT = {
     "subst": "$(",
@@ -85,129 +76,101 @@ class Function:
 class Statement:
     first: int
     last: int
-    assigns: tuple[str, ...]  # what it assigns, when it does nothing else; else ()
-    exported: bool  # it exports (export NAME=..., declare -x): every program it starts reads it
 
 
 @dataclass
 class Script:
     lines: tuple[str, ...]
     code: str  # the text with its comments blanked out, line for line
-    literal: str  # ... and what is inside single quotes and here-documents too
-    undocumented: str = ""  # the code without its here-documents' text either (a usage text `cat` prints)
     functions: tuple[Function, ...] = ()
     statements: tuple[Statement, ...] = ()
     problems: tuple[str, ...] = ()
-    commands: tuple[tuple[int, str], ...] = ()  # (line, word): each word where a command's name stands
-
-    def at(self, line: int) -> Function | Statement | None:
-        """The function or statement line <line> is in; None for a blank or comment line outside them."""
-        return self.by_line.get(line)
-
-    @property
-    def blocks(self) -> list[Function | Statement]:
-        """Its functions and statements."""
-        return [*self.functions, *self.statements]
-
-    @cached_property
-    def by_line(self) -> dict[int, Function | Statement]:
-        found: dict[int, Function | Statement] = {}
-        for block in self.blocks:
-            found.update(dict.fromkeys(range(block.first, block.last + 1), block))
-        return found
 
     @cached_property
     def code_lines(self) -> list[str]:
         return self.code.split("\n")
 
     @cached_property
-    def literal_lines(self) -> list[str]:
-        return self.literal.split("\n")
-
-    def code_of(self, first: int, last: int) -> str:
-        """Lines <first>..<last> (from 1) without their comments."""
-        return "\n".join(self.code_lines[first - 1 : last])
-
-    @cached_property
-    def commands_at(self) -> dict[int, list[str]]:
-        found: dict[int, list[str]] = {}
-        for line, word in self.commands:
-            found.setdefault(line, []).append(word)
+    def by_line(self) -> dict[int, Function | Statement]:
+        found: dict[int, Function | Statement] = {}
+        blocks: list[Function | Statement] = [*self.functions, *self.statements]
+        for block in blocks:
+            found.update(dict.fromkeys(range(block.first, block.last + 1), block))
         return found
 
-    def computed(self, lines: Iterable[int], names: Collection[str]) -> list[str]:
-        """Where <lines> (numbers from 1: a function's, a section's) call a function by a name no reading can
-        tell, as `line N: <word>`. A variable is looked up in those lines only."""
-        numbers = sorted(set(lines))
-        literal = [self.literal_lines[n - 1] for n in numbers]
-        block = "\n".join(literal)
-        found = [
-            f"line {n}: {word}"
-            for n in numbers
-            for word in self.commands_at.get(n, ())
-            if built(word) and not written_out(word, block)
-        ]
-        found += [f"line {numbers[k]}: {word}" for k, word in glued_names(literal, names)]
-        return found
+    def at(self, line: int) -> Function | Statement | None:
+        """The function or statement line <line> is in; None for a blank or comment line outside them."""
+        return self.by_line.get(line)
+
+    def function_at(self, line: int) -> Function | None:
+        block = self.at(line)
+        return block if isinstance(block, Function) else None
 
 
-def keeps_command(word: str) -> bool:
-    """Whether a command may still stand after <word>: a reserved word, or an assignment before a command."""
-    return word in RESERVED or bool(ASSIGNMENT.match(word))
+def parse_hunks(diff: str) -> tuple[tuple[int, int, int, int], ...]:
+    """The hunks of a `git diff -U0`: (old start, old count, new start, new count); a count left out is 1."""
+    return tuple((int(m[1]), hunk_count(m[2]), int(m[3]), hunk_count(m[4])) for m in HUNK.finditer(diff))
 
 
-def built(word: str) -> bool:
-    """Whether a command's name is not written out: eval, a variable's value, a command's output."""
-    if word == "eval":
-        return True
-    if ("$" not in word and "`" not in word) or "/" in word:
-        return False
-    return not (POSITIONAL.match(word) or UPPER_VARIABLE.match(word))
+def hunk_count(text: str | None) -> int:
+    return 1 if text is None else int(text)
 
 
-def written_out(word: str, block: str) -> bool:
-    """Whether the variable <word> runs (`"$v"`, `"${v[@]}"`) only ever holds, in <block>, what is written out
-    there or what the caller passed: each of its assignments (`v=...`, `v=(first ...)`, `local v=...`, `for v
-    in ...`) is a literal or a positional parameter. A function's name among them is a word the calls see."""
-    match = VARIABLE_WORD.match(word)
-    if match is None:
-        return False
-    values = assigned_values(match["name"], block)
-    return bool(values) and all(literal_value(v) for v in values)
+def new_lines(hunks: Iterable[tuple[int, int, int, int]]) -> list[int]:
+    """The lines a diff's hunks put in the new file (none where a hunk only took lines out)."""
+    return [n for _, _, start, count in hunks for n in range(start, start + count)]
 
 
-def assigned_values(name: str, block: str) -> list[str]:
-    """What <block> assigns to <name>: the word after `name=` (an array's first); each of `for name in`."""
-    assignment = rf"(?<![\w$]){name}\+?=\(?[ \t]*(?P<value>[^\s);&|]*)"
-    values = [m["value"] for m in re.finditer(assignment, block)]
-    for loop in re.finditer(rf"\bfor[ \t]+{name}[ \t]+in[ \t]+(?P<words>[^;\n]*)", block):
-        values += loop["words"].split()
-    return values
+def old_lines(hunks: Iterable[tuple[int, int, int, int]]) -> list[int]:
+    """The lines a diff's hunks took out of the old file (none where a hunk only put lines in)."""
+    return [n for start, count, _, _ in hunks for n in range(start, start + count)]
 
 
-def literal_value(value: str) -> bool:
-    return ("$" not in value and "`" not in value) or bool(POSITIONAL.match(value))
+def changed_functions(
+    new: Script, hunks: Iterable[tuple[int, int, int, int]], old: Script | None = None
+) -> frozenset[str] | None:
+    """The names of the functions <hunks> changed, in <new> and (given) <old>; None, the whole file, when a
+    changed line is outside every function (top-level code, a comment, a blank line), past the file's end, or
+    a side does not read as functions (see the docstring for lines taken out with no old file)."""
+    if new.problems or (old is not None and old.problems):
+        return None
+    names: set[str] = set()
+    for hunk in hunks:
+        found = hunk_functions(new, hunk, old)
+        if found is None:
+            return None
+        names |= found
+    return frozenset(names)
 
 
-def glued_names(lines: Sequence[str], names: Collection[str]) -> list[tuple[int, str]]:
-    """(index of the line, word) for each word of <lines> that glues an expansion to letters, digits or `_`
-    so that one of <names> fits (`run_$mode`, with a run_step): a function called by a name it builds."""
-    found = []
-    for number, line in enumerate(lines):
-        for match in GLUED.finditer(line):
-            shape = name_shape(match.group(0))
-            if shape is not None and any(shape.fullmatch(name) for name in names):
-                found.append((number, match.group(0)))
+def hunk_functions(new: Script, hunk: tuple[int, int, int, int], old: Script | None) -> set[str] | None:
+    old_start, old_count, new_start, new_count = hunk
+    found = functions_at(new, range(new_start, new_start + new_count))
+    if found is None:
+        return None
+    if old is not None:
+        gone = functions_at(old, range(old_start, old_start + old_count))
+        return None if gone is None else found | gone
+    if new_count == 0:  # only taken out, and no old file to say what: inside one function, or the whole file
+        return functions_at(new, (new_start, new_start + 1)) if one_function(new, new_start) else None
     return found
 
 
-def name_shape(word: str) -> re.Pattern[str] | None:
-    """The names <word> could spell, each expansion in it any letters: None unless it has an expansion and a
-    piece of its own with an `_` in it, as the name of a function it builds would (`${n}s` is a unit)."""
-    pieces = [p for p in PIECE.findall(word) if p != '"']
-    if not any(p.startswith("$") for p in pieces) or not any("_" in p for p in pieces if p[0] != "$"):
-        return None
-    return re.compile("".join("[A-Za-z0-9_]*" if p.startswith("$") else re.escape(p) for p in pieces))
+def one_function(script: Script, line: int) -> bool:
+    """Whether line <line> and the next are in the same function."""
+    function = script.function_at(line)
+    return function is not None and script.function_at(line + 1) == function
+
+
+def functions_at(script: Script, lines: Iterable[int]) -> set[str] | None:
+    """The functions <lines> are in; None when one is outside every function or past the file's end."""
+    names: set[str] = set()
+    for number in lines:
+        function = script.function_at(number) if 1 <= number <= len(script.lines) else None
+        if function is None:
+            return None
+        names.add(function.name)
+    return names
 
 
 def calls(code: str, names: Collection[str]) -> set[str]:
@@ -215,9 +178,9 @@ def calls(code: str, names: Collection[str]) -> set[str]:
     return {word for word in CALL_WORD.findall(code) if word in names}
 
 
-def mentions(code: str, name: str) -> bool:
-    """Whether <code> uses the word <name> (a variable's: `$NAME`, `${NAME:-}`, or NAME passed by name)."""
-    return re.search(rf"(?<!\w){re.escape(name)}(?!\w)", code) is not None
+def keeps_command(word: str) -> bool:
+    """Whether a command may still stand after <word>: a reserved word, or an assignment before a command."""
+    return word in RESERVED or bool(ASSIGNMENT.match(word))
 
 
 @dataclass
@@ -226,7 +189,6 @@ class _Context:
     line: int  # where it opened
     command: bool = True  # the next word stands where a command's name does
     word: int = -1  # where the word being read began, or -1
-    word_line: int = 0
     word_command: bool = False
     named: bool = False  # the last word was a name where a command's stands: `name ()` defines it
     mode: str = ""  # a case's: head (before `in`), pattern, body; `function`'s: name
@@ -251,23 +213,17 @@ class _Scan:
     line: int = 1
     stack: list[_Context] = field(default_factory=list)
     code: list[str] = field(default_factory=list)
-    literal: list[str] = field(default_factory=list)
-    undocumented: list[str] = field(default_factory=list)
     starts: list[bool] = field(default_factory=list)  # per line: it begins outside everything
     braces: list[int] = field(
         default_factory=list
     )  # per line: `{` minus `}` where commands stand, at the top
     opened: list[int] = field(default_factory=list)  # per line: `{` where commands stand, at the top
     pending: list[_Heredoc] = field(default_factory=list)
-    commands: list[tuple[int, str]] = field(default_factory=list)
-    top_words: list[tuple[int, str]] = field(default_factory=list)  # (line, word or separator) at the top
     problems: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.stack = [_Context("top", 1)]
         self.code = list(self.text)
-        self.literal = list(self.text)
-        self.undocumented = list(self.text)
         self.starts, self.braces, self.opened = [True], [0], [0]
 
     @property
@@ -321,8 +277,6 @@ class _Scan:
             end = self.text.find("\n", self.i)
             end = len(self.text) if end < 0 else end
             body = self.text[self.i : end]
-            self.blank(self.i, end, literal_only=True)
-            self.undocumented[self.i : end] = " " * (end - self.i)
             self.i = end
             done = (body.lstrip("\t") if heredoc.strip_tabs else body) == heredoc.delimiter
             if end < len(self.text):
@@ -333,23 +287,14 @@ class _Scan:
                 return True
         return False
 
-    def blank(self, start: int, end: int, literal_only: bool = False) -> None:
-        for k in range(start, min(end, len(self.text))):
-            if self.text[k] != "\n":
-                self.literal[k] = " "
-                if not literal_only:
-                    self.code[k] = " "
-                    self.undocumented[k] = " "
-
     # --- words and separators, in code -------------------------------------------------------------------
 
     def begin_word(self) -> None:
         context = self.top
         if context.word < 0:
             context.word = self.i
-            context.word_line = self.line
-            context.word_command = context.command and context.kind != "array" and context.mode != "pattern"
-            context.word_command = context.word_command and not context.target
+            command = context.command and context.kind != "array" and context.mode != "pattern"
+            context.word_command = command and not context.target
 
     def end_word(self) -> None:
         context = self.top
@@ -357,10 +302,6 @@ class _Scan:
             return
         word = self.text[context.word : self.i]
         context.word = -1
-        if context.word_command and not ASSIGNMENT.match(word):  # (`x=1 cmd`: the command is cmd)
-            self.commands.append((context.word_line, word))
-        if len(self.stack) == 1:
-            self.top_words.append((context.word_line, word))
         if context.target:  # `>file`: the redirection's, and where commands stand is as it was
             context.target = False
             return
@@ -408,8 +349,6 @@ class _Scan:
         self.end_word()
         context = self.top
         context.named = False
-        if len(self.stack) == 1:
-            self.top_words.append((self.line, text))
         if context.kind == "case" and context.mode == "body" and text in (";;", ";&", ";;&"):
             context.mode = "pattern"
         elif not (context.kind == "case" and context.mode == "pattern"):  # (`a|b)` is still the pattern)
@@ -444,7 +383,7 @@ class _Scan:
             return
         end = self.text.find("\n", self.i)
         end = len(self.text) if end < 0 else end
-        self.blank(self.i, end)
+        self.code[self.i : end] = " " * (end - self.i)
         self.i = end
 
     def on_operator(self) -> None:
@@ -573,11 +512,8 @@ class _Scan:
     def in_single(self) -> None:
         end = self.text.find("'", self.i)
         stop = len(self.text) if end < 0 else end
-        for k in range(self.i, stop):
-            if self.text[k] == "\n":
-                self.add_line(False)
-            else:
-                self.literal[k] = " "
+        for _ in range(self.text.count("\n", self.i, stop)):
+            self.add_line(False)
         self.i = stop + 1
         if end >= 0:
             self.stack.pop()
@@ -590,10 +526,8 @@ class _Scan:
         elif ch == "\n":
             self.quoted_newline()
         elif ch == "\\":
-            self.literal[self.i] = " "
             self.escaped()
         else:
-            self.literal[self.i] = " "
             self.i += 1
 
     def in_double(self) -> None:
@@ -680,17 +614,9 @@ def read(text: str) -> Script:
     lines = tuple(text.split("\n"))
     starts = scan.starts + [True] * (len(lines) + 1 - len(scan.starts))
     problems = list(scan.problems)
-    functions = find_functions(lines, starts, scan, problems)
-    script = Script(
-        lines,
-        "".join(scan.code),
-        "".join(scan.literal),
-        "".join(scan.undocumented),
-        functions=tuple(functions),
-    )
-    script.statements = tuple(find_statements(script, starts, scan.top_words))
+    script = Script(lines, "".join(scan.code), functions=tuple(find_functions(lines, starts, scan, problems)))
+    script.statements = tuple(find_statements(script, starts))
     script.problems = tuple(problems)
-    script.commands = tuple(scan.commands)
     return script
 
 
@@ -745,12 +671,9 @@ def closes_on_its_line(line: str, closer: str, scan: _Scan, number: int) -> bool
     return bool(scan.opened[number - 1]) and scan.braces[number - 1] == 0
 
 
-def find_statements(script: Script, starts: list[bool], words: list[tuple[int, str]]) -> list[Statement]:
+def find_statements(script: Script, starts: list[bool]) -> list[Statement]:
     inside = {n for f in script.functions for n in range(f.first, f.last + 1)}
     code_lines = script.code_lines
-    by_line: dict[int, list[str]] = {}
-    for line, word in words:
-        by_line.setdefault(line, []).append(word)
     found: list[Statement] = []
     number = 1
     while number <= len(code_lines):
@@ -758,7 +681,7 @@ def find_statements(script: Script, starts: list[bool], words: list[tuple[int, s
             number += 1
             continue
         last = statement_end(code_lines, starts, inside, number)
-        found.append(classify(number, last, [w for n in range(number, last + 1) for w in by_line.get(n, ())]))
+        found.append(Statement(number, last))
         number = last + 1
     return found
 
@@ -772,19 +695,3 @@ def statement_end(code_lines: list[str], starts: list[bool], inside: set[int], f
             break
         last += 1
     return last
-
-
-def classify(first: int, last: int, words: list[str]) -> Statement:
-    """A statement's assignments, when it is assignments and nothing else (apart from `;` and new lines)."""
-    names: list[str] = []
-    exported = False
-    for word in words:
-        if word in (";", "\n"):
-            continue
-        if word in DECLARES or (EXPORT_OPTION.match(word) and not names):
-            exported = exported or word == "export" or bool(EXPORT_OPTION.match(word))
-            continue
-        if not ASSIGNMENT.match(word):
-            return Statement(first, last, (), exported)
-        names.append(re.split(r"[\[+=]", word, maxsplit=1)[0])
-    return Statement(first, last, tuple(dict.fromkeys(names)), exported)

@@ -22,8 +22,8 @@
 # committing, one full run with none of them (CI and the pre-push hook run the full suite).
 # --changed <git ref> runs only the sections the change since the merge-base of <ref> and HEAD can reach (committed,
 # staged, unstaged and untracked files), each section's `covers` and tests/smoke_selection.txt being what that goes by
-# (tools/smoke_select.py: its docstring has the rules; the shell libraries and this file are read function by
-# function and section by section), and prints which file selected which section. It fails closed:
+# (tools/smoke_select.py: its docstring has the rules; this file is read section by section), and prints which file
+# selected which section. It fails closed:
 # a changed file on the select-everything list, one no section covers and nothing ignores, a ref that does not resolve,
 # a selection that fails, all run the whole suite; only ignored files (the docs) run nothing, exit 0. It does not
 # combine with --only or --last-failed; it combines with -x and --with-unit. --changed <ref> --list prints that report
@@ -33,21 +33,23 @@
 # they take (tests/smoke_weights.txt; tools/smoke_shard.py has the rules), and the shard runs its own as --only does,
 # with what they need and the shared setup. uninstall-files, which checks what the run left behind, runs in every
 # shard that runs anything. Its summary says which shard of how many it was; a shard with no section exits 0. It
-# combines with all of them but --pre-push; K/N that is not 1 <= K <= N is a usage error. Every run records how long
-# each section took when it passed in tests/.smoke-cache/durations, which --record of the tool turns into the weights.
+# combines with all of them but --pre-push; K/N that is not 1 <= K <= N is a usage error. Every run but a --jobs one
+# records how long each section took when it passed in tests/.smoke-cache/durations, which --record of the tool turns
+# into the weights.
 # --jobs N runs what the run would run as N shards side by side on this machine, each `--shard K/N` in its own process
-# (folders, tmux servers, cache files), and prints each shard's output as it ends, then one summary; it exits 1 if any
-# shard failed. It combines with --only, --last-failed, --changed, --pre-push, -x (the first shard to stop stops the
-# others) and --with-unit (the unit tests once, before the shards), not with --shard or --list. The shards' cache
-# files are merged into the checkout's (a failure in any shard wins), and a whole run records its tree as one does.
+# (folders, tmux servers, cache files, process group), and prints each shard's output as it ends, then one summary; it
+# exits 1 if any shard failed. It combines with --only, --last-failed, --changed, --pre-push, -x (the first shard to
+# stop stops the others) and --with-unit (the unit tests once, before the shards), not with --shard or --list. The
+# shards' results are merged into the checkout's cache (a failure in any shard wins; not their durations, times under
+# load: the weights come from a serial run), and a whole run records its tree as one does.
 # --pre-push (what the pre-push hook runs) skips the suite, saying so in one line, if the tree of the commit being
 # pushed (pre-commit's PRE_COMMIT_TO_REF) passed a whole run in this checkout less than 24 hours ago, and
 # otherwise runs what --changed origin/main selects (BOSUN_SMOKE_BASE=<ref> names another base; this is the
 # build-out setting, to go back to the whole suite once the project is past its release: drop the selection from
-# the `--pre-push` branch below). When that is the whole suite, or sections that take more than
-# BOSUN_SMOKE_DEFER_SECONDS (180 by default, by tests/smoke_weights.txt; a build-out setting too), the hook leaves it
-# to the merge queue, whose smoke job runs it (defer_whole_run, defer_long_selection). The hook runs what it runs as
-# --jobs 3. BOSUN_SMOKE_FULL=1 runs the whole suite. A whole run (none of --only,
+# the `--pre-push` branch below). When that is the whole suite, or sections the hook would take more than
+# BOSUN_SMOKE_DEFER_SECONDS to run (180 by default: their serial time by tests/smoke_weights.txt over its --jobs; a
+# build-out setting too), the hook leaves it to the merge queue, whose smoke job runs it (defer_whole_run,
+# defer_long_selection). The hook runs what it runs as --jobs 3. BOSUN_SMOKE_FULL=1 runs the whole suite. A whole run (none of --only,
 # --last-failed, -x) that ends with no failure records its tree in tests/.smoke-cache/passes, but only if the tree is the same at its end as at
 # its start: the tree is the files on disk before the first section runs (what `git add -A` stages in a copy of
 # the index: tracked files, and untracked ones that are not git-ignored, which a commit lacking them will not match,
@@ -272,36 +274,41 @@ defer_whole_run() {
   exit 0
 }
 
-# defer_long_selection <ids>: the same for sections that take, with what they need, more than BOSUN_SMOKE_DEFER_SECONDS
-# (180 s by default, by tests/smoke_weights.txt): the build-out setting, as the selection is. Whatever cannot weigh
-# them (no python3, an unknown id, a setting that is not a number) runs them here.
+# defer_long_selection <ids>: the same for a selection the hook would take more than BOSUN_SMOKE_DEFER_SECONDS (180 s by
+# default; the build-out setting, as the selection is) to run: the sections' serial time with what they need, by
+# tests/smoke_weights.txt, over the shards the hook runs them as (--jobs). Whatever cannot weigh them (no python3, an
+# unknown id, a setting that is not a number) runs them here.
 defer_long_selection() {
-  local seconds limit="${BOSUN_SMOKE_DEFER_SECONDS:-180}"
+  local seconds limit="${BOSUN_SMOKE_DEFER_SECONDS:-180}" shards="${JOBS:-1}" wall
   seconds="$(python3 "$ROOT/tools/smoke_shard.py" --script "$SCRIPT" --weights "$ROOT/tests/smoke_weights.txt" \
     --seconds --sections "$1" 2>/dev/null)" || return 0
   case "$seconds,$limit" in *[!0-9,]* | ,* | *,) return 0 ;; esac
-  [ "$seconds" -gt "$limit" ] || return 0
-  echo "smoke selection: those sections take about $seconds s by smoke_weights.txt, more than BOSUN_SMOKE_DEFER_SECONDS ($limit), so the merge queue runs them; tests/smoke.sh --changed $CHANGED runs them here, BOSUN_SMOKE_FULL=1 the whole suite"
+  wall=$(((seconds + shards - 1) / shards))
+  [ "$wall" -gt "$limit" ] || return 0
+  echo "smoke selection: those sections would take this hook about $wall s ($seconds s by smoke_weights.txt, as $shards shard(s) side by side), more than BOSUN_SMOKE_DEFER_SECONDS ($limit), so the merge queue runs them; tests/smoke.sh --changed $CHANGED${JOBS:+ --jobs $JOBS} runs them here, BOSUN_SMOKE_FULL=1 the whole suite"
   exit 0
 }
 
 # run_jobs <ids>: what this run would run (those sections, or every one) as $JOBS shards side by side on this machine,
 # each a run of this script with --shard K/$JOBS in its own process, folders and cache files (start_shard), each
-# shard's output printed as it ends (wait_shards), then one summary over all and the cache files merged into this
-# checkout's (merge_shard_caches). --with-unit runs the unit tests once first (unit_tests_alone); with -x the first
-# shard that fails stops the others. A whole run records its tree as one does (full_run_end). Never returns.
+# shard's output printed as it ends (wait_shards), then one summary over all and the shards' results merged into this
+# checkout's cache (merge_shard_caches; not their durations, which are times under each other's load). --with-unit
+# runs the unit tests once first (unit_tests_alone); with -x a failure there, or the first shard's, stops the rest. On
+# exit (Ctrl-C too) the shards still running are stopped and waited for (settle_shards). A whole run records its tree
+# as one does (full_run_end). Never returns.
 JOBS_DIR=""
 run_jobs() {
   local k
   JOBS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/smoke-jobs.XXXXXX")"
-  trap 'stop_shards; cleanup; rm -rf "${JOBS_DIR:?}"' EXIT
-  [ -z "$1" ] || START_TREE="" # (a partial run records no tree)
+  trap 'settle_shards; cleanup; rm -rf "${JOBS_DIR:?}"' EXIT
   echo "$JOBS shards side by side (--jobs $JOBS), each a run of its own: tests/smoke.sh --shard K/$JOBS${1:+ --only ${1//,/ }}"
   [ "$WITH_UNIT" = 0 ] || unit_tests_alone
-  for k in $(seq 1 "$JOBS"); do start_shard "$k" "$1"; done
-  wait_shards
+  if [ "$EXITFIRST" = 0 ] || [ "$WITH_UNIT" = 0 ] || [ "$(cat "$JOBS_DIR/unit/status")" = 0 ]; then
+    for k in $(seq 1 "$JOBS"); do start_shard "$k" "$1"; done
+    wait_shards
+  fi
   merge_shard_caches
-  for k in $([ "$WITH_UNIT" = 0 ] || echo unit) $(seq 1 "$JOBS"); do count_shard "$k"; done
+  for k in $([ "$WITH_UNIT" = 0 ] || echo unit) $(seq 1 "$JOBS"); do [ ! -d "$JOBS_DIR/$k" ] || count_shard "$k"; done
   PARTIAL="${1:+${1//,/ }}"
   full_run_end
   summary
@@ -321,14 +328,17 @@ unit_tests_alone() {
 }
 
 # start_shard <k> <ids>: shard k, in the background, in a process group of its own (python3 starts it so; bash has no
-# job control without a terminal), which stop_shards can stop whole, and with no terminal to read. Its log, its exit
-# status once it ends, and its pid (the group's, beside its wrapper's) are in $JOBS_DIR/<k>.
+# job control without a terminal), which stop_shards can stop whole, and with no terminal to read. A background job
+# of a script starts with SIGINT ignored, which its children could not undo: python3 gives it back its default first,
+# so a check that interrupts a command works as in a serial run (the process group keeps the terminal's Ctrl-C away).
+# Its log, its exit status once it ends, and its pid (the group's, beside its wrapper's) are in $JOBS_DIR/<k>.
+SHARD_START='import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.setpgid(0, 0); os.execv(sys.argv[1], sys.argv[1:])'
 start_shard() {
   local out="$JOBS_DIR/$1" exit_flag=""
   mkdir -p "$out/cache"
   [ "$EXITFIRST" = 0 ] || exit_flag=-x
   (
-    SMOKE_ROOT="$ROOT" SMOKE_CACHE_DIR="$out/cache" python3 -c 'import os, sys; os.setpgid(0, 0); os.execv(sys.argv[1], sys.argv[1:])' \
+    SMOKE_ROOT="$ROOT" SMOKE_CACHE_DIR="$out/cache" python3 -c "$SHARD_START" \
       "$BASH" "$SCRIPT" --shard "$1/$JOBS" ${2:+--only "$2"} ${exit_flag:+"$exit_flag"} </dev/null >"$out/log" 2>&1 &
     echo "$!" >"$out/pid"
     wait "$!"
@@ -356,17 +366,40 @@ wait_shards() {
   done
 }
 
-# stop_shards: each shard still running gets TERM, its whole process group (what it waits on too; its EXIT trap cleans
-# up after it), and never a pid that has come to be another process's: the shard is its wrapper's child still.
+# stop_shards: each shard still running gets TERM once, its whole process group (what it waits on too; its EXIT trap
+# cleans up after it), and never a pid that has come to be another process's: the shard is its wrapper's child still.
+# A shard stopped so is marked, and not counted as a failure of its own.
 stop_shards() {
   local out pid
   [ -n "$JOBS_DIR" ] || return 0
   for out in "$JOBS_DIR"/[0-9]*; do
-    [ -d "$out" ] && [ ! -s "$out/status" ] && [ -s "$out/pid" ] || continue
+    [ -d "$out" ] && [ ! -s "$out/status" ] && [ -s "$out/pid" ] && [ ! -e "$out/stopped" ] || continue
     pid="$(cat "$out/pid")"
-    [ "$(command -p ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')" = "$(cat "$out/wrapper")" ] && kill -TERM -- "-$pid" 2>/dev/null
+    [ "$(command -p ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')" = "$(cat "$out/wrapper")" ] || continue
+    touch "$out/stopped"
+    kill -TERM -- "-$pid" 2>/dev/null
   done
   return 0
+}
+
+# settle_shards: on the way out (the end, Ctrl-C, -x), stop the shards still running, one whose pid is not written yet
+# too, and wait until each has cleaned up after itself and its wrapper has written its status (30 s at most, a
+# failsafe), before their folder goes.
+settle_shards() {
+  local tries
+  [ -n "$JOBS_DIR" ] || return 0
+  for tries in $(seq 1 150); do
+    stop_shards
+    shards_settled && return 0
+    sleep 0.2
+  done
+  echo "tests/smoke.sh: a shard had not ended after it was stopped ($tries tries)" >&2
+}
+shards_settled() {
+  local out
+  for out in "$JOBS_DIR"/[0-9]*; do
+    [ ! -d "$out" ] || [ -s "$out/status" ] || return 1
+  done
 }
 
 print_shard() { # <k> <heading>
@@ -376,10 +409,15 @@ print_shard() { # <k> <heading>
 }
 
 # count_shard <k>: shard k's checks (or the unit tests', k=unit) in this run's counts, from its summary line; one that
-# ended without one (it crashed, or was stopped) and not with 0 counts as a failure, as does one that failed with none.
+# ended without one (it crashed) and not with 0 counts as a failure, as does one that failed with none. One that -x
+# stopped is said, not counted: the failure that stopped it is.
 count_shard() {
   local line status
   status="$(cat "$JOBS_DIR/$1/status" 2>/dev/null || echo "no status")"
+  if [ -e "$JOBS_DIR/$1/stopped" ]; then
+    echo "shard $1 of $JOBS: stopped (-x), when another shard failed"
+    return 0
+  fi
   line="$(grep -E '^[0-9]+ passed, [0-9]+ failed' "$JOBS_DIR/$1/log" | tail -1)"
   if [ -n "$line" ]; then
     passed=$((passed + ${line%% passed*}))
@@ -393,16 +431,14 @@ count_shard() {
   [ "$status" = 0 ] || [ -z "$line" ] || [ "${line%% failed*}" != 0 ] || failed=$((failed + 1)) # (it stopped short)
 }
 
-# merge_shard_caches: the shards' (and the unit tests') results and durations into this checkout's cache files, by
-# one writer: a section's result is a failure if any shard that ran it failed it, its time the longest.
+# merge_shard_caches: the shards' (and the unit tests') results into this checkout's cache, by one writer: a section's
+# result is a failure if any shard that ran it failed it. Not their durations: the weights are measured by a serial
+# run (tools/smoke_shard.py --record), and these are times under the other shards' load.
 merge_shard_caches() {
-  local id result seconds
+  local id result
   while read -r id result; do
     cache_update "$CACHE_FILE" "$id" "$id $result"
   done < <(cat "$JOBS_DIR"/*/cache/sections 2>/dev/null | awk '{ if ($2 == "fail" || !($1 in r)) r[$1] = $2 } END { for (i in r) print i, r[i] }')
-  while read -r id seconds; do
-    cache_update "$DURATIONS_FILE" "$id" "$id $seconds"
-  done < <(cat "$JOBS_DIR"/*/cache/durations 2>/dev/null | awk '{ if (!($1 in t) || $2 > t[$1]) t[$1] = $2 } END { for (i in t) print i, t[i] }')
 }
 
 WITH_UNIT=0
@@ -541,7 +577,7 @@ REPO_STATE_BEFORE="$(repo_state)"
 # reproducible.
 START_TREE=""
 START_STATUS=""
-if [ -z "$PARTIAL" ]; then
+if [ -z "$PARTIAL" ] && { [ "${JOBS:-1}" -le 1 ] || [ -z "$ONLY" ]; }; then # (--jobs --only: a partial run too)
   START_TREE="$(tree_of_checkout "$ROOT")"
   START_STATUS="$(status_of_checkout "$ROOT")"
 fi
@@ -4222,7 +4258,7 @@ stop_keep_awake_leaves_it() { # bosun stop --keep-awake keeps the caffeinate and
 check "bosun stop --keep-awake leaves the caffeinate and its files alone; a plain stop releases them" stop_keep_awake_leaves_it
 plain_fake launchctl 113 # the fake above; this section's alone
 
-section settings "settings (bosun settings get|set: bosun.env through init's writer, the jobs and the wake)" covers 'libexec/bosun-settings,lib/settings.py,lib/run_locked.py'
+section settings "settings (bosun settings get|set: bosun.env through init's writer, the jobs and the wake)" covers 'libexec/bosun-settings,lib/settings.py,lib/run_locked.py,templates/launchd*.plist'
 # Its own config, state and launchd label, so what it writes and reloads is its alone; launchd has a job while it
 # has its plist, pmset's repeating event is what $SET_SCHED holds, pmset repeat fails while
 # $WORK/settings-pmset-fails is there, launchctl bootstrap while $WORK/settings-bootstrap-fails is. sudo is sudoers
@@ -5464,7 +5500,7 @@ for line in sys.stdin:
   rm -f "$HOME/.local/bin/curl" "$HOME/.local/bin/swift" "$HOME/.local/bin/iconutil"
   for tool in ditto codesign spctl open osascript; do plain_fake "$tool"; done
 
-  section init "init (fake launchctl and pmset, test label)" needs install covers 'install.sh,uninstall.sh,lib/init*.py,lib/claude_state.py,lib/run_locked.py,libexec/bosun-init'
+  section init "init (fake launchctl and pmset, test label)" needs install covers 'install.sh,uninstall.sh,lib/init*.py,lib/claude_state.py,lib/run_locked.py,libexec/bosun-init,templates/launchd*.plist'
   export BOSUN_SKIP_PREFLIGHT=1 # what bosun needs has its own tests, on a made-up machine
   INIT_CFG="$WORK/init-config"
   INIT_REPO="$HOME/Development/init-api"
@@ -6132,7 +6168,7 @@ PY
   chmod +x "$U/quiet-claude"
   u_ended_well() { [ "$1" = 0 ] || { tail -15 "$2" && return 1; }; }
 
-  section update "bosun update (the origin's next versions, fake launchctl)" needs update-upstream covers 'install.sh,templates/launchd.plist,docs/updating.md,tests/sandbox/update_patch.sh,tests/sandbox/acme_year.py,lib/update*.py,lib/versions.py,lib/migrations.py,lib/launch_record.py,libexec/bosun-update,libexec/bosun-checkin,libexec/bosun-doctor,libexec/bosun-guard,libexec/bosun-hook,libexec/bosun-kg,libexec/bosun-launch,libexec/bosun-ledger,libexec/bosun-refresh,libexec/bosun-start,libexec/bosun-status,lib/menu_status*.py'
+  section update "bosun update (the origin's next versions, fake launchctl)" needs update-upstream covers 'install.sh,templates/launchd*.plist,docs/updating.md,tests/sandbox/update_patch.sh,tests/sandbox/acme_year.py,lib/update*.py,lib/versions.py,lib/migrations.py,lib/launch_record.py,libexec/bosun-update,libexec/bosun-checkin,libexec/bosun-doctor,libexec/bosun-guard,libexec/bosun-hook,libexec/bosun-kg,libexec/bosun-launch,libexec/bosun-ledger,libexec/bosun-refresh,libexec/bosun-start,libexec/bosun-status,lib/menu_status*.py'
   # An install of its own, with its own state and config, from the origin above: its bosun.git a clone of it at
   # v1, with v1's folder and the link to it; main moved along (failing v2, v2, v3, v4) as the update goes.
   U_LINK="$U/share/bosun"

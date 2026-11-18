@@ -8,17 +8,27 @@
 # says what to add. When unsure, add it to `all`: the pre-push then does what it did before this file.
 
 # --- all: a change here can reach every section ------------------------------------------------------------------
-# The dispatcher every command runs through. (The shell libraries, lib/common.sh and the others, are read function by
-# function, and the suite's own sections and helpers line by line: see the tool's docstring.)
+# The shell library every command sources, and the dispatcher. (What lib/common.sh itself names under lib/, such as
+# lib/launch_record.py, is `all` too: the tool reads that from the file.)
+all lib/common.sh
 all bin/bosun
-# The suite's machinery beside tests/smoke.sh: the cache it keeps, this selection and the tools that read it, and the
-# split into shards (tools/smoke_shard.py; its weights only balance the shards, so they reach nothing, below).
+# The suite's machinery beside tests/smoke.sh (which is read section by section: see the tool's docstring): the
+# cache it keeps, this selection, the tools that read it, and the split into shards (whose weights only balance the
+# shards: they reach nothing, below).
 all tests/smoke_cache.sh
 all tests/smoke_selection.txt
 all tools/smoke_select.py
 all tools/shell_library.py
 all tools/smoke_shard.py
 all tests/sandbox/macos/**
+# What every window's launch loads: the agents' shell sides (some are named in a variable, which no reader of the
+# files could follow), the orchestrator's policy, settings, plugin and task files (every section that starts or
+# reads an orchestrator window).
+all lib/agents.sh
+all lib/launch/**
+all lib/harnesses/**
+all lib/platforms/**
+all orchestrator/**
 # Decides which files count as the tree (what is tracked and what is not), and so what selection can see.
 all .gitignore
 # The smoke job's own definition and the setup it shares: a change to them runs the shards in the merge queue,

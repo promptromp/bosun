@@ -146,8 +146,8 @@ class DependenciesTest(Scratch):
                 "lib/d.py": "import os\n",
             }
         )
-        self.assertEqual(g.affected({"lib/a.py"}), {"lib/a.py", "lib/b.py", "lib/c.py"})
-        self.assertEqual(g.affected({"lib/d.py"}), {"lib/d.py"})
+        self.assertEqual(g.affected("lib/a.py"), {"lib/a.py", "lib/b.py", "lib/c.py"})
+        self.assertEqual(g.affected("lib/d.py"), {"lib/d.py"})
 
     def test_a_shell_script_that_names_a_file_or_runs_a_command_reaches_it(self) -> None:
         g = self.graph(
@@ -158,15 +158,15 @@ class DependenciesTest(Scratch):
                 "libexec/bosun-three": "bosun one\n",
             }
         )
-        self.assertIn("libexec/bosun-one", g.affected({"lib/tool.py"}))
+        self.assertIn("libexec/bosun-one", g.affected("lib/tool.py"))
         # one step: what runs `bosun one` is reached by a change to the command, not to what the command runs
-        self.assertIn("libexec/bosun-two", g.affected({"libexec/bosun-one"}))
-        self.assertIn("libexec/bosun-three", g.affected({"libexec/bosun-one"}))
-        self.assertNotIn("libexec/bosun-two", g.affected({"lib/tool.py"}))
+        self.assertIn("libexec/bosun-two", g.affected("libexec/bosun-one"))
+        self.assertIn("libexec/bosun-three", g.affected("libexec/bosun-one"))
+        self.assertNotIn("libexec/bosun-two", g.affected("lib/tool.py"))
 
     def test_python_calling_a_command_reaches_it(self) -> None:
         g = self.graph({"lib/m.py": 'run(["bosun", "one"])\n', "libexec/bosun-one": "#!/bin/bash\n"})
-        self.assertIn("lib/m.py", g.affected({"libexec/bosun-one"}))
+        self.assertIn("lib/m.py", g.affected("libexec/bosun-one"))
 
     def test_a_comment_or_a_message_is_not_a_reference(self) -> None:
         g = self.graph(
@@ -176,189 +176,32 @@ class DependenciesTest(Scratch):
                 "lib/m.py": '"""Says bosun one."""\nprint("bosun-one is not a call here")\n',
             }
         )
-        self.assertEqual(g.affected({"libexec/bosun-one"}), {"libexec/bosun-one"})
+        self.assertEqual(g.affected("libexec/bosun-one"), {"libexec/bosun-one"})
 
     def test_prose_is_never_a_dependency(self) -> None:
         g = self.graph({"docs/setup.md": "# x\n", "libexec/bosun-one": 'echo "see docs/setup.md"\n'})
-        self.assertEqual(g.affected({"docs/setup.md"}), {"docs/setup.md"})
+        self.assertEqual(g.affected("docs/setup.md"), {"docs/setup.md"})
 
-    def test_a_library_is_read_function_by_function(self) -> None:
-        """What a function names reaches only what calls it, through the other functions, all the way."""
-        g = self.graph(LIBRARY)
-        self.assertEqual(g.unreadable, [])
-        self.assertIn(
-            "libexec/bosun-one", g.affected({"lib/tool.py"})
-        )  # one calls run_tool, which runs tool.py
-        self.assertIn(
-            "libexec/bosun-two", g.affected({"lib/tool.py"})
-        )  # two calls wrapper, which calls run_tool
-        self.assertNotIn("libexec/bosun-three", g.affected({"lib/tool.py"}))  # three sources the library only
-        self.assertIn("libexec/bosun-three", g.affected({ss.fn("unrelated")}))
-        self.assertNotIn("libexec/bosun-one", g.affected({ss.fn("unrelated")}))
-
-    def test_a_top_level_assignment_reaches_what_reads_it_and_other_top_level_code_runs_everywhere(
-        self,
-    ) -> None:
-        g = self.graph(LIBRARY)
-        limit = g.affected({ss.var("LIMIT")})  # run_tool reads it: what calls run_tool, and not bosun-three
-        self.assertTrue({ss.fn("run_tool"), "libexec/bosun-one", "libexec/bosun-two"} <= limit)
-        self.assertNotIn("libexec/bosun-three", limit)
-        self.assertIn("top:lib/common.sh", g.everywhere)
-        self.assertIn("top:lib/common.sh", g.affected({ss.fn("at_load")}))  # top-level code calls it
-
-    def test_a_call_by_a_built_name_may_call_any_function_of_its_process(self) -> None:
+    def test_the_commands_common_sh_runs_are_kept(self) -> None:
         g = self.graph(
             {
-                **LIBRARY,
-                "lib/agents.sh": 'pick() { "$(choose)"; }\n',
-                "lib/harnesses/x.sh": 'profile() { "$(choose)" --version; }\nprofile_name() { echo x; }\n',
-                "libexec/bosun-four": "pick\n",
-                "lib/preflight.sh": "profile\n",
+                "lib/common.sh": 'build() { "$BOSUN_CMD" launch "$1"; }\n# bosun alert is only said here\n',
+                "libexec/bosun-launch": "",
+                "libexec/bosun-alert": "",
+                "libexec/bosun-ledger": "",
             }
         )
-        self.assertEqual(g.wild, {"fn:pick": frozenset({"commands"}), "fn:profile": frozenset({"preflight"})})
-        self.assertIn("libexec/bosun-four", g.affected({ss.fn("unrelated")}))  # pick may call it
-        self.assertNotIn("lib/preflight.sh", g.affected({ss.fn("unrelated")}))  # another process
-        self.assertIn("lib/preflight.sh", g.affected({ss.fn("profile_name")}))
+        self.assertEqual(g.common_commands, {"libexec/bosun-launch"})
 
-    def test_a_data_file_reaches_the_code_that_reads_it_by_its_path_as_an_import_does(self) -> None:
+    def test_what_common_sh_names_under_lib_is_shared_by_every_section(self) -> None:
         g = self.graph(
             {
-                "orchestrator/tasks/review.md": "x\n",
-                "orchestrator/policy.md": "x\n",
-                "templates/job.plist": "x\n",
-                "lib/delegate.py": 'TASKS = ROOT / "orchestrator" / "tasks"\n',
-                "lib/console.py": 'import delegate\nPROMPT = f"{ROOT}/orchestrator/policy.md"\n',
-                "lib/other.py": (
-                    '"""Reads orchestrator/policy.md."""\n'
-                    'print("see orchestrator/policy.md")\nX = f"{a}{b}/"\n'
-                ),
-                "libexec/bosun-delegate": 'python3 "$BOSUN_ROOT/lib/delegate.py"\n',
-                "libexec/bosun-render": 'render() { cat "$BOSUN_ROOT/templates/job.plist"; }\n',
+                "lib/common.sh": 'python3 "$BOSUN_ROOT/lib/shared.py"\nbosun alert\n',
+                "lib/shared.py": "",
+                "libexec/bosun-alert": "",
             }
         )
-        # read by delegate.py, which bosun-delegate runs (the one call step) and console.py imports
-        self.assertTrue(
-            {"lib/delegate.py", "lib/console.py", "libexec/bosun-delegate"}
-            <= g.affected({"orchestrator/tasks/review.md"})
-        )
-        self.assertIn("lib/console.py", g.affected({"orchestrator/policy.md"}))  # an f-string's path
-        self.assertNotIn("lib/other.py", g.affected({"orchestrator/policy.md"}))  # a docstring, a message
-        self.assertEqual(g.affected({"templates/job.plist"}), {"templates/job.plist", "libexec/bosun-render"})
-
-    def test_a_name_without_a_folder_a_url_or_a_data_file_s_bare_name_is_no_reference(self) -> None:
-        g = self.graph(
-            {
-                "install.sh": "echo install\n",
-                "examples/generic/bosun.env": "X=1\n",
-                "lib/tool.py": "x = 1\n",
-                "libexec/bosun-one": 'echo "run install.sh again"\necho "see https://example.com/tool.py"\n'
-                'source "$BOSUN_CONFIG_DIR/bosun.env"\n',
-                "libexec/bosun-two": '"$BOSUN_ROOT/install.sh"\npython3 "$dir/tool.py"\n',
-            }
-        )
-        self.assertEqual(g.affected({"install.sh"}), {"install.sh", "libexec/bosun-two"})
-        self.assertEqual(g.affected({"examples/generic/bosun.env"}), {"examples/generic/bosun.env"})
-        self.assertEqual(g.affected({"lib/tool.py"}), {"lib/tool.py", "libexec/bosun-two"})  # `$dir/tool.py`
-
-    def test_a_library_that_does_not_read_as_functions_is_said(self) -> None:
-        g = self.graph({"lib/common.sh": "broken() {\n  echo 'open\n}\n"})
-        self.assertEqual(len(g.unreadable), 2, g.unreadable)
-        self.assertTrue(all(problem.startswith("lib/common.sh: line ") for problem in g.unreadable))
-
-
-# A scratch library: commands that use some of its functions, and its top-level code.
-LIBRARY = {
-    "lib/common.sh": (
-        'ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"\n'
-        "LIMIT=3\n"
-        'run_tool() { python3 "$ROOT/lib/tool.py" "$LIMIT"; }\n'
-        "wrapper() {\n  run_tool\n}\n"
-        "unrelated() { echo unrelated; }\n"
-        "at_load() { :; }\n"
-        'case "$ROOT" in *) at_load ;; esac\n'
-    ),
-    "lib/tool.py": "x = 1\n",
-    "libexec/bosun-one": 'source "$(dirname "$0")/../lib/common.sh"\nrun_tool\n',
-    "libexec/bosun-two": 'source "$(dirname "$0")/../lib/common.sh"\nwrapper\n',
-    "libexec/bosun-three": 'source "$(dirname "$0")/../lib/common.sh"\nunrelated\n',
-}
-
-
-def edit(old: str, new: str, *hunks: tuple[int, int, int, int]) -> ss.Edit:
-    return ss.Edit(old, new, hunks)
-
-
-class LibraryEditTest(Scratch):
-    """A change to a library, line by line: the functions and assignments it changed reach what uses them."""
-
-    SECTIONS = (
-        ss.Section("syntax", "syntax", (), ("lib/**", "libexec/**")),
-        ss.Section("one", "one", (), ("libexec/bosun-one",)),
-        ss.Section("two", "two", (), ("libexec/bosun-two",)),
-        ss.Section("three", "three", (), ("libexec/bosun-three",)),
-    )
-    RULES = ss.Rules((), ())
-
-    def plan(
-        self, new: str, *hunks: tuple[int, int, int, int], old: str = LIBRARY["lib/common.sh"]
-    ) -> ss.Plan:
-        files = {**LIBRARY, "lib/common.sh": new}
-        for name, text in files.items():
-            path = self.dir / name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(text)
-        edits = {"lib/common.sh": edit(old, new, *hunks)}
-        graph = ss.Graph(self.dir, sorted(files), gone=ss.gone_names(edits))
-        return ss.plan_for(["lib/common.sh"], self.SECTIONS, self.RULES, graph, edits)
-
-    def changed(self, old: str, new: str) -> str:
-        return LIBRARY["lib/common.sh"].replace(old, new)
-
-    def test_a_changed_line_in_a_function_reaches_what_calls_it(self) -> None:
-        plan = self.plan(self.changed('"$LIMIT"; }', '"$LIMIT" --more; }'), (3, 1, 3, 1))
-        self.assertEqual(list(plan.picked), ["syntax", "one", "two"])
-        self.assertEqual(plan.picked["one"], ["lib/common.sh (run_tool)"])
-
-    def test_only_the_function_a_hunk_is_in(self) -> None:
-        plan = self.plan(self.changed("echo unrelated", "echo other"), (7, 1, 7, 1))
-        self.assertEqual(list(plan.picked), ["syntax", "three"])
-
-    def test_a_top_level_assignment_reaches_what_reads_it(self) -> None:
-        plan = self.plan(self.changed("LIMIT=3", "LIMIT=4"), (2, 1, 2, 1))
-        self.assertEqual(list(plan.picked), ["syntax", "one", "two"])
-        self.assertEqual(plan.picked["one"], ["lib/common.sh (LIMIT)"])
-
-    def test_any_other_top_level_line_runs_the_whole_suite(self) -> None:
-        plan = self.plan(self.changed("*) at_load", "x*) at_load"), (9, 1, 9, 1))
-        self.assertTrue(plan.full and not plan.unknown)
-        self.assertIn("lib/common.sh, line 9: top-level code that is not an assignment", plan.reason)
-
-    def test_a_change_to_comments_only_runs_nothing(self) -> None:
-        new = self.changed("wrapper() {\n", "wrapper() { # calls run_tool\n  # it does\n")
-        plan = self.plan(new, (4, 1, 4, 2))
-        self.assertEqual((plan.full, plan.picked), (False, {}))
-        self.assertEqual(plan.unchanged, ["lib/common.sh"])
-
-    def test_a_removed_function_reaches_what_still_calls_it(self) -> None:
-        plan = self.plan(self.changed("unrelated() { echo unrelated; }\n", ""), (7, 1, 6, 0))
-        self.assertEqual(list(plan.picked), ["syntax", "three"])  # bosun-three calls what is gone
-
-    def test_code_nothing_calls_runs_nothing(self) -> None:
-        new = LIBRARY["lib/common.sh"] + "spare() { echo spare; }\n"
-        plan = self.plan(new, (9, 0, 10, 1))
-        self.assertEqual((plan.full, plan.picked), (False, {}))
-        self.assertEqual(plan.unchanged, ["lib/common.sh (spare)"])
-
-    def test_a_library_that_does_not_read_runs_the_whole_suite(self) -> None:
-        plan = self.plan(self.changed("echo unrelated", "echo 'unrelated"), (7, 1, 7, 1))
-        self.assertTrue(plan.full)
-        self.assertIn("does not read as functions", plan.reason)
-
-    def test_a_hunk_that_cannot_be_placed_runs_the_whole_suite(self) -> None:
-        plan = self.plan(LIBRARY["lib/common.sh"], (40, 1, 40, 1))
-        self.assertTrue(plan.full)
-        self.assertIn("a changed line (40) that cannot be placed", plan.reason)
+        self.assertEqual(g.common_refers, {"lib/shared.py"})  # not the command in its text
 
 
 SUITE_TEXT = """\
@@ -379,46 +222,75 @@ finish
 """
 
 
-class SuiteEditTest(Scratch):
-    """A change to tests/smoke.sh, line by line: a section's own lines select it (and those that need it), a
-    helper's the sections that use it, the shared setup's the whole suite."""
+class SuiteEditTest(unittest.TestCase):
+    """A change to tests/smoke.sh, line by line on the new side: a section's own lines select it (and those
+    that need it), a helper's the sections that call it, the shared setup's (or a helper it calls) the whole
+    suite."""
 
-    def plan(self, new: str, *hunks: tuple[int, int, int, int]) -> ss.Plan:
+    def plan(self, new: str, *hunks: tuple[int, int, int, int], old: str = SUITE_TEXT) -> ss.Plan:
         suite = ss.Suite(new)
-        graph = ss.Graph(self.dir, [], suite)
-        edits = {ss.SUITE: edit(SUITE_TEXT, new, *hunks)}
-        return ss.plan_for([ss.SUITE], suite.sections, ss.Rules((), ()), graph, edits)
+        graph = ss.Graph(Path("/nonexistent"), [])
+        return ss.plan_for(
+            [ss.SUITE], suite.sections, ss.Rules((), ()), graph, suite, ss.SuiteChange(old, hunks)
+        )
 
     def test_a_line_in_a_section_selects_it_and_what_needs_it(self) -> None:
         plan = self.plan(
             SUITE_TEXT.replace("check true\nsection beta", "check false\nsection beta"), (5, 1, 5, 1)
         )
         self.assertEqual(sorted(plan.picked), ["alpha", "beta"])  # beta needs alpha
+        self.assertEqual(plan.picked["alpha"], ["tests/smoke.sh"])
 
-    def test_a_helper_selects_the_sections_that_use_it(self) -> None:
+    def test_a_helper_selects_the_sections_that_call_it_and_what_needs_them(self) -> None:
         plan = self.plan(
             SUITE_TEXT.replace("probe() { check true; }", "probe() { check false; }"), (7, 1, 7, 1)
         )
         self.assertEqual(sorted(plan.picked), ["beta", "gamma"])
-        self.assertEqual(plan.picked["gamma"], ["tests/smoke.sh (probe)"])
 
     def test_the_shared_setup_runs_the_whole_suite_and_its_comments_nothing(self) -> None:
         plan = self.plan(SUITE_TEXT.replace("setup_done=1", "setup_done=2"), (3, 1, 3, 1))
         self.assertTrue(plan.full)
-        self.assertIn("tests/smoke.sh, line 3: the suite's shared setup", plan.reason)
+        self.assertIn("tests/smoke.sh, line 3: the shared setup", plan.reason)
         plan = self.plan(SUITE_TEXT.replace("# the end", "# the very end"), (12, 1, 12, 1))
-        self.assertEqual((plan.full, plan.picked), (False, {}))
+        self.assertEqual((plan.full, plan.picked, plan.unchanged), (False, {}, ["tests/smoke.sh"]))
         plan = self.plan(SUITE_TEXT.replace("finish\n", "finish now\n"), (14, 1, 14, 1))  # after always_run
         self.assertTrue(plan.full)
+        plan = self.plan(SUITE_TEXT.replace("#!/bin/bash", "#!/bin/sh"), (1, 1, 1, 1))  # (the #! is code)
+        self.assertTrue(plan.full)
 
-    def test_a_helper_the_shared_setup_calls_runs_the_whole_suite_and_one_only_sections_call_those(
-        self,
-    ) -> None:
+    def test_a_helper_the_shared_setup_calls_runs_the_whole_suite_and_one_sections_call_those(self) -> None:
         plan = self.plan(SUITE_TEXT.replace("finish() { :; }", "finish() { true; }"), (13, 1, 13, 1))
         self.assertTrue(plan.full)
-        self.assertIn("tests/smoke.sh (finish) reaches the suite's shared setup", plan.reason)
+        self.assertIn("tests/smoke.sh, line 13: the shared setup (or a helper it calls)", plan.reason)
         plan = self.plan(SUITE_TEXT.replace('check() { "$@"; }', 'check() { "$@" || exit 1; }'), (2, 1, 2, 1))
         self.assertEqual(sorted(plan.picked), ["alpha", "beta", "gamma"])
+
+    def test_lines_taken_out_count_where_they_were(self) -> None:
+        plan = self.plan(SUITE_TEXT.replace("probe\nsection gamma", "section gamma"), (8, 1, 7, 0))
+        self.assertEqual(sorted(plan.picked), ["beta"])  # beta's own line, though next to a helper now
+        plan = self.plan(SUITE_TEXT.replace("setup_done=1\n", ""), (3, 1, 2, 0))
+        self.assertTrue(plan.full)
+
+    def test_code_of_the_shared_setup_made_a_comment_runs_the_whole_suite(self) -> None:
+        plan = self.plan(SUITE_TEXT.replace("setup_done=1", "# setup_done=1"), (3, 1, 3, 1))
+        self.assertTrue(plan.full)
+        self.assertIn("tests/smoke.sh, line 3: the shared setup", plan.reason)
+
+    def test_a_section_taken_out_selects_none_of_its_own(self) -> None:
+        new = SUITE_TEXT.replace("section gamma \"gamma\" covers 'libexec/bosun-gamma'\nprobe\n", "")
+        plan = self.plan(new, (9, 2, 8, 0))
+        self.assertEqual((plan.full, plan.picked), (False, {}))  # (what is gone runs nowhere)
+
+    def test_what_cannot_be_read_or_placed_runs_the_whole_suite(self) -> None:
+        for text, hunks, reason in (
+            (SUITE_TEXT, ((40, 1, 40, 1),), "a changed line (40) that cannot be placed"),
+            (SUITE_TEXT + "echo 'open\n", ((3, 1, 3, 1),), "does not read as functions"),
+            (SUITE_TEXT, (), "changed, and how cannot be read"),
+        ):
+            with self.subTest(reason=reason):
+                plan = self.plan(text, *hunks)
+                self.assertTrue(plan.full)
+                self.assertIn(reason, plan.reason)
 
 
 class ScratchSuite(Scratch):
@@ -735,19 +607,31 @@ class PrePushTest(ScratchSuite):
         self.assertEqual(result.returncode, 1)
         self.assertIn("FAIL  beta one", result.stdout)
 
-    def test_sections_that_take_longer_than_the_threshold_are_left_to_the_merge_queue(self) -> None:
-        self.write("tests/smoke_weights.txt", "beta 400\nalpha 10\n")
+    def test_sections_the_hook_would_take_longer_than_the_threshold_on_are_left_to_the_merge_queue(
+        self,
+    ) -> None:
+        """The time the hook would take: the selection's serial weight over the shards it runs (--jobs)."""
+        self.write("tests/smoke_weights.txt", "beta 600\nalpha 10\n")
         self.commit("weights")
         self.write("extra/deep/er/file.txt", "changed\n")  # beta covers it
         result = self.run_suite("--pre-push", BOSUN_SMOKE_BASE="HEAD")
         self.assertEqual((result.returncode, self.ran(result)), (0, []), result.stdout)
         self.assertIn(
-            "those sections take about 400 s by smoke_weights.txt, more than BOSUN_SMOKE_DEFER_SECONDS "
-            "(180), so the merge queue runs them; tests/smoke.sh --changed HEAD runs them here",
+            "those sections would take this hook about 600 s (600 s by smoke_weights.txt, as 1 shard(s) side "
+            "by side), more than BOSUN_SMOKE_DEFER_SECONDS (180), so the merge queue runs them; "
+            "tests/smoke.sh --changed HEAD runs them here",
             result.stdout,
         )
-        raised = self.run_suite("--pre-push", BOSUN_SMOKE_BASE="HEAD", BOSUN_SMOKE_DEFER_SECONDS="500")
-        self.assertEqual(self.ran(raised), ["beta"])
+        as_three = self.run_suite("--pre-push", "--jobs", "3", BOSUN_SMOKE_BASE="HEAD")
+        self.assertEqual(self.ran(as_three), [], as_three.stdout)
+        self.assertIn("about 200 s (600 s by smoke_weights.txt, as 3 shard(s) side by side)", as_three.stdout)
+        self.assertIn("tests/smoke.sh --changed HEAD --jobs 3 runs them here", as_three.stdout)
+        raised = self.run_suite(
+            "--pre-push", "--jobs", "3", BOSUN_SMOKE_BASE="HEAD", BOSUN_SMOKE_DEFER_SECONDS="250"
+        )
+        self.assertEqual(self.ran(raised), ["beta"], raised.stdout)  # 200 s as three shards: under 250
+        serial = self.run_suite("--pre-push", BOSUN_SMOKE_BASE="HEAD", BOSUN_SMOKE_DEFER_SECONDS="250")
+        self.assertEqual(self.ran(serial), [])  # 600 s as one: over it
         by_hand = self.run_suite("--changed", "HEAD")  # only the hook leaves it to the queue
         self.assertEqual(self.ran(by_hand), ["beta"])
 
@@ -1020,19 +904,39 @@ class JobsOptionTest(ScratchSuite):
         result = self.run_jobs("-x", "--jobs", "2")
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("stopped at the first failure (-x): section beta, check: beta one", result.stdout)
-        self.assertIn("shard 2 of 2 ended (exit 143) without its summary", result.stdout)
+        self.assertIn("shard 2 of 2: stopped (-x), when another shard failed", result.stdout)
+        self.assertEqual(self.totals(result)[-1][1], 1)  # the failure that stopped it, not one more for it
 
-    def test_the_shards_cache_files_are_merged_and_a_whole_run_records_its_tree(self) -> None:
+    def test_the_shards_results_are_merged_not_their_times_and_a_whole_run_records_its_tree(self) -> None:
+        """Durations under the other shards' load would skew the weights a serial run measures."""
         result = self.run_jobs("--jobs", "2")
         self.assertEqual(result.returncode, 0, result.stdout)
         results = (self.cache / "sections").read_text().split("\n")
         for section in ("syntax", "alpha", "beta", "gamma", "delta", "uninstall-files"):
             self.assertIn(f"{section} pass", results)
-        self.assertEqual(
-            sorted(sh.parse_weights((self.cache / "durations").read_text())),
-            ["alpha", "beta", "delta", "gamma", "syntax", "uninstall-files"],
-        )
+        self.assertFalse((self.cache / "durations").exists())
         self.assertRegex((self.cache / "passes").read_text(), r"^[0-9a-f]{40} \d+ \d+\n$")
+
+    def test_a_shard_does_not_start_with_sigint_ignored(self) -> None:
+        """A script's background job starts with SIGINT ignored, which its children could not undo; a check
+        that interrupts a command would pass serially and fail under --jobs."""
+        python = "import signal, sys; sys.exit(signal.getsignal(signal.SIGINT) is signal.SIG_IGN)"
+        self.change_check("beta one", f"python3 -c '{python}'")
+        self.change_check("alpha one", f"python3 -c '{python}'")
+        result = self.run_jobs("--jobs", "2")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("pass  beta one", result.stdout)
+
+    def test_with_unit_and_x_a_failing_unit_run_starts_no_shard(self) -> None:
+        self.script.write_text(
+            self.script.read_text().replace(
+                "always_run\n", 'always_run\n[ "$WITH_UNIT" = 0 ] || check "units" false\n', 1
+            )
+        )
+        result = self.run_jobs("-x", "--jobs", "2", "--with-unit")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("=== the unit tests (exit 1) ===", result.stdout)
+        self.assertNotIn("=== shard", result.stdout)
 
     def test_a_partial_run_records_no_tree(self) -> None:
         self.assertEqual(self.run_jobs("--jobs", "2", "--only", "gamma").returncode, 0)

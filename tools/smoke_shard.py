@@ -51,9 +51,10 @@ SHARD = re.compile(r"^([1-9][0-9]*)/([1-9][0-9]*)$")
 WEIGHT = re.compile(r"^([a-z0-9-]+)\s+([0-9]+)$")
 WEIGHTS_HEADER = """\
 # How long each section of tests/smoke.sh takes, in seconds: what `tests/smoke.sh --shard K/N` balances
-# its shards by (tools/smoke_shard.py). From the last time each section passed in a run on one machine;
-# only the ratios matter. A section not listed counts as the median of these. To measure them again, run
-# the whole suite, then:
+# its shards by (tools/smoke_shard.py). From the last time each section passed in a serial run on one
+# machine (a --jobs run records none: its shards run under each other's load); only the ratios matter.
+# A section not listed counts as the median of these. To measure them again, run the whole suite, serially,
+# then:
 #   python3 tools/smoke_shard.py --script tests/smoke.sh --weights tests/smoke_weights.txt \\
 #     --record tests/.smoke-cache/durations
 """
