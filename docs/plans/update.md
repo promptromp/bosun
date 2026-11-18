@@ -1,5 +1,8 @@
 # bosun update Implementation Plan
 
+(The plan as it was built. The first update's conversion of a checkout from before versions, which it plans,
+was removed on 2026-11-18: such an install is installed again. The design note says what is current.)
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development
 > (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use
 > checkbox (`- [ ]`) syntax for tracking.

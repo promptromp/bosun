@@ -416,5 +416,38 @@ class FirstInstall(Upstream):
         self.assertFalse(self.install.exists())
 
 
+class OlderCheckout(Upstream):
+    """A checkout of bosun at the install path, as an older get.sh made one before versions side by side:
+    refused, with how to install again, and nothing in it or beside it changed."""
+
+    def test_it_is_refused_saying_how_to_install_again(self) -> None:
+        git(self.tmp, "clone", "-q", str(self.up), str(self.install))
+        (self.install / "bin").mkdir()
+        (self.install / "bin" / "bosun").write_text("#!/bin/sh\n")
+        (self.install / "notes.txt").write_text("mine\n")
+        before = sorted((p.relative_to(self.tmp), p.read_bytes()) for p in self.tmp.rglob("*") if p.is_file())
+        # main past the first layer's checks, which are this OS's (CI's tests run on Linux): it refuses
+        # before it gets anything.
+        for script in ("look; echo KIND=$KIND", "check_os() { :; }; main --unattended"):
+            with self.subTest(script=script):
+                done = self.run_get(script)
+                self.assertEqual(done.returncode, 1, done.stdout)
+                self.assertNotIn("KIND=", done.stdout)
+                self.assertIn(
+                    f"bosun: {self.install} is a checkout of bosun from before versions side by side, which "
+                    "this no longer updates: install bosun again. Take it off with its own bosun uninstall "
+                    f"({self.install}/bin/bosun uninstall,",
+                    done.stderr,
+                )
+                self.assertIn(
+                    "if that keeps the checkout for what is yours in it, or it has no uninstall, run "
+                    f"{self.install}/bin/bosun stop and move the checkout aside. Then run this line again.",
+                    done.stderr,
+                )
+        after = sorted((p.relative_to(self.tmp), p.read_bytes()) for p in self.tmp.rglob("*") if p.is_file())
+        self.assertEqual(after, before)
+        self.assertFalse(self.versions.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

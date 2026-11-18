@@ -38,18 +38,10 @@
 #      its new keys, what to change by hand in your own files, the prompts that changed, the jobs
 #      reloaded, what came of each window, what fails after the switch that did not before, and where
 #      the backup is. Once the update is done, it is saved as summary.md in the backup's folder.
-# The first update of an install from before versions, a checkout an older get.sh made (get.sh hands it
-# over), converts it, once. It refuses while the checkout holds anything of yours (changes, a stash,
-# commits not pushed, another worktree, a file git ignores). Once you said yes it waits for a quiet
-# moment (every window idle with nothing running, nobody typing for BOSUN_ACTIVE_CLIENT_MINUTES),
-# saying what it waits for; stops bosun's own background work (the watchdog's and learning's launchd
-# jobs, the check-in loop), which an older version may not hold for an update, noting first what it stops
-# (update/own-work.json in the state folder); checks the quiet moment again, for two minutes at the most
-# (past that it starts that work again and waits with everything running); then updates as above,
-# swapping the checkout for the link in one step and keeping it as <install>-versions/legacy-<commit>,
-# and restarts each of bosun's own windows on the new version. Stopped short of the switch, or put
-# back, it starts again what it stopped, as it was (after a crash, the install line run again does: the
-# old checkout has no bosun update).
+# It moves an install get.sh made, with its versions side by side. A checkout is updated with git, and one
+# an older get.sh made, from before versions side by side, is installed again: its own bosun uninstall (if
+# that keeps it for what is yours in it, bosun stop and move it aside), then the install line
+# (docs/updating.md#an-install-from-before-versions).
 # An update cut short (Ctrl-C, a crash, a power cut) is carried on by the next `bosun update`: put back
 # if it stopped while writes were paused (the next write to a store does that too), finished if its
 # checks had passed. With nothing newer it says bosun is up to date; an install past the newest release
@@ -67,8 +59,7 @@
 #              says which, and what restoring would lose (the changes written since, kept in the backup going
 #              back takes first). The windows come along as for an update, and the version it left is
 #              recorded as skipped, so --check and the menu bar app no longer offer it (bosun update still
-#              goes there). Refused with no finished update, after a back, or to a checkout from before
-#              versions (by hand: docs/updating.md#going-back)
+#              goes there). Refused with no finished update, or after a back
 #   --branch <name>  follow the branch <name> of the origin from now on (bosun.branch in bosun.git, and
 #              BOSUN_UPDATE_CHANNEL=main written by bosun settings set if it is not), then update to its head
 #              as the main channel does. A branch the origin does not have is refused before anything
@@ -252,7 +243,7 @@ esac
 [ -z "$FROM" ] || run_update --from "$FROM" ${args[@]+"${args[@]}"}
 
 if [ "$BOSUN_INSTALL" = "$BOSUN_ROOT" ]; then
-  die "bosun update moves an install made by get.sh, with its versions side by side in <install>-versions; $BOSUN_ROOT is a checkout: update it with git (one an earlier get.sh made, at ~/.local/share/bosun: run get.sh again, which converts it)"
+  die "bosun update moves an install made by get.sh, with its versions side by side in <install>-versions; $BOSUN_ROOT is a checkout: update it with git. One an older get.sh made, at ~/.local/share/bosun, is installed again: its own bosun uninstall (if that keeps it for what is yours in it, bosun stop and move it aside), then the install line (docs/updating.md#an-install-from-before-versions)"
 fi
 
 # Going back is the version installed's own: nothing fetched, lib/update_back.py of this version.

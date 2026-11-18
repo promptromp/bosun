@@ -1,8 +1,9 @@
 # Updating bosun
 
 Status: built and run in the macOS VM. The design is in `bosun update` (`lib/update*.py`, behind
-`libexec/bosun-update`), in `get.sh`'s side-by-side versions and its first-run conversion of a checkout an
-older `get.sh` made (`convert` in `lib/update.py`), and in the summary (`lib/update_summary.py`). What the
+`libexec/bosun-update`), in `get.sh`'s side-by-side versions, and in the summary (`lib/update_summary.py`). The
+first-run conversion of a checkout an older `get.sh` made is gone since 2026-11-18: such an install is installed
+again ([`get.sh` on an existing install](#getsh-on-an-existing-install)). What the
 runs on a real Mac showed, and what they changed, is under [Settled in the VM](#settled-in-the-vm); what
 was decided while building it, under "Settled while building it" and "Decided while building it". The
 plan: [docs/plans/update.md](../plans/update.md). Going back with a command (`bosun update --back`) and trying a
@@ -174,8 +175,8 @@ may change. If a freeze is on, or the store's format is not the writer's, nothin
 
 With that check in place, a migration may rewrite the files derived from a journal. The journals
 themselves still keep what was recorded: old envelopes are read as new ones. A version without the
-check gets no protection from it, which is why the first update converts at a quiet moment
-([below](#getsh-on-an-existing-install)).
+check gets no protection from it: every version since versions side by side has it, and an install from before
+them is installed again, never updated ([below](#getsh-on-an-existing-install)).
 
 ### The steps
 
@@ -500,79 +501,34 @@ and `--skip <version>` records a release not to be offered again (`update-skip.j
 run). A first install takes the newest release too (`get.sh`'s own `newest_release`, an `sh` twin of the tag rule
 that `tests/unit/test_get_sh.py` holds to the Python one); a repository with no release yet gets the head of `main`.
 The VM runs (`tests/install_e2e.sh`, on the default channel against a bare repository with release tags: first release
-installed, next one tagged, `--check --json`, `--skip`, `--yes`; `tests/work_e2e.sh`, on the channel its conversion
-keeps) check both.
+installed, next one tagged, `--check --json`, `--skip`, `--yes`; `tests/work_e2e.sh`, on the `main` channel its
+install follows) check both.
 
 ### `get.sh` on an existing install
 
-The bosun already installed may not have `update` yet. `get.sh` is always fetched fresh from the
-branch, so on an existing install it hands over to `bosun update`: the install's own when it is a link
-to a version, so that its channel decides what it moves to, and the new version's, from the head of the
-branch, when it is a checkout from before versions. A first install uses the new layout from the start.
-
-**The first update converts, at a quiet moment.** The version it converts from may have none of the
-following (a checkout from before Part A has none; one of Part A has the hold, the write check and a
-check-in loop that honours the hold, but records no launches):
-
-- the hold;
-- the write check;
-- a `refresh` that knows bosun's version;
-- a check-in loop that honours the hold.
-
-So the conversion does not try to meet the mid-afternoon bar; nobody else runs bosun yet. It waits
-until every window is idle with nothing running and nobody has typed for a while. Then it stops
-bosun's own jobs and swaps the checkout for the link in one step: macOS's `renamex_np` with
-`RENAME_SWAP`, so the path never goes missing. Finally it restarts the `checkin` window and brings the
-agents along as below. The VM is to test this conversion on its own, and the mid-afternoon update
-between two versions that both have `update` (not run yet).
+`get.sh` is always fetched fresh from the branch, so on an existing install, a link to a version, it hands
+over to the install's own `bosun update`, so that the install's channel decides what it moves to. A first
+install uses the new layout from the start.
 
 Settled while building it:
 
 - **`get.sh`** looks at the install path first, and refuses what it does not know. On an install `init`
-  has set up, a link to a version gets the install's own `bosun update` and fetches nothing; a checkout
-  gets the branch fetched into `bosun.git` (cloned bare beside it first), the new version's folder and
-  that version's `bosun update --from` the checkout. An install `init`
-  never finished gets `init` again, as it is, since only `bosun update` switches versions. The cases:
-  [init.md](init.md#the-wizard).
-- **Which update converts** is decided by the version updated from, once an update cut short is carried
-  on: a checkout from before versions, at the install path or kept as `legacy-*` (where a conversion put
-  back leads the link). `convert` refuses one with anything of yours in it, as `bosun uninstall` checks a
-  checkout, since the update after it deletes the checkout.
-- **The quiet moment:** every window's agent idle, or none running (the `checkin` window aside, whose
-  loop it stops), and nobody typing in a client of the session within `BOSUN_ACTIVE_CLIENT_MINUTES`. It
-  waits once you said yes, saying what it waits for each time that changes, and plans again when it is
-  quiet. Ctrl-C there changes nothing. The doctor run and the rehearsal take a while after it, and the old
-  check-in loop could prompt a window meanwhile, so once bosun's own work is stopped it checks again, and
-  waits again if it has to (with the loop stopped, that settles soon), before anything is frozen. That
-  wait lasts two minutes at the most (`QUIET_AFTER_STOP_SECONDS`), as a busy window would otherwise keep
-  bosun's own work off for as long as its turn runs: past it, it says so, starts that work again, waits
-  for a quiet moment with everything running, and plans again, as after the first wait.
-- **bosun's own work** is stopped after the rehearsal, where the hold begins: the watchdog's and
-  learning's launchd jobs unloaded, and the check-in loop's process ended. The morning job is left, as it
-  runs once a morning. Before anything stops, a mark of what runs (the jobs loaded, and whether the loop)
-  goes into a file of its own, `update/own-work.json` in the state folder, not into `update.json`: an
-  older version's write gate, putting a freeze back, rewrites the record with only the fields it knows.
-  However the conversion ends short of the switch, a put back included, the work the mark names starts
-  again as it was, once, and the mark goes: each job loaded from its plist as it is on disk (`start_jobs`:
-  nothing rendered, so the old code runs under the plists it had, and the morning job, or one you unloaded,
-  is left alone), and the loop restarted by the new version's `refresh --checkin-loop`, whose pane runs the
-  install path's `bosun`, which leads to the old code again by then (the checkout, or `legacy-*` after the
-  swap); a loop that runs by then (one never stopped, or started since by `bosun start` or the morning
-  job) is left to its tick, as a restart would stop it mid-tick. After a crash, the next update does it,
-  once it has put the freeze back, whoever wrote the record since, and also with no record at all (moved
-  aside, or deleted). That next update comes from running the install line again, as the bosun installed
-  then is the old checkout, which has no `bosun update`; what the update says on a failure or a Ctrl-C
-  names the install line wherever the installed bosun is a checkout from before versions. Past the
-  switch, the release reloads the jobs and restarts the loop, and removes the mark.
-- **The swap is one call:** the link is made at the legacy folder's name and exchanged with the checkout
-  (Linux's `renameat2` with `RENAME_EXCHANGE` does the same), so the checkout is never under another name,
-  nor the install path missing. A link a swap cut short left there is replaced.
-- **From the switch on, the record names the legacy folder** as the version updated from, in the record
-  write of `switched`, so a put back leads the link there; before the swap, a checkout is never made a
-  link. The update after the conversion is an ordinary one, from a version folder. Its prune deletes the
-  legacy checkout unless something of yours is in it, or the installer did not make it, and an older
-  version unless a change or a commit of its own is in it (lib/checkout_work.py, shared with uninstall),
-  which its summary says. The record names the legacy folder once, and the swap puts the checkout there.
+  has set up, a link to a version gets the install's own `bosun update` and fetches nothing. An install
+  `init` never finished gets `init` again, as it is, since only `bosun update` switches versions. The
+  cases: [init.md](init.md#the-wizard).
+- **A checkout from before versions is installed again, never converted** (decided 2026-11-18: no install
+  from before versions side by side exists any more). Until then, the first update of a checkout an older
+  `get.sh` made converted it at a quiet moment, swapping it for the link in one call and keeping it as
+  `legacy-<its commit>`. Now `get.sh` refuses such a checkout, set up or not, and says how to install again:
+  its own `bosun uninstall` (which keeps the settings, the ledger and the ontology), or, where that keeps the
+  checkout for what is the person's in it or there is none, its `bosun stop` and the checkout moved aside; then
+  the install line. It never changes anything in the checkout. A `legacy-*` folder an earlier conversion left is
+  no version: the prune keeps it and uninstall keeps the versions folder for it, and the guide says to delete it
+  by hand. `bosun update` run in a checkout says the same
+  (`libexec/bosun-update`), and the plan blocks an install that is no link (`update_facts.install_problem`).
+- **The prune** deletes an older version unless a change or a commit of its own is in it
+  (`lib/checkout_work.py`, shared with uninstall), and keeps a folder in the versions folder that is no version,
+  which its summary says.
 - **Temporary links** that a switch cut short leaves beside the install (`.bosun.link-*`, links only) are
   swept with the prune, once older than the update that sweeps them.
 
@@ -639,9 +595,7 @@ only grows](#cut-short)). Every version since versions side by side knows the st
 - no record, or none that finished: refused, "no update has finished here: there is nothing to go back to".
 
 Refused too, before anything changes: the install not leading to the version that update installed (the
-link moved by hand: going back is then by hand), and a version to go back to that is a checkout from before
-versions (`legacy-*`, which has no hold or write gate: by hand, as [the guide](../updating.md#going-back)
-says).
+link moved by hand: going back is then by hand, as [the guide](../updating.md#going-back) says).
 
 **Where the facts come from.** The record of the update gone over: both versions' folders and commits, its backup,
 its migrations (`migrated`) and what it wrote to `bosun.env` (`config_changed`, the plan's `renames` and `kept`).
@@ -819,7 +773,7 @@ and `menu_status.CONTRACT` does not change.
 **Testing.** Unit tests (`tests/unit/test_update_back_plan.py`, `test_update_back.py`, and the general changes
 in `test_update.py`, `test_update_gate.py`, `test_update_facts.py`, `test_update_lookup.py`, `test_migrations.py`):
 which update a back goes back over, for every shape of record; each refusal (nothing finished, a second back, the
-install led elsewhere, a `legacy-*` version, a restore whose backup is gone); each part's decision over format,
+install led elsewhere, a restore whose backup is gone); each part's decision over format,
 rules and `bosun.env`; what restoring loses; `bosun.env` taken back with and without changes since; a back that
 keeps everything (no freeze), one that restores a store, one whose restore fails while writes are paused (put
 back) and one whose backup is found damaged (the rehearsal fails); the plan's and summary's text; the target
@@ -864,7 +818,7 @@ main`, and the releases again.
     backups included, by the next write; and an update stops while one is cut short;
   - stand-ins for launchd.
 - **The VM** (`tests/sandbox.sh mac work`; what it settled: [Settled in the VM](#settled-in-the-vm)).
-  The release converted to this checkout, then a working day and `bosun update` to the next version
+  This checkout installed by its `get.sh`, a week of work on it, then `bosun update` to the next version
   mid-afternoon, while sessions are busy, a background wait is running and stand-in Slack events arrive
   during the hold. It checks that:
   - no event, write or record was lost;
@@ -893,10 +847,10 @@ installed that day.
   1 259 knowledge writes (1 824 changes, `facts.jsonl` 831 KB) and its git history. On that, the
   mid-afternoon update paused writes for 612 to 1 267 ms in six runs (`freeze_ms`; the most with the smoke
   suite running on the host beside the VM), far under the 10 s that the post-call approval hooks allow, so
-  their fallback (saving their record for the next write) is not built. The conversion of the release, with
-  little data, paused them for 154 ms. From its start to its last window's answer, the mid-afternoon update
-  took 39 to 48 s and the conversion 18 to 24 s in those runs, as the first line of each summary says
-  ("bosun updated: … in 43s"); with the real agents (`mac live`), 27 and 33 s on Claude Code and 24 s on
+  their fallback (saving their record for the next write) is not built. The conversion of the release (gone
+  since 2026-11-18), with little data, paused them for 154 ms. From its start to its last window's answer, the
+  mid-afternoon update took 39 to 48 s and the conversion 18 to 24 s in those runs, as the first line of each
+  summary says ("bosun updated: … in 43s"); with the real agents (`mac live`), 27 and 33 s on Claude Code and 24 s on
   Codex by their summaries (40 to 41 s by the scenario's own clock, which looks every 10 s).
 - **Restoring fits a hook's budget.** On that year's backup, restore's own check of every file against its
   manifest (`_verify`) takes 288 ms (389 files, 24 MB), 214 ms (290 files, 20 MB), 339 ms (521 files,
@@ -923,23 +877,13 @@ installed that day.
   id first, and each of those was in its store after the next write, as was every approval the journal
   held. A long-lived install pays the rebuild once per crash. (A first run cut only in the first 300 ms,
   which on a year of data is before any write prints its id.)
-- **launchd for real.** During the conversion the watchdog's and learning's jobs are really unloaded and
-  loaded again afterwards (`launchctl print` all along). A conversion whose migration fails while writes
-  are paused loads them again from their plists as they were on disk, byte for byte.
-- **The check-in loop.** The conversion ends the loop in its real `checkin` window with SIGTERM and the
-  release starts it again on the new version (`ps` shows the version folder's `bosun-checkin --loop`).
-  After a failed conversion is put back, the loop started again runs the old code: the checkout's own
-  `bosun-checkin`.
-- **The swap.** `RENAME_SWAP` exchanges the checkout and the link in one call on APFS: the checkout is the
-  same folder (inode) as `legacy-<12>`, the install path was never missing in 8.6 million looks while it ran,
-  and no `.bosun.link-*` is left; one planted an hour before the next update is swept by its prune.
-- **The upgrade from the release converts.** A release installed by its own `get.sh` is a checkout, set
-  up by its `install.sh` link; this checkout's `get.sh` run again takes the conversion path, and each of
-  bosun's windows on the release (no launch records) is restarted as one whose launch changed, in its own
-  conversation, and answers. Its summary names the release, the backup and where the checkout is kept.
-- **A window opened by hand** (a plain shell in bosun's tmux session) is left alone by the conversion and
-  by the mid-afternoon update: the same pane, no `bosun launch` in it, not in the record, and the
-  summary says so.
+- **The conversion** of a release's checkout, gone since 2026-11-18, was settled here too: the watchdog's and
+  learning's jobs really unloaded and loaded again, the check-in loop ended with SIGTERM and started again (on
+  the old code after a conversion put back), the checkout swapped for the link in one call on APFS (the install
+  path never missing in 8.6 million looks), and the release's windows restarted as ones whose launch changed.
+- **Temporary links.** A `.bosun.link-*` planted an hour before an update is swept by its prune.
+- **A window opened by hand** (a plain shell in bosun's tmux session) is left alone by the mid-afternoon
+  update: the same pane, no `bosun launch` in it, not in the record, and the summary says so.
 - **Nothing is lost mid-afternoon.** With a ledger write, a knowledge write, a typed prompt (the
   UserPromptSubmit hook) and a Stop hook arriving every second, and one of each the moment writes are
   paused (54 of each in all, some beginning at `backed-up`, `switched` and `checked`): each is there once,
@@ -968,8 +912,8 @@ installed that day.
   input, which restarts the orchestrator. Its writes there are none: a version folder, while Claude runs
   with its plugin from it, reads clean as an update's prune (`version_work`) and `bosun uninstall`
   (`versions_work`) read it, and uninstall deleted every version once it waited for the windows' last
-  hooks (below). (`checkout_work`, for a checkout from before versions, names the shared `bosun.git` as
-  another worktree of a version, so it is not what a version is checked with.)
+  hooks (below). (`checkout_work`, the check for a plain checkout, would name the shared `bosun.git` as
+  another worktree if run on a version, so it is not what a version is checked with.)
 - **The prompts' words work with a real Claude.** The take-stock prompt (`TAKE_STOCK_PROMPT` in
   `lib/update_agents.py`: "bosun will restart this session for an update (… -> …), which ends your
   background work. List each background task still running and what you would do when it finishes, and
@@ -1041,7 +985,10 @@ Decided by the user:
 - a `kg forget` deletes the update backups taken before it, so it leaves nothing, at the cost of
   going back past it;
 - the summary's contents;
-- tried for real in the VM.
+- tried for real in the VM;
+- no install from before versions side by side exists any more (2026-11-18): the first update's conversion of a
+  checkout an older `get.sh` made is dropped, with its code, tests and docs. Such a checkout is installed again,
+  never converted: `get.sh` refuses it and says how ([`get.sh` on an existing install](#getsh-on-an-existing-install)).
 
 My calls, which the user can overturn:
 
@@ -1051,7 +998,6 @@ My calls, which the user can overturn:
 - every write checks the store's format and the update marker, and on a newer store it runs itself
   again on the new version;
 - after a crash inside the freeze, the backup is the truth, and the first writer restores it;
-- the first update, which converts the layout, waits for a quiet moment;
 - a hold on bosun's own background work, plus a short freeze under the stores' locks;
 - agents left alone unless something they were launched with changed;
 - the update waits for busy windows, and Ctrl-C hands them to the check-in loop, as it does by itself
@@ -1116,9 +1062,7 @@ Decided while building it:
   is, whatever it does, and the plan says so ("not started by bosun: left as it is", the summary "left
   as it is (bosun did not start it)"). Restarting one would replace your terminal, or your own Claude,
   with a bosun launch in a conversation it never had. `refresh --update-restart` refuses one, as `launch
-  --fingerprint` does. A window `send --new` opened has a launch recorded, and is compared as bosun's;
-  in a conversion, one an older version opened has none, so it is left running too, which is safe: its
-  hooks take the older command lines.
+  --fingerprint` does. A window `send --new` opened has a launch recorded, and is compared as bosun's.
 - **The rehearsal's copy** is taken under both stores' shared locks, so it is whole; writes wait only
   for the clones.
 - **A store's check** after the migrations fails the update on an error (writes refused, or a
@@ -1253,13 +1197,8 @@ Later, each a pull request of its own:
   `review-watch`'s targets, the guard's read for `--approvals` or a running console, reading a ledger a
   migration reshaped, fails with an error instead of running again through the install link as a refused
   write does. Gate them too, at the first migration that reshapes a store.
-- **A conversion restart under a changed `BOSUN_HARNESS`.** A release's windows have no launch records,
-  so a conversion restarts each with the agent the config names now; if `BOSUN_HARNESS` changed since the
-  window started, it lands in a blank conversation of the other agent, with the update prompt. Take the
-  running agent's (`agent_session_field <pid> harness`) when nothing is recorded (`libexec/bosun-refresh`).
-- **`lib/update.py` in its steps and its conversion.** Over 1 100 lines; split into `update_steps`,
-  `update_convert` and `update`, in a pull request of its own after this one, with no change in what
-  they do.
+- **`lib/update.py` in its steps.** Over 1 100 lines; split into `update_steps` and `update`, in a pull request
+  of its own, with no change in what they do.
 - **Kept stores on a fresh install.** `bosun uninstall` keeps the ledger and the knowledge base; an
   install of a newer version over them refuses their writes until they are migrated, and `bosun update`
   there finds nothing to update. `init` should run the migrations of kept stores, with a backup, before

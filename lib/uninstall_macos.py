@@ -38,8 +38,8 @@ def is_loaded(label: str) -> bool:
 def plist_job(path: Path, labels: Sequence[str], roots: Sequence[str]) -> str:
     """The label of the job in <path> if it is bosun's: one of <labels>, or one install.sh rendered to run
     the bosun of one of <roots> (its label may have changed in bosun.env since): the checkout, or with
-    versions side by side the install link, a version's folder or the checkout from before versions, which
-    an older plist may name. Otherwise nothing."""
+    versions side by side the install link or a folder beside it, which an older plist may name. Otherwise
+    nothing."""
     try:
         job = plistlib.loads(path.read_bytes())
         label = str(job.get("Label", ""))

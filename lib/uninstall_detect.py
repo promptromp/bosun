@@ -64,29 +64,22 @@ def panes(env: Mapping[str, str]) -> dict[int, str]:
 # ---- versions side by side ------------------------------------------------------------------------------
 
 
-def legacy_folders(folder: Path) -> list[Path]:
-    """The checkouts from before versions the first update kept in <folder>."""
-    names = (name for name in entries(folder) if name.startswith(versions.LEGACY_PREFIX))
-    return [folder / name for name in names if (folder / name).is_dir() and not (folder / name).is_symlink()]
-
-
 @dataclass(frozen=True)
 class Install:
     """Where this bosun is installed, for the plan: what holds the code (the checkout, or the versions
-    folder), each version and checkout from before versions in that folder, the install link, the bosun to
-    run again, and the temporary links a switch cut short left beside the install."""
+    folder), each version in that folder, the install link, the bosun to run again, and the temporary
+    links a switch cut short left beside the install."""
 
     code: Checkout
     bosun: str
     versions: tuple[Checkout, ...] = ()
-    legacy: tuple[Checkout, ...] = ()
     link: str = ""
     leftover_links: tuple[str, ...] = ()
 
 
 def install_roots(root: Path) -> tuple[str, ...]:
     """Every folder whose bin/bosun is this install's: the checkout <root>, or with versions side by side the
-    install link, <root> and every folder beside it (its versions, and checkouts from before versions)."""
+    install link, <root> and every folder beside it (its versions)."""
     install = install_paths.install_path(root)
     if install == root:
         return (str(root),)
@@ -103,18 +96,16 @@ def side_by_side(root: Path, install: Path) -> Install:
     mark = checkout_work.git(folder / install_paths.REPO, "config", "--get", checkout_work.GIT_CONFIG_MARK)
     managed = (mark or "").strip() == "true"
     found = checkout_work.version_folders(folder)
-    legacy = legacy_folders(folder)
     # A version is the repository's: whether the installer made them is the versions folder's to say, once.
     each = tuple(
         Checkout(str(path), True, checkout_work.version_work(path) if managed else "") for path in found
     )
-    work = checkout_work.versions_work(folder, found, [path.name for path in legacy]) if managed else ""
+    work = checkout_work.versions_work(folder, found) if managed else ""
     linked = install.is_symlink()
     return Install(
         code=Checkout(str(folder), managed, work),
         bosun=str(install_paths.install_bin(root) if linked else root / "bin" / "bosun"),
         versions=each,
-        legacy=tuple(checkout_work.checkout(path) for path in legacy),
         link=str(install) if linked else "",
         leftover_links=tuple(str(path) for path in versions.temporary_links(install)),
     )
@@ -312,6 +303,5 @@ def detect(env: Mapping[str, str], root: Path) -> Facts:
         unsafe=unsafe_folders([state_dir, config_dir, log_dir, code], code),
         install_link=found.link,
         versions=found.versions,
-        legacy=found.legacy,
         leftover_links=found.leftover_links,
     )

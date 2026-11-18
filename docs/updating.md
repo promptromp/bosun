@@ -158,23 +158,16 @@ A local branch you have not pushed is the install line's: `curl ... | BOSUN_REPO
 BOSUN_BRANCH=<branch> sh`. That points `bosun.git`'s origin at your checkout until you run the install line again
 with `BOSUN_REPO` set back (the address the README's install line uses).
 
-### The first update of an older install
+### An install from before versions
 
-An install from before versions side by side is a checkout in `~/.local/share/bosun`, and its bosun has no
-`bosun update`. Running the install line again converts it, once:
+An install that an older `get.sh` made, before versions side by side came on 2026-11-07, is a checkout in
+`~/.local/share/bosun`, and it is not updated: the install line refuses it and changes nothing in it. Install
+bosun again: take it off with its own `bosun uninstall` (which keeps your settings, ledger and ontology), then run
+the install line. If that uninstall keeps the checkout for what is yours in it (or the checkout is older than
+`bosun uninstall`), run its `bosun stop` and move the checkout aside before the install line.
 
-1. The new version's `bosun update` shows its plan and asks.
-2. It waits for a quiet moment: every window idle with nothing running, and nobody typing in the session for
-   `BOSUN_ACTIVE_CLIENT_MINUTES`. It says what it waits for, and Ctrl-C there changes nothing.
-3. It swaps the checkout for the link in one step, keeps the checkout as
-   `~/.local/share/bosun-versions/legacy-<its commit>`, and restarts each of bosun's own windows (the
-   orchestrator, and those in `sessions.yml`) on the new version.
-
-If anything fails, the old checkout runs again, as it was, with the background work it stopped started again;
-after a crash, run the install line again, which does that. It will not convert a checkout with anything of yours
-in it: changes, a stash, commits not pushed, another worktree, a file git ignores. Take that out first. The update
-after it deletes the kept checkout, unless something of yours is in it by then. How the conversion works, step by
-step: [design/update.md](design/update.md#getsh-on-an-existing-install).
+A `legacy-<commit>` folder that an earlier conversion left in `~/.local/share/bosun-versions` is no version: an
+update keeps it, and uninstall keeps the versions folder for it. Delete it by hand once nothing of yours is in it.
 
 ## Going back
 
@@ -209,8 +202,7 @@ version from `bosun.git` and says what it cannot tell until going back adds the 
 version from before `--back`, that version's `bosun uninstall --purge` does not know `bosun.env.pre-back-<time>` and
 leaves the config folder with it: delete it by hand.
 
-It is refused when no update has finished, after a back, or when the version before is the checkout an older `get.sh`
-made (go back by hand, below). A restore needs the update's backup: never past a `kg forget`, which deletes every
+It is refused when no update has finished, or after a back. A restore needs the update's backup: never past a `kg forget`, which deletes every
 update backup there is, since restoring one would bring the person back. When nothing needs restoring, a back after a
 forget still works.
 
@@ -223,8 +215,7 @@ You need the version the update came from and the backup it took, both named in 
    jobs: `launchctl bootout gui/$(id -u)/com.bosun.morning.watchdog`, and the same for `.learn` and `.console` if
    you have them (with your `BOSUN_LAUNCHD_LABEL` if you set one).
 2. **Find the older version's folder** in `~/.local/share/bosun-versions`. An update keeps the one it came from
-   until the next update. After the first update, the version before it is the checkout it kept,
-   `legacy-<its first 12 characters>`. If the folder is gone, add it again from its commit: the backup's
+   until the next update. If the folder is gone, add it again from its commit: the backup's
    `manifest.json` names the whole commit as `from` (the summary's first line shows only 7 characters, which
    `git --git-dir ~/.local/share/bosun-versions/bosun.git rev-parse <those 7>` turns into the whole one), then
    run `git --git-dir ~/.local/share/bosun-versions/bosun.git worktree add --detach
@@ -236,7 +227,7 @@ You need the version the update came from and the backup it took, both named in 
    ~/.local/share/bosun`), run its `~/.local/share/bosun/install.sh` to load its jobs again, and `bosun start`.
 
 `bosun update` would take you forward again, to the newest release, or on the `main` channel to the head of the
-branch (from the checkout kept from before versions, which has no `bosun update`, the install line does).
+branch.
 
 </details>
 
@@ -290,8 +281,5 @@ the same line, and bosun picks up what you kept. How it decides: [design note](d
   say otherwise.
 - If you deleted bosun's folders by hand, the jobs and the wake are still there. Run the install line again, then
   `bosun uninstall`.
-- A first update of an older install that you declined, or that failed before the switch, leaves
-  `~/.local/share/bosun-versions` beside the checkout, which the checkout's own `bosun uninstall` does not know
-  about. Delete it by hand once nothing of yours is in it: `rm -rf ~/.local/share/bosun-versions`.
 
 </details>

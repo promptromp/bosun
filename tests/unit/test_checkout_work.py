@@ -1,5 +1,5 @@
 """lib/checkout_work.py: what deleting a checkout of bosun, or a version of it, would lose (bosun uninstall,
-and bosun update's conversion and prune). Fictional data, real git in a scratch folder."""
+and bosun update's prune). Fictional data, real git in a scratch folder."""
 
 from __future__ import annotations
 
@@ -63,16 +63,16 @@ class CheckoutTest(World):
     def test_a_clean_checkout_holds_nothing(self) -> None:
         self.assertEqual(cw.checkout_work(self.checkout), "")
         self.assertEqual(cw.checkout(self.checkout), Checkout(str(self.checkout), True, ""))
-        self.assertEqual(cw.kept(self.checkout), "")
+        self.assertEqual(cw.why_kept(cw.checkout(self.checkout)), "")
 
     def test_what_is_yours_in_it(self) -> None:
         (self.checkout / "notes.txt").write_text("mine\n")
         self.assertEqual(cw.checkout_work(self.checkout), "uncommitted changes")
-        self.assertIn("it has uncommitted changes", cw.kept(self.checkout))
+        self.assertIn("it has uncommitted changes", cw.why_kept(cw.checkout(self.checkout)))
 
     def test_one_the_installer_did_not_make_is_yours(self) -> None:
         git("-C", str(self.checkout), "config", "--unset", "bosun.managed")
-        self.assertEqual(cw.kept(self.checkout), cw.NOT_THE_INSTALLERS)
+        self.assertEqual(cw.why_kept(cw.checkout(self.checkout)), cw.NOT_THE_INSTALLERS)
 
     def test_git_never_looks_above_the_folder_it_checks(self) -> None:
         """A folder that is no repository, inside one: its parent's state is not its own."""

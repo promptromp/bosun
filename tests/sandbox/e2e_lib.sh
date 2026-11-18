@@ -18,11 +18,10 @@ UID_NOW="$(id -u)"
 DOMAIN="gui/$UID_NOW"
 LABEL="com.bosun.morning"
 DIR="$HOME/.local/share/bosun" # the install path: a link to the version in use
-VERSIONS="$DIR-versions"       # each version's folder, beside bosun.git, and a checkout from before them
+VERSIONS="$DIR-versions"       # each version's folder, beside bosun.git
 CONFIG="$HOME/.config/bosun"
 OUT="$(mktemp -d)"
-# The installer a first install pipes: this checkout's, or (tests/work_e2e.sh) the release's own, as the
-# one a user ran then.
+# The installer a first install pipes: this checkout's.
 GET_SH="$ROOT/get.sh"
 passed=0
 failed=0
@@ -109,11 +108,10 @@ install() {
 }
 
 # The windows a script wants, as it names them: `get.sh --unattended` sets up none on a first install,
-# since nobody chose them. (A release from before that set them up already, in an order of its own, so
-# --force: then sessions.yml may be rewritten, with a backup.) <WINDOWS_ANSWERS_EXTRA>, a JSON object, adds more
-# answers: install_e2e.sh sets {"menu_app": false}, since with the publisher's Team ID the answers that do not
-# say take the recommendation, a download of a release that may not exist yet (tests/app_e2e.sh tests the app).
-# work_e2e.sh does not: its release is from before the app, and refuses an answer it does not know.
+# since nobody chose them (--force: sessions.yml may be rewritten, with a backup). <WINDOWS_ANSWERS_EXTRA>, a JSON
+# object, adds more answers: install_e2e.sh and work_e2e.sh set {"menu_app": false}, since with the publisher's
+# Team ID the answers that do not say take the recommendation, a download of a release that may not exist yet
+# (tests/app_e2e.sh tests the app).
 windows_by_answers() { # <repo folder name in ~/Development>...
   local answers="$OUT/windows.json" name extra="${WINDOWS_ANSWERS_EXTRA:-}"
   [ -n "$extra" ] || extra='{}'
@@ -228,9 +226,8 @@ login_job_for_real() {
   check "$job's plist is valid and runs morning --at-login" bash -c 'plutil -lint -s "$1" && grep -q "morning --at-login" "$1"' _ "$plist"
 }
 
-# `bosun morning --now --background`, from a stopped bosun: launchd's job runs the morning run now. Only for a
-# bosun that has the job and the option: install_e2e.sh calls it, and work_e2e.sh once it is on this checkout (the
-# release it starts from has neither).
+# `bosun morning --now --background`, from a stopped bosun: launchd's job runs the morning run now (install_e2e.sh,
+# work_e2e.sh).
 now_job_for_real() {
   local bosun="$HOME/.local/bin/bosun" done_before now_before job="$LABEL.now"
   echo "the job that runs --now, and bosun morning --now --background"

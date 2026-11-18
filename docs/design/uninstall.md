@@ -61,16 +61,14 @@ this note is why.
   counts as work, not as clean, and git is never let look in a folder above the one it checks. A checkout you
   cloned to work on stays.
 - **Versions side by side go whole, or not at all.** What `get.sh` installs now is `~/.local/share/bosun-versions`
-  (`bosun.git`, which it marks with `bosun.managed`, and a folder per version, each a worktree of it), the
-  checkout from before versions that the first update kept there (`legacy-*`), and the link
-  `~/.local/share/bosun`. Each is checked as a checkout is: every version's files and a commit made in it,
+  (`bosun.git`, which it marks with `bosun.managed`, and a folder per version, each a worktree of it) and the
+  link `~/.local/share/bosun`. Each is checked as a checkout is: every version's files and a commit made in it,
   the repository for a stash, a branch or tag on no remote (but the branch it follows, which is bosun's) or a
-  worktree outside the folder, anything in the folder that bosun does not put there, and the old checkout on
-  its own (its mark, and its work). Anything of yours in any of them keeps all of it, the link too, and the
-  plan says which folder holds what. They go last, and the link only once every folder has gone. A
+  worktree outside the folder, and anything in the folder that bosun does not put there. Anything of yours in
+  any of them keeps all of it, the link too, and the plan says which folder holds what. They go last, and the link only once every folder has gone. A
   temporary link a switch cut short left beside the install (`.bosun.link-*`) is no part of that: it goes
-  earlier, with `~/.local/bin/bosun`, whether the install stays or not. The update's prune keeps a
-  checkout from before versions, or an older version, by the same check (`lib/checkout_work.py`).
+  earlier, with `~/.local/bin/bosun`, whether the install stays or not. The update's prune keeps an older
+  version by the same check (`lib/checkout_work.py`).
 - **Records are records whatever shape they are in.** A knowledge folder with anything in it, a ledger or a
   backup of one with items, or either of them unreadable, is something it asks about. A copy you made by
   hand, like `ledger.json.before-my-edit`, is not a file it knows, so it stays. `replica.json` serves both
@@ -125,8 +123,8 @@ is said, with its window ("still running, started in the exporter window: sleep 
 not stop it."), and the uninstall goes on. A stop that fails, or runs past its two minutes, is waited after
 too, as it may have ended the windows first; it is then left to do, so the install stays for the run again
 it names and the uninstall ends non-zero. The checkout last,
-since this runs from it: it is all in memory by then. With versions side by side that is the checkout kept from
-before versions, the versions folder, then the link, so that the line it gives to run again works until the end.
+since this runs from it: it is all in memory by then. With versions side by side that is the versions folder,
+then the link, so that the line it gives to run again works until the end.
 
 ## What it refuses
 

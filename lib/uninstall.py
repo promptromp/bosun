@@ -296,9 +296,9 @@ def remove_empty_folders(facts: Facts) -> None:
 
 
 def remove_install(facts: Facts, plan: Plan, *, can_ask: bool) -> tuple[Step, ...]:
-    """Last of all, once nothing more can need it: the checkout, or the versions folder with the checkouts
-    from before versions in it, then the link that led into it, only once every folder has gone, as the
-    line to run again goes through it; what is left of it, if anything."""
+    """Last of all, once nothing more can need it: the checkout, or the versions folder, then the link that
+    led into it, only once every folder has gone, as the line to run again goes through it; what is left
+    of it, if anything."""
     folders = tuple(step for step in plan.install if step.kind != up.LINK)
     links = tuple(step for step in plan.install if step.kind == up.LINK)
     Carrying(facts, can_ask=can_ask).run(folders)

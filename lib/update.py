@@ -49,7 +49,6 @@ import fcntl
 import json
 import os
 import shutil
-import signal
 import subprocess
 import sys
 import time
@@ -227,15 +226,11 @@ def _frozen(state: UpdateState, plan: Plan, state_dir: Path, config_dir: Path) -
 
 
 def _switch(state_dir: Path, state: UpdateState, **fields: Any) -> UpdateState:
-    """`switched` recorded with <fields>, then the install led to the new version in one step
-    (versions.switch). From the switch on, the record names the version updated from where the switch
-    leaves it: a checkout from before versions in its legacy folder, where a put back leads the link
-    (update_gate's _point_back), never the install path, which is the link by then."""
+    """`switched` recorded with <fields>, then the install link led to the new version in one step
+    (versions.point)."""
     to_root = Path(state.to_root)
-    install = install_paths.install_path(to_root)
-    from_root = versions.switched_from(install, to_root, Path(state.from_root), state.from_commit)
-    state = _step(state_dir, state, "switched", from_root=str(from_root), **fields)
-    versions.switch(install, to_root, from_root)  # a checkout goes where the record now names it
+    state = _step(state_dir, state, "switched", **fields)
+    versions.point(install_paths.install_path(to_root), to_root)
     return state
 
 
@@ -392,16 +387,14 @@ def _started_time(state: UpdateState) -> float:
 
 def _kept_as(folder: Path) -> str:
     """What a folder prune kept is, for its finding."""
-    if folder.name.startswith(versions.LEGACY_PREFIX):
-        return "the checkout from before versions"
     return "an older version" if checkout_work.is_version(folder) else "a folder that is not a version"
 
 
 def _prune(state_dir: Path, state: UpdateState) -> list[str]:
-    """Old backups, version folders and checkouts from before versions deleted, but for the two
-    versions of this update; the temporary links a switch cut short before this update started. One
-    that holds anything of yours stays (versions.kept: as bosun uninstall checks a checkout, and an older
-    version for a change or a commit of its own), and is a finding: said once, in the summary."""
+    """Old backups and version folders deleted, but for the two versions of this update; the temporary
+    links a switch cut short before this update started. One that holds anything of yours stays
+    (checkout_work.version_kept: an older version with a change or a commit of its own, or a folder that
+    is no version), and is a finding: said once, in the summary."""
     for gone in update_backups.prune(state_dir, current=Path(state.backup) if state.backup else None):
         Output.say(f"  deleted the old backup {gone.name}")
     to_root = Path(state.to_root)
@@ -449,9 +442,9 @@ def release(state: UpdateState) -> UpdateState:
     restarted, the menu bar app brought to the version this one expects (`bosun app update`, which does
     nothing with no app installed, and never takes it back to an older one) and the console's job
     restarted, all while the hold is still on, then the hold lifted (`released`); old backups and version
-    folders pruned; what went wrong there, a checkout from before versions kept for what it holds, and what
-    the new version's `bosun doctor` finds kept as findings, reported, never rolled back (writes may have
-    landed since)."""
+    folders pruned; what went wrong there, an older version kept for what it holds, and what the new
+    version's `bosun doctor` finds kept as findings, reported, never rolled back (writes may have landed
+    since)."""
     where = folders()
     to_root = Path(state.to_root)
     _lead_install(state)
@@ -465,7 +458,6 @@ def release(state: UpdateState) -> UpdateState:
     found += unloading + _restart_checkin_loop(to_root)
     found += _bring_app_along(to_root)
     found += _restart_console(to_root)
-    _unmark(where.state_dir)  # a conversion's own work: the reload and the restart brought it back
     state = _step(where.state_dir, state, "released")
     Output.say("  lifted the hold on bosun's background work")
     kept = _prune(where.state_dir, state)
@@ -563,31 +555,23 @@ def _settled(state_dir: Path, state: UpdateState) -> UpdateState:
 def resume(state_dir: Path) -> UpdateState | None:
     """An update recorded and not running, carried on from where it stopped: before the freeze, its
     hold lifted; inside it, put back (update_gate.recover); after `checked`, on from the step after
-    the one recorded. A conversion's own background work, stopped and left so by a crash, is brought
-    back once it is put back (_own_work_back). Returns where it ended; None when there was nothing to
-    carry on (no record, one finished, or one still running, which one_update refuses next)."""
+    the one recorded. Returns where it ended; None when there was nothing to carry on (no record, one
+    finished, or one still running, which one_update refuses next)."""
     state = update_state.load(state_dir)
-    if update_state.running(state_dir):
-        return None
-    if state is None:  # a mark left with no record (moved aside, or deleted) is still acted on
-        _own_work_left(state_dir)
+    if state is None or update_state.running(state_dir):
         return None
     if not update_state.known(state):
         raise UpdateRefused(
             f"the update's record is at step {state.step}, which a newer bosun wrote: carry it on with "
             f"{state.to_root}/bin/bosun update"
         )
-    if state.step in FINISHED:  # a write put a conversion's freeze back first
-        _own_work_left(state_dir)
+    if state.step in FINISHED:
         return _given_back(state_dir) if state.carried else None
     if update_state.in_freeze(state):
         update_gate.recover(state_dir, folders().config_dir)
-        _own_work_left(state_dir)
         return _given_back(state_dir) or update_state.read(state_dir)
     with update_state.one_update(state_dir, update_state.lock_wait(state_dir)):
-        carried = _carry_on(state_dir)
-        _own_work_back(state_dir)
-        return carried
+        return _carry_on(state_dir)
 
 
 def _give_back(state_dir: Path) -> UpdateState | None:
@@ -670,13 +654,6 @@ def _started(
     )
 
 
-def _again(from_root: Path) -> str:
-    """What carries on, or puts back, an update stopped short: `bosun update`; or the install line,
-    which hands over to the new version's, where the bosun installed now is a checkout from before
-    versions, which has no `bosun update` (a conversion stopped before its swap, or put back)."""
-    return "the install line" if versions.before_versions(installed(from_root)) else "bosun update"
-
-
 def _failed(state: UpdateState) -> int:
     """The failure said, naming the backup if the update took one (in case I need it)."""
     backup = (
@@ -687,7 +664,7 @@ def _failed(state: UpdateState) -> int:
     if state.step in update_state.FREEZE_STEPS:
         Output.say(
             f"bosun update failed and could not put everything back: {state.error}. Writes stay "
-            f"paused until it is put back: run {_again(Path(state.from_root))} again.{backup}"
+            f"paused until it is put back: run bosun update again.{backup}"
         )
     else:
         Output.say(
@@ -864,271 +841,6 @@ def _update(old_root: Path, where: Folders, args: argparse.Namespace, said: Said
     return 0
 
 
-# ---- the first update: a checkout from before versions, converted at a quiet moment -------------
-
-QUIET_STATUSES = ("idle", "exited")  # an agent with nothing running, or no agent at all
-QUIET_POLL_SECONDS = 5
-# The most it waits for a quiet moment with bosun's own work stopped, before it starts that work
-# again and waits with everything running.
-QUIET_AFTER_STOP_SECONDS = 120
-QUIET, STOPPED, LATE = "quiet", "stopped", "late"  # how a wait for a quiet moment ends
-NOT_QUIET = "it was not quiet soon enough after bosun's own work stopped; nothing had changed"
-# What a conversion stopped of bosun's own work, in the state folder (STATE_FILES' `update` row):
-# a file of its own, as an older version's write gate rewrites update.json with only the fields it knows.
-OWN_WORK = Path(update_state.UPDATE_DIR) / "own-work.json"
-LOOP_STOP_SECONDS = 20  # the most the check-in loop may take to stop
-NOTHING_CHANGED = (*BEFORE_FREEZE, "failed", "restored")  # what a conversion leaves as it was
-CONVERT_AHEAD = "get.sh goes ahead with --unattended (sh -s -- --unattended after the pipe)"
-
-
-def waiting_for(quiet: update_facts.Quiet) -> list[str]:
-    """What keeps it from being a quiet moment, a phrase each: each window whose agent is not idle
-    with nothing running, and someone who typed in the session within BOSUN_ACTIVE_CLIENT_MINUTES."""
-    found = [f"{name} ({status})" for name, status in quiet.statuses if status not in QUIET_STATUSES]
-    if quiet.typed is not None and quiet.typed < quiet.minutes:
-        found.append(f"someone typed in the session {quiet.typed} min ago (quiet after {quiet.minutes})")
-    return found
-
-
-def _quiet_moment(root: Path, within: float | None = None) -> str:
-    """Waits until every window is idle with nothing running and nobody has typed for a while, saying
-    what it waits for whenever that changes: QUIET then; STOPPED when Ctrl-C stopped the wait, with
-    nothing changed; LATE once <within> seconds passed without one."""
-    said = ""
-    deadline = None if within is None else time.monotonic() + within
-    try:
-        while waiting := waiting_for(update_facts.quiet_facts(root)):
-            if deadline is not None and time.monotonic() >= deadline:
-                return LATE
-            line = "Waiting for a quiet moment to convert: " + "; ".join(waiting)
-            if line != said:
-                Output.say(line)
-                said = line
-            time.sleep(QUIET_POLL_SECONDS)
-    except KeyboardInterrupt:
-        Output.say("\nStopped waiting. Nothing has changed: run get.sh again at a quieter moment.")
-        return STOPPED
-    return QUIET
-
-
-def _stop_loop(pid: int) -> bool:
-    """The check-in loop at <pid> stopped (SIGTERM) and waited for; False if it would not stop."""
-    with contextlib.suppress(ProcessLookupError):
-        os.kill(pid, signal.SIGTERM)
-    deadline = time.monotonic() + LOOP_STOP_SECONDS
-    while time.monotonic() < deadline:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return True
-        time.sleep(update_state.POLL_SECONDS)
-    return False
-
-
-@dataclass(frozen=True)
-class OwnWork:
-    """What a conversion stopped of bosun's own background work, as its mark keeps it: the launchd jobs
-    (None: the mark could not be read, so every one of them), and whether the check-in loop."""
-
-    jobs: tuple[str, ...] | None
-    loop: bool
-
-
-def _mark(state_dir: Path, own: OwnWork) -> None:
-    """The mark of what a conversion is about to stop, written whole before anything stops."""
-    path = state_dir / OWN_WORK
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.tmp")
-    tmp.write_text(json.dumps({"jobs": list(own.jobs or ()), "loop": own.loop}), encoding="utf-8")
-    tmp.replace(path)
-
-
-def _marked(state_dir: Path) -> OwnWork | None:
-    """The mark of what a conversion stopped, None when there is none (its work runs). One that cannot
-    be read names every job, and the loop."""
-    try:
-        data = json.loads((state_dir / OWN_WORK).read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return None
-    except (OSError, ValueError):
-        return OwnWork(None, True)
-    jobs = data.get("jobs") if isinstance(data, dict) else None
-    if not isinstance(jobs, list) or not all(isinstance(job, str) for job in jobs):
-        return OwnWork(None, True)
-    return OwnWork(tuple(jobs), data.get("loop") is not False)
-
-
-def _unmark(state_dir: Path) -> None:
-    (state_dir / OWN_WORK).unlink(missing_ok=True)
-
-
-def _stopped(root: Path, state_dir: Path) -> str:
-    """The mark written of what runs of bosun's own work (the watchdog's and learning's launchd jobs
-    that are loaded, the check-in loop), then each stopped and said; what could not be stopped, or ""."""
-    pid = update_facts.checkin_loop_pid(root)
-    _mark(state_dir, OwnWork(tuple(update_facts.own_jobs_loaded(root)), pid is not None))
-    done = update_facts.shell(root, "stop_own_jobs")
-    for label in done.stdout.split():
-        Output.say(f"  stopped the launchd job {label}")
-    if done.returncode != 0:
-        return f"launchd: {done.stderr.strip() or 'a job would not stop'}"
-    if pid is None:
-        return ""
-    if not _stop_loop(pid):
-        return f"the check-in loop (pid {pid}) would not stop"
-    Output.say("  stopped the check-in loop")
-    return ""
-
-
-EVERY_OWN_JOB = 'start_jobs "$(watchdog_label)" "$(learn_label)"'  # for a mark that cannot be read
-
-
-def _start_own(root: Path, own: OwnWork) -> None:
-    """What <own> names started again as it was, each said: its launchd jobs loaded from their plists as
-    they are on disk (start_jobs: nothing rendered, no other job, one loaded already left), and the
-    check-in loop, if it was stopped and none runs now (one started since, or never stopped, is left to
-    its tick), restarted by refresh --checkin-loop, which runs the install path's bosun: the old code
-    again, once a put back has led the install path there."""
-    if own.jobs != ():
-        script = EVERY_OWN_JOB if own.jobs is None else 'start_jobs "$@"'
-        done = update_facts.shell(root, script, *(own.jobs or ()))
-        said = "loaded again" if done.returncode == 0 else done.stderr.strip()
-        Output.say(f"  the launchd jobs it stopped: {said}")
-    if own.loop and update_facts.checkin_loop_pid(root) is None:
-        for line in _restart_checkin_loop(root):
-            Output.say(f"  {line}")
-
-
-def _own_work_back(state_dir: Path) -> None:
-    """bosun's own background work a conversion stopped (its mark), started again as it was, once:
-    where the conversion left everything as it was (no record, or one at NOTHING_CHANGED, whoever wrote
-    it); past the switch the release brings it back. Then the mark goes. The caller holds update.lock."""
-    own = _marked(state_dir)
-    if own is None:
-        return
-    state = update_state.read(state_dir)
-    if state is not None and state.step not in NOTHING_CHANGED:
-        return
-    to_root = Path(state.to_root) if state is not None else ROOT
-    Output.say("Starting bosun's own background work again, as it was...")
-    _start_own(to_root if (to_root / "bin" / "bosun").is_file() else ROOT, own)
-    _unmark(state_dir)
-
-
-def _own_work_left(state_dir: Path) -> None:
-    """_own_work_back, under update.lock, for an update found cut short."""
-    with update_state.one_update(state_dir):
-        _own_work_back(state_dir)
-
-
-def _stopped_then_through(state: UpdateState, plan: Plan, new_root: Path, where: Folders) -> UpdateState:
-    """bosun's own work stopped; a quiet moment again, as the doctor run and the rehearsal took a while
-    and the old check-in loop could have prompted a window meanwhile (with it stopped, that settles
-    soon), but for QUIET_AFTER_STOP_SECONDS at the most, as a busy window would otherwise keep that
-    work off for as long as its turn runs; then the hold, the freeze, the release and the windows
-    brought along (_through)."""
-    Output.say("Stopping bosun's own background work, which the version it converts from may not hold...")
-    problem = _stopped(new_root, where.state_dir)
-    if problem:
-        return _step(where.state_dir, state, "failed", error=problem)
-    waited = _quiet_moment(new_root, within=QUIET_AFTER_STOP_SECONDS)
-    if waited == STOPPED:
-        error = "stopped while it waited for a quiet moment again (Ctrl-C); nothing had changed"
-        return _step(where.state_dir, state, "failed", error=error)
-    if waited == LATE:
-        Output.say(
-            f"Not quiet within {QUIET_AFTER_STOP_SECONDS} s of stopping bosun's own work: starting it again, "
-            "and waiting for a quiet moment with everything running."
-        )
-        return _step(where.state_dir, state, "failed", error=NOT_QUIET)
-    return _through(state, plan, where)
-
-
-def _converted(plan: Plan, old_checkout: Path, new_root: Path, where: Folders) -> UpdateState:
-    """As _carried_out, with bosun's own background work stopped from the rehearsal on (the version it
-    converts from holds none of it for an update), its mark written before anything stops, and a quiet
-    moment checked again once it is. Whatever ends it short of the switch, a put back included, brings
-    that work back (_own_work_back); past the switch the release does."""
-    state = _prepared(plan, old_checkout, new_root, where)
-    if state.step == "failed":
-        return state
-    try:
-        return _stopped_then_through(state, plan, new_root, where)
-    finally:
-        _own_work_back(where.state_dir)
-
-
-def _refuse_work(checkout: Path) -> None:
-    """UpdateRefused while the checkout holds anything of yours, as bosun uninstall checks one: the
-    conversion sets it aside, and a later update deletes it."""
-    work = checkout_work.checkout_work(checkout)
-    if work:
-        raise UpdateRefused(
-            f"{checkout} has {work}, and the first update sets this checkout aside (a later one deletes "
-            "it): keep what is yours elsewhere, then run get.sh again"
-        )
-
-
-def _converts(old_checkout: Path, new_root: Path, commit: str) -> str:
-    """What converting adds to the plan, in a paragraph."""
-    install = install_paths.install_path(new_root)
-    kept = versions.switched_from(install, new_root, old_checkout, commit)
-    return (
-        f"This first update converts {install}, a checkout from before versions: once every window is "
-        "idle with nothing running and nobody has typed for a while, it stops bosun's own background "
-        f"work (the watchdog, learning and the check-in loop), then switches {install} to a link to "
-        f"{new_root} in one step, keeping the checkout as {kept}, and restarts each of bosun's own windows "
-        "(the orchestrator, those in sessions.yml) on the new version."
-    )
-
-
-def _convert_now(old_checkout: Path, new_root: Path, args: argparse.Namespace, said: Said) -> int:
-    """The conversion at a quiet moment, from a plan made again then (windows may have come and gone, or
-    something blocks now, while it waited); and so again after a wait with everything running, when the
-    moment after the stop was not quiet soon enough (NOT_QUIET)."""
-    where = folders()
-    state: UpdateState | None = None
-    while state is None or state.error == NOT_QUIET:
-        if state is not None and _quiet_moment(new_root) != QUIET:
-            return BLOCKED
-        plan = said.plan = update_facts.plan_for(old_checkout, new_root, where.state_dir, where.config_dir)
-        if plan.blockers:
-            _show(plan, args.json)
-            return BLOCKED
-        state = _converted(plan, old_checkout, new_root, where)
-    if state.step not in ENDED:
-        return _failed(state)
-    Output.say(
-        f"{install_paths.install_path(new_root)} is now a link to {new_root}. The checkout is kept as "
-        f"{state.from_root} until the next update, which deletes it if nothing in it is yours."
-    )
-    _say_summary(where.state_dir, state, said)
-    return 0
-
-
-def convert(old_checkout: Path, new_root: Path, args: argparse.Namespace, said: Said | None = None) -> int:
-    """`bosun update --from` a checkout from before versions: the install path's own checkout, or the
-    legacy one a conversion put back leads the link to (docs/design/update.md, "The first update
-    converts, at a quiet moment"). Refused while the checkout holds anything of yours. A dry run shows
-    the plan and what converting adds; otherwise, under update.lock (the caller holds it), the plan is
-    said yes to, it waits for a quiet moment (Ctrl-C there changes nothing), then carries the update
-    out (_converted): the checkout swapped for the link in one call and kept as legacy-<its commit>,
-    and every window of bosun's brought along as one whose launch changed, as the version converted
-    from recorded no launches (one outside the window list is left as it is: update_facts._window).
-    <said> keeps the plan and the summary for --json."""
-    said = said if said is not None else Said()
-    _refuse_work(old_checkout)
-    where = folders()
-    plan = said.plan = update_facts.plan_for(old_checkout, new_root, where.state_dir, where.config_dir)
-    _show(plan, args.json)
-    Output.say(_converts(old_checkout, new_root, plan.from_commit))
-    if args.dry_run or plan.blockers:
-        return BLOCKED if plan.blockers else 0
-    if not _go_ahead(args.yes, CONVERT_AHEAD):
-        return 0
-    return _convert_now(old_checkout, new_root, args, said) if _quiet_moment(new_root) == QUIET else BLOCKED
-
-
 def _who(state: UpdateState | None) -> tuple[str, str, str]:
     return (state.started_at, state.from_commit, state.to_commit) if state else ("", "", "")
 
@@ -1187,15 +899,12 @@ def _said_recorded(state_dir: Path) -> bool:
 
 
 def _dry_run(where: Folders, args: argparse.Namespace, said: Said) -> int:
-    """The plan alone, or for a checkout from before versions the conversion's. An update cut short is
-    never carried on or put back here (that changes things): it is said first, and while it is there
-    bosun is not called up to date."""
+    """The plan alone. An update cut short is never carried on or put back here (that changes things): it
+    is said first, and while it is there bosun is not called up to date."""
     stopped = _said_recorded(where.state_dir)
     old_root = installed(Path(args.from_root))
     code = 0
-    if versions.before_versions(old_root):
-        code = convert(old_root, ROOT, args, said)
-    elif not _is_this_one(old_root):
+    if not _is_this_one(old_root):
         said.plan = update_facts.plan_for(old_root, ROOT, where.state_dir, where.config_dir)
         _show(said.plan, args.json)
         code = BLOCKED if said.plan.blockers else 0
@@ -1250,8 +959,6 @@ def _marked_run(where: Folders, args: argparse.Namespace, said: Said) -> int:
         return 0
     with update_state.one_update(where.state_dir, update_state.lock_wait(where.state_dir)):
         old_root = installed(Path(args.from_root))
-        if versions.before_versions(old_root):
-            return convert(old_root, ROOT, args, said)
         if _is_this_one(old_root):
             _say_up_to_date()
             return 0
@@ -1432,9 +1139,8 @@ def _said(args: argparse.Namespace, said: Said) -> int:
     except update_backups.BackupError as exc:
         print(f"bosun update: an update cut short could not be put back: {exc}", file=sys.stderr)
     except (KeyboardInterrupt, EOFError):
-        again = _again(Path(args.from_root))
         print(
-            f"\nbosun update: stopped; run {again} again: it carries on, or puts back, what it started",
+            "\nbosun update: stopped; run bosun update again: it carries on, or puts back, what it started",
             file=sys.stderr,
         )
     return 1

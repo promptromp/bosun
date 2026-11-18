@@ -1,44 +1,39 @@
 #!/bin/bash
-# A week of real work on a real Mac, through two updates: the last release installed by the piped
-# installer, three days of work on it (tests/sandbox/acme_week.sh: the ledger and the knowledge base),
-# its windows at work, then the upgrade the way a user does it (get.sh again), which converts the
-# release's checkout to versions side by side at a quiet moment (once with a migration that fails while
-# writes are paused, which is put back, then for real). Two more days on the bosun whose writes go
-# through the journals, then a mid-afternoon update to the next version (this checkout and
-# tests/sandbox/update_patch.sh) on a year of data, with windows idle, busy and waiting on a background
-# sleep, writes and hooks arriving all along and Slack messages during the hold; going back by hand,
-# as docs/updating.md says, and forward again; going back with bosun update --back over that update (the
-# ledger restored, what was written since kept in its own backup) and forward again, then over an update to
-# the version after (update_patch.sh --again), which restores nothing and keeps what was written since. Then
-# writers at once, the clock going back, writes cut short like a power cut, the knowledge files changed
-# outside their journal (by hand, by git, by the release), launchd, the console, uninstall, and a year on. At each step the ledger, the knowledge base and their
-# journals must hold up (`ledger validate --journal`, `kg validate`), and nothing of a person deleted on
-# request may be left in the knowledge folder, its history or an update's backup.
+# A week of real work on a real Mac, through an update: this checkout installed by its piped installer,
+# with its versions side by side, five days of work on it (tests/sandbox/acme_week.sh: the ledger and the
+# knowledge base, every write through their journals), then a mid-afternoon update to the next version
+# (this checkout and tests/sandbox/update_patch.sh) on a year of data, with windows idle, busy and waiting
+# on a background sleep, writes and hooks arriving all along and Slack messages during the hold; going back
+# by hand, as docs/updating.md says, and forward again; going back with bosun update --back over that update
+# (the ledger restored, what was written since kept in its own backup) and forward again, then over an update
+# to the version after (update_patch.sh --again), which restores nothing and keeps what was written since.
+# Then writers at once, the clock going back, writes cut short like a power cut, the knowledge files changed
+# outside their journal (by hand, by git, by an older bosun), launchd, the console, uninstall, and a year on.
+# At each step the ledger, the knowledge base and their journals must hold up (`ledger validate --journal`,
+# `kg validate`), and nothing of a person deleted on request may be left in the knowledge folder, its
+# history or an update's backup.
 # Claude Code is a stand-in (tests/sandbox/claude-stand-in). It changes the machine it runs on (launchd,
 # pmset, the clock), so it only runs in the throwaway Mac of `tests/sandbox.sh mac work`, which copies in
-# the two bundles it installs from, ~/repo-base.bundle (the release) and ~/repo-tree.bundle (this
-# checkout), and the release's own get.sh (~/release-get.sh), which installs the release as a user did
-# then. The install's origin is ~/repo.bundle, which each head of the branch replaces.
+# this checkout (~/repo-tree.bundle), which it installs, and an older bosun (~/repo-base.bundle: one from
+# before the knowledge base's journal), which forgets a person in the knowledge folder as it did. The
+# install's origin is ~/repo.bundle, which each head of the branch replaces.
 # Checks pass shell snippets to `bash -c '...' _ args`; their $ must not expand here.
 # shellcheck disable=SC2016
 set -uo pipefail
 # The guard (it refuses to run anywhere else), the checks and the steps tests/install_e2e.sh shares.
 source "$(dirname "$0")/sandbox/e2e_lib.sh" || exit 1
 source "$(dirname "$0")/sandbox/acme_week.sh" || exit 1
-# Not on a GitHub runner either: it needs the two bundles and the release's get.sh, and it sets the clock.
-copied_in() {
-  [ -e /etc/bosun-sandbox ] && [ -s "$HOME/repo-base.bundle" ] && [ -s "$HOME/repo-tree.bundle" ] && [ -s "$HOME/release-get.sh" ]
-}
+# Not on a GitHub runner either: it needs the two bundles, and it sets the clock.
+copied_in() { [ -e /etc/bosun-sandbox ] && [ -s "$HOME/repo-base.bundle" ] && [ -s "$HOME/repo-tree.bundle" ]; }
 copied_in || {
-  echo "$0 only runs in tests/sandbox.sh mac work, which copies in ~/repo-base.bundle, ~/repo-tree.bundle and ~/release-get.sh" >&2
+  echo "$0 only runs in tests/sandbox.sh mac work, which copies in ~/repo-base.bundle and ~/repo-tree.bundle" >&2
   exit 1
 }
-GET_SH="$HOME/release-get.sh"
 
 STATE="$HOME/.local/state/bosun"
 JOURNAL="$STATE/journal/ledger"
 KJOURNAL="$KNOWLEDGE/journal"
-T_FIRST="" # the first task the new bosun makes
+T_FIRST="" # the task made once the first three days are done
 DAY=86400
 TODAY=0        # the day the clock is on: days after the first
 CLOCK_START="" # "<wall time> <monotonic time>" at the start: the real time, whatever `date` is set to later
@@ -120,48 +115,36 @@ in_the_ledger() { # <file of ids>: each one shows (and there is at least one)
 }
 valid() { check "${1:-ledger validate --journal passes}" bosun ledger validate --journal; }
 kg_valid() { check "${1:-kg validate passes}" bosun kg validate; }
-# The entities and the fact log, each record with its keys sorted: what the knowledge base holds.
-knowledge_files() { jq -cS . "$KNOWLEDGE/entities.jsonl" | sort && jq -cS . "$KNOWLEDGE/facts.jsonl"; }
-same_knowledge() { diff <(knowledge_files) "$OUT/knowledge.txt"; }
-no_knowledge_journal() { [ ! -e "$KJOURNAL" ] && [ ! -e "$KNOWLEDGE/view.json" ] && [ ! -e "$KNOWLEDGE/secret.key" ]; }
 
-# What the release does: from before every journal, or one that journals the ledger already (and mints
-# its ids); the knowledge base's journal is new in this checkout either way.
-RELEASE_JOURNALS=0
-what_the_release_does() {
-  [ -e "$DIR/lib/journal.py" ] || return 0
-  RELEASE_JOURNALS=1
-  RELEASE_TASK_ID="$NEW_TASK_ID"
-  echo "  note  the release journals the ledger already, and mints its ids; the knowledge base it does not"
+# ---- the install, and its first days -------------------------------------------------------------
+
+tree_head() { git bundle list-heads "$HOME/repo-tree.bundle" | awk '{ print $1; exit }'; }
+# This checkout (A), as the install has it, and its folder; the next version (B: this checkout and
+# tests/sandbox/update_patch.sh), and its folder; the pane of the shell I opened in bosun's tmux session by
+# hand.
+A_COMMIT="" A_ROOT="" B_COMMIT="" B_ROOT="" MINE_PANE=""
+
+the_install() {
+  A_ROOT="$(cd "$DIR" && pwd -P)"
+  A_COMMIT="$(git -C "$DIR" rev-parse HEAD)"
+  check "versions side by side, the install path a link to the version in use" side_by_side
+  check "... which is this checkout, the head of its branch" test "$A_COMMIT" = "$(tree_head)"
+  check "the install follows that branch: bosun.env says BOSUN_UPDATE_CHANNEL=\"main\"" \
+    grep -qx 'BOSUN_UPDATE_CHANNEL="main"' "$CONFIG/bosun.env"
+  check "... and bosun update --check --json is on the main channel" \
+    bash -c 'bosun update --check --json | jq -e ".channel == \"main\" and .error == null"'
 }
 
-the_old_week() {
-  echo "a week on the last release: three days, the clock a day on between them"
+# Three days, the clock a day on between them. launchd_for_real leaves bosun stopped, but the morning job starts it
+# again when the clock moves, so it may be running after day 3 (priya_forgotten stops it before its torn write).
+the_first_days() {
+  echo "the first days: three of them, the clock a day on between them"
   day_1
   next_day 1
   day_2
   next_day 2
   day_3
-  jq -S 'del(.journal) | .said //= []' "$STATE/ledger.json" >"$OUT/snapshot.json"
-  ITEMS="$(jq '.items | length' "$STATE/ledger.json")"
-  echo "  note  the ledger before the upgrade: $ITEMS items"
-  if [ "$RELEASE_JOURNALS" = 1 ]; then
-    valid "the release journals the ledger: ledger validate --journal passes"
-  else
-    check "the release writes no journal" test ! -e "$STATE/journal"
-  fi
-  knowledge_files >"$OUT/knowledge.txt"
-  bosun kg stats >"$OUT/kg-stats.txt"
-  echo "  note  the knowledge base before the upgrade: $(cat "$OUT/kg-stats.txt")"
-  check "... nor one for the knowledge base" no_knowledge_journal
 }
-
-no_journal_yet() { { [ ! -e "$JOURNAL" ] || [ -z "$(ls -A "$JOURNAL")" ]; } && jq -e 'has("journal") | not' "$STATE/ledger.json"; }
-tree_head() { git bundle list-heads "$HOME/repo-tree.bundle" | awk '{ print $1; exit }'; }
-# The release, as its checkout holds it; this checkout (A) once the conversion made it a version, and
-# its folder; the next version (B: this checkout and tests/sandbox/update_patch.sh), and its folder; the
-# pane of the shell I opened in bosun's tmux session by hand.
-RELEASE_COMMIT="" A_COMMIT="" A_ROOT="" B_COMMIT="" B_ROOT="" MINE_PANE=""
 
 # ---- windows, the check-in loop and launchd, as they are while an update runs ----------------------
 
@@ -175,7 +158,6 @@ agents_now() { # each window and the Claude in it, a line each
   local window
   for window in orchestrator "${REPO_WINDOWS[@]}"; do echo "$window $(agent_of "$window")"; done
 }
-resumes_of() { grep -c "resume, session" "$STAND_IN/$1.log" 2>/dev/null; } # <window>: its stand-in's resumes so far
 status_of() { bosun sessions --json | jq -r --arg w "$1" '.[] | select(.name == $w) | .agent.status // empty'; }
 pane_of() { tmux -L bosun list-windows -t "=bosun" -F '#{window_name} #{pane_pid}' | awk -v w="$1" '$1 == w { print $2 }'; }
 loop_pid() { # the check-in loop's process (not a subshell of it, which has its command line)
@@ -186,11 +168,6 @@ loop_pid() { # the check-in loop's process (not a subshell of it, which has its 
     return 0
   done
   return 1
-}
-# <the loop's pid before>: that process is gone and another loop runs now
-loop_restarted() {
-  local now
-  ! kill -0 "$1" 2>/dev/null && now="$(loop_pid)" && [ "$now" != "$1" ]
 }
 loop_runs_from() { # <folder>: the loop's command line runs bosun-checkin from there
   local command
@@ -212,40 +189,6 @@ mine_untouched() { # the same pane, no bosun launch in it, and not in the update
 }
 JOBS=("$LABEL.watchdog" "$LABEL.learn")
 jobs_loaded() { launchctl print "$DOMAIN/${JOBS[0]}" >/dev/null && launchctl print "$DOMAIN/${JOBS[1]}" >/dev/null; }
-plists_sum() { cat "$HOME/Library/LaunchAgents/$LABEL".*plist | cksum; }
-
-# In the background until $OUT/watch.stop is there: how often the install path was looked at and found
-# missing, and how often launchd said each of the watchdog's and learning's jobs was not loaded.
-watch_the_install() { # <file it writes>
-  rm -f "$OUT/watch.stop"
-  python3 - "$DIR/bin/bosun" "$DOMAIN/${JOBS[0]}" "$DOMAIN/${JOBS[1]}" "$OUT/watch.stop" >"$1" <<'PY' &
-import os, subprocess, sys, time
-path, jobs, stop = sys.argv[1], sys.argv[2:4], sys.argv[4]
-looks = missing = 0
-unloaded = dict.fromkeys(jobs, 0)
-asked = 0.0
-while not os.path.exists(stop):
-    looks += 1
-    missing += not os.path.exists(path)
-    if time.monotonic() - asked > 0.25:
-        asked = time.monotonic()
-        for job in jobs:
-            unloaded[job] += subprocess.run(["launchctl", "print", job], capture_output=True).returncode != 0
-print(f"looked {looks} times, missing {missing}")
-for job, count in unloaded.items():
-    print(f"{job} unloaded {count}")
-PY
-}
-watched() { # <pid of watch_the_install>: stopped, and what it saw as notes
-  touch "$OUT/watch.stop"
-  wait "$1"
-}
-jobs_were_unloaded() {
-  ! grep -q "unloaded 0$" "$1" && [ "$(grep -c " unloaded " "$1")" = 2 ] && return 0
-  cat "$1"
-  return 1
-}
-never_missing() { grep -qE "^looked [1-9][0-9]* times, missing 0$" "$1" || { cat "$1" && return 1; }; }
 
 # ---- the next head of the branch -----------------------------------------------------------------
 
@@ -262,200 +205,20 @@ a_head() { # <name> [update_patch.sh flags...]
     mv "$HOME/repo.bundle.new" "$HOME/repo.bundle"
 }
 
-# ---- the release at work, and its first update -------------------------------------------------------
+# ---- the journals, once the first days are done -----------------------------------------------------
 
-the_release_at_work() {
-  echo "the release at work: its windows, its check-in loop, and a shell I opened by hand"
-  RELEASE_COMMIT="$(git -C "$DIR" rev-parse HEAD)"
-  check "the release is a checkout from before versions" bash -c '[ -d "$1/.git" ] && [ ! -L "$1" ] && [ ! -e "$2" ]' _ "$DIR" "$VERSIONS"
-  check "... set up: its install.sh linked ~/.local/bin/bosun into it" test "$(readlink "$HOME/.local/bin/bosun")" = "$DIR/bin/bosun"
-  bosun stop >/dev/null 2>&1
-  bosun start >/dev/null 2>&1
-  check "its windows come up: the orchestrator and the three repos" wait_for 120 windows_up
-  check "... and the check-in loop in its checkin window" wait_for 60 loop_pid
-  my_own_shell
-  check "... and my own shell beside them" test -n "$MINE_PANE"
-}
-
-# A first update whose migration fails while writes are paused: everything as it was, and what it
-# stopped of bosun's own work started again as it was (the jobs from their plists, the loop on the old
-# code). Nothing past the switch ran, so no window was touched.
-a_conversion_put_back() {
-  echo "the first update converts the release, but its migration fails while writes are paused: all put back"
-  local out="$OUT/put-back.txt" loop plists ledger agents watching rc
-  check "a head whose ledger migration fails (update_patch.sh --failing)" a_head failing --failing
-  loop="$(loop_pid)"
-  plists="$(plists_sum)"
-  ledger="$(cksum <"$STATE/ledger.json")"
-  agents="$(agents_now)"
-  watch_the_install "$OUT/put-back-watch.txt"
-  watching=$!
-  # shellcheck disable=SC2002 # the pipe is the point: this is how people run it
-  cat "$ROOT/get.sh" | sh -s -- --unattended >"$out" 2>&1
-  rc=$?
-  watched "$watching"
-  cat "$out"
-  check "it fails (exit 1), saying what failed and that everything is as it was" bash -c '
-    [ "$1" = 1 ] && grep -q "failed on purpose" "$2" && grep -q "Everything is as it was" "$2"' _ "$rc" "$out"
-  check "... the watchdog's and learning's jobs were unloaded while it ran" jobs_were_unloaded "$OUT/put-back-watch.txt"
-  check "... and are loaded again" jobs_loaded
-  check "... from their plists as they were on disk, unchanged" test "$(plists_sum)" = "$plists"
-  check "... the check-in loop ended at the update's SIGTERM (it says so; that process is gone), and another runs" \
-    bash -c 'grep -q "stopped the check-in loop" "$1"' _ "$out"
-  check "... started again" wait_for 60 loop_restarted "$loop"
-  check "... on the old code: the checkout's own bosun-checkin" loop_runs_from "$DIR"
-  check "... the install path is the release's checkout still" bash -c '
-    [ ! -L "$1" ] && [ "$(git -C "$1" rev-parse HEAD)" = "$2" ]' _ "$DIR" "$RELEASE_COMMIT"
-  check "... the ledger as it was, byte for byte" test "$(cksum <"$STATE/ledger.json")" = "$ledger"
-  check "... the windows as they were" test "$(agents_now)" = "$agents"
-  check "... my shell as it was" mine_untouched
-  check "... and the mark of what it stopped is gone" test ! -e "$STATE/update/own-work.json"
-}
-
-# Each of bosun's windows restarted on the new version as one whose launch changed (the release
-# recorded no launch), in the same conversation, and answered the update's prompt.
-restarted_and_answered() { # <file of "<window> <pid before> <resumes before>" lines>
-  local window before resumes
-  while read -r window before resumes; do
-    jq -e --arg w "$window" '.windows[$w][2:] == ["restarted", "answered"]' "$STATE/update.json" >/dev/null &&
-      [ "$(agent_of "$window")" != "$before" ] && [ "$(resumes_of "$window")" -gt "${resumes:-0}" ] &&
-      [ -s "$STATE/update/notes/$window.status" ] || {
-      echo "$window: $(jq -c --arg w "$window" '.windows[$w]' "$STATE/update.json"), pid $(agent_of "$window") (was $before), resumes $(resumes_of "$window") (were $resumes)"
-      return 1
-    }
-  done <"$1"
-}
-summary_says() { # <output> <from commit> <to commit>: it ends with the summary, from one to the other
-  sed -n '/^bosun updated: /,$p' "$1" >"$1.summary"
-  grep -qE "^bosun updated: ${2:0:7} -> ${3:0:7} \([0-9]+ commits?\) in " "$1.summary" &&
-    grep -qE "^Backup: ~/.local/state/bosun/backups/[^ ]+ \([0-9.]+ (bytes|KB|MB|GB)\)$" "$1.summary" &&
-    [ "$(tail -1 "$1.summary")" = "Going back: bosun update --back (docs/updating.md#going-back)" ] || {
-    cat "$1.summary"
-    return 1
-  }
-}
-the_swap() { # <the checkout's inode before>: the checkout moved whole to legacy-<its commit>, the link in its place
-  local legacy="$VERSIONS/legacy-${RELEASE_COMMIT:0:12}"
-  [ -L "$DIR" ] && a_version "$A_ROOT" && [ "$(git -C "$legacy" rev-parse HEAD)" = "$RELEASE_COMMIT" ] &&
-    [ "$(stat -f %i "$legacy")" = "$1" ] || {
-    ls -la "$VERSIONS" "$DIR"
-    return 1
-  }
-}
-no_temporary_links() { [ -z "$(find "$(dirname "$DIR")" -maxdepth 1 -name '.bosun.link-*')" ]; }
-
-the_upgrade() {
-  echo "the upgrade: the piped installer again, which converts the release's checkout at a quiet moment"
-  local out="$OUT/upgrade.txt" loop inode watching upgraded
-  cp "$HOME/repo-tree.bundle" "$HOME/repo.bundle"
-  loop="$(loop_pid)"
-  inode="$(stat -f %i "$DIR")"
-  agents_now | while read -r window pid; do echo "$window $pid $(resumes_of "$window")"; done >"$OUT/release-agents.txt"
-  watch_the_install "$OUT/upgrade-watch.txt"
-  watching=$!
-  # shellcheck disable=SC2002 # the pipe is the point: this is how people run it
-  cat "$ROOT/get.sh" | sh -s -- --unattended >"$out" 2>&1
-  upgraded=$?
-  watched "$watching"
-  cat "$out"
-  A_ROOT="$(cd "$DIR" && pwd -P)"
-  A_COMMIT="$(git -C "$DIR" rev-parse HEAD)"
-  check "it passes" test "$upgraded" = 0
-  check "the checkout is the new bosun" test "$A_COMMIT" = "$(tree_head)"
-  check "... versions side by side, the install path a link to the new one" side_by_side
-  check "the release's checkout is set aside whole as legacy-<its commit>, swapped for the link in one step" the_swap "$inode"
-  check "... the install path never missing meanwhile ($(head -1 "$OUT/upgrade-watch.txt"))" never_missing "$OUT/upgrade-watch.txt"
-  check "... and no temporary link left beside it" no_temporary_links
-  check "the watchdog's and learning's jobs were unloaded while it converted" jobs_were_unloaded "$OUT/upgrade-watch.txt"
-  check "... and are loaded again, on the install path" jobs_loaded_on_the_link
-  check "the check-in loop ended at the update's SIGTERM (it says so; that process is gone)" \
-    bash -c 'grep -q "stopped the check-in loop" "$1"' _ "$out"
-  check "... and another runs" wait_for 60 loop_restarted "$loop"
-  check "... on the new code" loop_runs_from "$A_ROOT"
-  check "each of bosun's windows restarted on the new version, resuming its conversation, and answered" \
-    restarted_and_answered "$OUT/release-agents.txt"
-  check "... my own shell left as it is" mine_untouched
-  check "it ends with where the checkout is kept, and the summary" bash -c '
-    grep -qF "The checkout is kept as $2 until the next update" "$1"' _ "$out" "$VERSIONS/legacy-${RELEASE_COMMIT:0:12}"
-  check "... from the release to this checkout, with its backup" summary_says "$out" "$RELEASE_COMMIT" "$A_COMMIT"
-  check "... and the mark of bosun's own work it stopped is gone" test ! -e "$STATE/update/own-work.json"
-  the_orchestrator_keeps_its_connectors "$out.summary"
-  the_channel_stays_main "$out.summary"
-  check "bosun doctor passes" bash -c 'bosun doctor >"$1" 2>&1 || { cat "$1"; exit 1; }' _ "$OUT/doctor.txt"
-  check "... and warns while the orchestrator keeps every connector" \
-    grep -qE "^ +warn +orchestrator: all \(every MCP server and connector\): name the ones it needs" "$OUT/doctor.txt"
-  ledger_before_its_first_write
-  check "doctor names the knowledge base from before journals as a note" \
-    grep -E "^ +ok +the knowledge base and its journal: no journal yet" "$OUT/doctor.txt"
-  check "kg validate says so, and passes" bash -c 'bosun kg validate | grep -q "no journal yet"'
-  check "... and starts none, nor the key of the forgotten" no_knowledge_journal
-  bosun stop >/dev/null 2>&1
-}
-# The release had no connector lists, so its orchestrator reached every server: the update keeps that,
-# writing the value to bosun.env (with a copy as it was), and its summary says so, and that repo windows
-# now start without any. <summary>: the summary's lines.
-the_orchestrator_keeps_its_connectors() {
-  check "the update wrote BOSUN_ORCHESTRATOR_CONNECTORS=\"all\" to bosun.env, keeping a copy as it was" bash -c '
-    grep -qx "BOSUN_ORCHESTRATOR_CONNECTORS=\"all\"" "$1/bosun.env" && ! grep -q "^BOSUN_CONNECTORS=" "$1/bosun.env" &&
-      ls "$1"/bosun.env.pre-update-* >/dev/null' _ "$CONFIG"
-  check "... its summary says so, with what each added key means" bash -c '
-    grep -q "^  bosun\.env  *BOSUN_ORCHESTRATOR_CONNECTORS=\"all\" added.* (before: bosun\.env\.pre-update-" "$1" &&
-      grep -q "^  BOSUN_ORCHESTRATOR_CONNECTORS  *the orchestrator keeps every connector, as before" "$1" &&
-      grep -q "^  BOSUN_CONNECTORS  *repo windows now start without connectors" "$1" || { cat "$1"; exit 1; }' _ "$1"
-}
-# No BOSUN_UPDATE_CHANNEL is exported here (e2e_lib.sh): the release followed `main` and the new default is the
-# releases, so what keeps this install on `main` is the key the update writes (migrations.CONFIG_ADDED), which the
-# updates after it (a_mid_afternoon_update, on a branch with no release) then go by. <summary>: the summary's lines.
-the_channel_stays_main() {
-  check "the update wrote BOSUN_UPDATE_CHANNEL=\"main\" to bosun.env: this install goes on following main" \
-    grep -qx 'BOSUN_UPDATE_CHANNEL="main"' "$CONFIG/bosun.env"
-  check "... its summary says so, with what the key means" bash -c '
-    grep -q "^  bosun\.env  *.*BOSUN_UPDATE_CHANNEL=\"main\" added" "$1" &&
-      grep -q "^  BOSUN_UPDATE_CHANNEL  *bosun update goes on following main, as before" "$1" || { cat "$1"; exit 1; }' _ "$1"
-  check "bosun update --check --json is on the main channel" bash -c 'bosun update --check --json | jq -e ".channel == \"main\" and .error == null"'
-}
-jobs_loaded_on_the_link() {
-  jobs_loaded && grep -qF "$DIR/bin/bosun" "$HOME/Library/LaunchAgents/${JOBS[0]}.plist"
-}
-
-ledger_before_its_first_write() {
-  if [ "$RELEASE_JOURNALS" = 1 ]; then
-    valid "the release's journal goes on: ledger validate --journal passes"
-    return
-  fi
-  check "no journal yet: nothing has written since" no_journal_yet
-  check "ledger validate --journal says so, and passes" bash -c 'bosun ledger validate --journal | grep -q "no journal yet"'
-  check "... and starts none" no_journal_yet
-}
-
-same_as_before() { diff <(jq -S 'del(.journal) | .said //= []' "$STATE/ledger.json") "$OUT/snapshot.json"; }
 replica_made() { jq -e '.replica | test("^[0-9a-f]{32}$")' "$STATE/replica.json" && [ "$(stat -f %Lp "$STATE/replica.json")" = 600 ]; }
-starts_whole() { head -1 "$JOURNAL/$(jq -r .replica "$STATE/replica.json").jsonl" | jq -e '.seq == 1 and .cmd == "genesis"'; }
-KG_FIRST=1 # the knowledge base's first write, beside the ledger's: its exit code
 
-the_first_write() {
-  echo "the first write on the new bosun"
-  # The knowledge base's first write runs at the same moment: the two stores make this Mac's replica id
-  # together (one id for both, R85), or take the one a release that journals the ledger made.
-  bosun kg expire >"$OUT/kg-first.txt" 2>&1 &
-  local kg=$!
-  step "a write that changes nothing" render
-  wait "$kg"
-  KG_FIRST=$?
+the_ledger_journal() {
+  echo "the ledger's journal, after three days"
   check "the journal is there" bash -c 'ls "$1"/*.jsonl' _ "$JOURNAL"
   check "... with this Mac's replica id, readable only by me" replica_made
-  if [ "$RELEASE_JOURNALS" = 1 ]; then
-    check "... going on from the release's, its seq with no gap" journal_lines seq
-  else
-    check "... starting with the old ledger, whole" starts_whole
-  fi
+  check "... its seq with no gap" journal_lines seq
   valid
-  check "the ledger is as it was" same_as_before
-  check "... $ITEMS items" test "$(jq '.items | length' "$STATE/ledger.json")" = "$ITEMS"
   check "an id from the first day still works: $T_CSV" bosun ledger show "$T_CSV"
   check "... and lists" bash -c 'bosun ledger list | grep -qF "$1"' _ "$T_CSV"
   step "the morning's first chore" mark-run morning
-  made T_FIRST "$NEW_TASK_ID" "a new task" spawn --title "Check the exports after the upgrade" \
+  made T_FIRST "$NEW_TASK_ID" "a new task" spawn --title "Check the exports after the first days" \
     --ask "Make sure last night's exports ran" --via "user: check the exports"
   valid
 }
@@ -473,20 +236,17 @@ key_made() { [ -s "$KNOWLEDGE/secret.key" ] && [ "$(stat -f %Lp "$KNOWLEDGE/secr
 not_in_history() { ! git -C "$KNOWLEDGE" ls-files | grep -E 'secret\.key|torn|identifiers\.jsonl|local\.jsonl'; }
 lists_fact() { bosun kg facts "$1" --status all --closed --json | jq -e --arg id "$2" 'any(.[]; .id == $id)'; }
 
-the_first_knowledge_write() {
-  echo "the knowledge base's first write on the new bosun, beside the ledger's"
-  check "it went through" said "$KG_FIRST" "$(cat "$OUT/kg-first.txt")" "recorded 0 expired proposals"
-  check "its journal appears" bash -c 'ls "$1"/*.jsonl' _ "$KJOURNAL"
+the_knowledge_journal() {
+  echo "the knowledge base's journal, after three days, beside the ledger's"
+  check "its journal is there" bash -c 'ls "$1"/*.jsonl' _ "$KJOURNAL"
   check "... under this Mac's one replica id, the ledger's too" one_replica
   kg_valid
-  check "the entities and facts are as they were" same_knowledge
-  check "... and so are its counts" bash -c 'bosun kg stats | diff - "$1"' _ "$OUT/kg-stats.txt"
-  check "the key of the forgotten is made, readable only by me" key_made
-  check "a fact id from the release still works: $K_CAVEAT" lists_fact feature/csv-export "$K_CAVEAT"
-  kg_says "... and an old proposal is confirmed by its id" "confirmed" confirm "$(fact_of environment/staging-2 status)"
+  check "the key of the forgotten is there, readable only by me" key_made
+  check "a fact id from the first day still works: $K_CAVEAT" lists_fact feature/csv-export "$K_CAVEAT"
+  kg_says "... and a proposal from it is confirmed by its id" "confirmed" confirm "$(fact_of environment/staging-2 status)"
   kg_made K_FIRST "$NEW_FACT_ID" "a new fact gets a minted id" propose feature/csv-export caveat \
     --value "The CSV header row stays in English" --source "ledger:$T_FIRST" --source "report:$T_FIRST"
-  check "the key is not in the knowledge history, nor any torn file, nor the ids the release's history tracked" not_in_history
+  check "the key is not in the knowledge history, nor any torn file, nor the identifiers" not_in_history
   kg_valid
 }
 
@@ -550,27 +310,14 @@ knowledge_privacy() {
   check "no person and none of my words in the journal that can leave this Mac" \
     not_in "$(replica_journal)" "${PEOPLE_WORDS[@]}" "${MY_WORDS[@]}"
   check "... they are in local.jsonl" in_file "$KJOURNAL/local.jsonl" person/dana person/lee person/priya "${MY_WORDS[@]}"
-  check "... but not Marco, forgotten on the release" not_in "$KJOURNAL/local.jsonl" person/marco Marco
+  check "... but not Marco, forgotten on day 3" not_in "$KJOURNAL/local.jsonl" person/marco Marco
   check "he is not added again without --allow-forgotten" refuses "deleted on request" \
     bosun kg add-entity person/marco --name "Marco Placeholder"
-  a_torn_tail person/priya "Priya Placeholder"
-  kg_says "a power loss left half a change naming Priya: the next write sets it aside" "moved it aside" \
-    propose feature/csv-export caveat --value "CSV exports end with a newline" --source "ledger:$T_FIRST"
-  check "... in a torn file" torn_named priya
-  kg_says "Priya asked to be forgotten" "deleted the person" forget person/priya
-  check "... and the update backups, which held her, saying so ($(grep -o 'deleted [0-9]* update backups*' <<<"$KG_SAID"))" \
-    said 0 "$KG_SAID" "taken before this; going back past it is no longer possible"
-  check "... no backup or rehearsal copy holds her" no_copy_holds person/priya "Priya Placeholder"
-  check "... kept as a keyed hash" last_forgotten '.hash_kind == "hmac-sha256"'
-  check "... nothing of her in local.jsonl" not_in "$KJOURNAL/local.jsonl" priya "export questions batched"
-  check "... nor in a torn file" bash -c '! ls "$1"/*.torn-* 2>/dev/null | grep -F local.jsonl' _ "$KJOURNAL"
-  check "... nor in the knowledge history" not_in_git priya
-  check "... nor anywhere in the knowledge folder" nowhere priya
   kg_valid
 }
 
 the_new_days() {
-  echo "two more days on the new bosun"
+  echo "two more days"
   next_day 3
   day_4
   valid
@@ -774,6 +521,15 @@ on_the_next_version() { [ "$(git -C "$DIR" rev-parse HEAD)" = "$B_COMMIT" ] && a
 kept_running_and_reread() {
   [ "$(agent_of orchestrator)" = "$(awk '$1 == "orchestrator" { print $2 }' "$OUT/afternoon-agents.txt")" ] &&
     grep -q "Re-read .*orchestrator/policy.md" "$STAND_IN/orchestrator.log"
+}
+summary_says() { # <output> <from commit> <to commit>: it ends with the summary, from one to the other
+  sed -n '/^bosun updated: /,$p' "$1" >"$1.summary"
+  grep -qE "^bosun updated: ${2:0:7} -> ${3:0:7} \([0-9]+ commits?\) in " "$1.summary" &&
+    grep -qE "^Backup: ~/.local/state/bosun/backups/[^ ]+ \([0-9.]+ (bytes|KB|MB|GB)\)$" "$1.summary" &&
+    [ "$(tail -1 "$1.summary")" = "Going back: bosun update --back (docs/updating.md#going-back)" ] || {
+    cat "$1.summary"
+    return 1
+  }
 }
 afternoon_summary() { # the summary names the versions, the migration, the prompt changed and the backup
   local summary="$OUT/afternoon-update.txt.summary"
@@ -1020,11 +776,36 @@ going_back() {
   check "bosun update would take it forward again" says "ledger: format 1 -> 2" bosun update --dry-run
 }
 
+# Priya, in the knowledge base since the first day, asks to be forgotten once bosun is back on the version
+# before by hand: the backup of the update it went back over holds her, and the forget must delete it. A power
+# loss has left half a change naming her at the end of local.jsonl, which the next write sets aside. bosun is
+# stopped first, so that this next write is the test's own.
+priya_forgotten() {
+  echo "Priya asks to be forgotten, on the version before: the update's backup holds her, and a torn tail names her"
+  bosun stop >/dev/null 2>&1
+  check "the update's backup holds Priya now" bash -c 'grep -rqF "$1" "$2"' _ person/priya "$STATE/backups"
+  a_torn_tail person/priya "Priya Placeholder"
+  kg_says "a power loss left half a change naming Priya: the next write sets it aside" "moved it aside" \
+    propose feature/csv-export caveat --value "CSV exports end with a newline" --source "ledger:$T_FIRST"
+  check "... in a torn file" torn_named priya
+  kg_says "Priya asked to be forgotten" "deleted the person" forget person/priya
+  check "... which deletes the update backups that held her, saying so ($(grep -o 'deleted [0-9]* update backups*' <<<"$KG_SAID"))" \
+    said 0 "$KG_SAID" "taken before this; going back past it is no longer possible"
+  check "... no backup or rehearsal copy holds her" no_copy_holds person/priya "Priya Placeholder"
+  check "... kept as a keyed hash" last_forgotten '.hash_kind == "hmac-sha256"'
+  check "... nothing of her in local.jsonl" not_in "$KJOURNAL/local.jsonl" priya "export questions batched"
+  check "... nor in a torn file" bash -c '! ls "$1"/*.torn-* 2>/dev/null | grep -F local.jsonl' _ "$KJOURNAL"
+  check "... nor in the knowledge history" not_in_git priya
+  check "... nor anywhere in the knowledge folder" nowhere priya
+  kg_valid
+}
+
 forward_again() {
   echo "forward again: bosun update, as the guide says"
   check "bosun update --yes takes it to the next version again" bash -c 'bosun update --yes >"$1" 2>&1 || { tail -20 "$1"; exit 1; }' _ "$OUT/forward.txt"
   check "... the ledger migrated to format 2 again" test "$(jq -r '"\(.version) \(.update_patch)"' "$STATE/ledger.json")" = "2 migrated"
   check "... on the next version" test "$(git -C "$DIR" rev-parse HEAD)" = "$B_COMMIT"
+  check "... its backup holds nothing of Priya, forgotten before it" no_copy_holds person/priya "Priya Placeholder"
   valid
   kg_valid
   bosun stop >/dev/null 2>&1
@@ -1099,8 +880,9 @@ back_keeps_what_was_written() {
   kg_valid
 }
 
-the_ways_back() { # by hand and forward again, then the command: a restore and forward again, then none
+the_ways_back() { # by hand, a forget, forward again, then the command: a restore and forward again, then none
   going_back
+  priya_forgotten
   forward_again
   back_with_the_command
   back_keeps_what_was_written
@@ -1492,14 +1274,14 @@ folder_two_commits_back() {
 }
 
 an_older_bosun_forgets() {
-  echo "  the release, from a checkout of its own, forgets Lee in the same knowledge folder"
-  check "the release, beside the installed bosun" git clone -q --branch sandbox-mac-tree "$HOME/repo-base.bundle" "$OUT/release"
-  check "Lee asked to be forgotten: the release deletes him" says "deleted the person" "$OUT/release/bin/bosun" kg forget person/lee
-  check "... kept as a plain hash, as the release keeps it" last_forgotten 'has("hash_kind") | not'
+  echo "  an older bosun (from before the knowledge base's journal), from a checkout of its own, forgets Lee in the same knowledge folder"
+  check "the older bosun, beside the installed one" git clone -q --branch sandbox-mac-tree "$HOME/repo-base.bundle" "$OUT/older"
+  check "Lee asked to be forgotten: the older bosun deletes him" says "deleted the person" "$OUT/older/bin/bosun" kg forget person/lee
+  check "... kept as a plain hash, as that bosun keeps it" last_forgotten 'has("hash_kind") | not'
   check "the installed bosun is as it was" test "$(git -C "$DIR" rev-parse HEAD)" = "$B_COMMIT"
   validate_notes
   kg_says "the next write deletes him from the journal too, and says so" "deleted on request are gone" \
-    propose feature/csv-export caveat --value "After the release's forget: the export check passed" --source "ledger:$T_JSON"
+    propose feature/csv-export caveat --value "After the older bosun's forget: the export check passed" --source "ledger:$T_JSON"
   as_notes "$KG_SAID"
   kg_valid
   check "nothing of Lee in local.jsonl" not_in "$KJOURNAL/local.jsonl" person/lee "Lee Sample" "questions as one table"
@@ -1518,7 +1300,6 @@ launchd_on_the_new_bosun() {
   tail -5 "$STATE"/logs/morning-"$(date +%F)".log
   valid "ledger validate --journal stays clean"
   bosun stop >/dev/null 2>&1
-  # The job that runs --now is on this checkout only (the release has neither it nor --background).
   now_job_for_real
 }
 
@@ -1601,22 +1382,19 @@ a_year_on() {
 }
 
 start_clock
-cp "$HOME/repo-base.bundle" "$HOME/repo.bundle"
+cp "$HOME/repo-tree.bundle" "$HOME/repo.bundle"
 a_new_machine
 a_repo_by_hand acme-web https://github.com/acme/web.git
 a_repo_by_hand invoice-exporter https://github.com/acme/invoice-exporter.git
 follow_what_it_says
 install
-windows_by_answers acme-api acme-web invoice-exporter
-what_the_release_does
+WINDOWS_ANSWERS_EXTRA='{"menu_app": false}' windows_by_answers acme-api acme-web invoice-exporter
+the_install
 git_keeps_tokens_out
 launchd_for_real
-the_old_week
-the_release_at_work
-a_conversion_put_back
-the_upgrade
-the_first_write
-the_first_knowledge_write
+the_first_days
+the_ledger_journal
+the_knowledge_journal
 knowledge_privacy
 the_new_days
 a_mid_afternoon_update

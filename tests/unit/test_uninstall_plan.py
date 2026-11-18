@@ -25,7 +25,6 @@ STATE = f"{HOME}/.local/state/bosun"
 CONFIG = f"{HOME}/.config/bosun"
 ROOT = f"{HOME}/.local/share/bosun"
 VERSIONS = f"{HOME}/.local/share/bosun-versions"
-LEGACY = f"{VERSIONS}/legacy-0123456789ab"
 WAKE_LINE = "wakepoweron at 9:01AM every day"
 
 
@@ -61,15 +60,14 @@ def facts(**changes: object) -> Facts:
 
 
 def side_by_side(**changes: object) -> Facts:
-    """Versions side by side: the link at ROOT, the versions folder with two versions of bosun (each a
-    worktree of its repository there) and the checkout from before versions, kept as legacy-*."""
+    """Versions side by side: the link at ROOT, and the versions folder with two versions of bosun (each a
+    worktree of its repository there)."""
     base = facts(
         checkout=Checkout(VERSIONS, managed=True),
         versions=(
             Checkout(f"{VERSIONS}/0123456789ab", managed=True),
             Checkout(f"{VERSIONS}/0f1e2d3c4b5a", managed=True),
         ),
-        legacy=(Checkout(LEGACY, managed=True),),
         install_link=ROOT,
     )
     return replace(base, **changes)  # type: ignore[arg-type]
@@ -531,27 +529,25 @@ class CheckoutRules(unittest.TestCase):
 
 class TheNewLayout(unittest.TestCase):
     def test_the_new_layout_goes_whole(self) -> None:
-        """The checkout from before versions, the versions folder and the link: each checked as the
-        checkout is, and all of it last, after every other step."""
+        """The versions folder and the link: each checked as the checkout is, and all of it last, after
+        every other step."""
         plan = up.build_plan(side_by_side(), Choices())
         self.assertEqual(
             plan.install,
             (
-                Step(up.CHECKOUT, LEGACY, by_hand=f"rm -rf {LEGACY}"),
                 Step(up.CHECKOUT, VERSIONS, by_hand=f"rm -rf {VERSIONS}"),
                 Step(up.LINK, ROOT, by_hand=f"rm {ROOT}"),
             ),
         )
-        self.assertFalse({LEGACY, VERSIONS, ROOT} & {step.target for step in plan.steps})
-        self.assertFalse({LEGACY, VERSIONS, ROOT} & stays(plan))
+        self.assertFalse({VERSIONS, ROOT} & {step.target for step in plan.steps})
+        self.assertFalse({VERSIONS, ROOT} & stays(plan))
         text = up.render_plan(plan, side_by_side())
-        for line in ("~/.local/share/bosun-versions/legacy-0123456789ab", "~/.local/share/bosun-versions\n"):
-            self.assertIn(line, text)
+        self.assertIn("~/.local/share/bosun-versions\n", text)
         self.assertTrue(text.index("~/.local/share/bosun-versions\n") < text.index("~/.local/share/bosun\n"))
 
     def test_work_in_a_version_folder_keeps_it(self) -> None:
-        """Whole: the versions folder, the link that leads into it, and the checkout from before versions
-        in it, with the version that holds the work named."""
+        """Whole: the versions folder and the link that leads into it, with the version that holds the work
+        named."""
         busy = f"{VERSIONS}/0f1e2d3c4b5a"
         layout = side_by_side(
             versions=(
@@ -564,16 +560,6 @@ class TheNewLayout(unittest.TestCase):
         self.assertIn("uncommitted changes", next(s.why for s in plan.stays if s.path == busy))
         self.assertTrue({VERSIONS, ROOT} <= stays(plan))
         self.assertIn(busy.rsplit("/", 1)[1], next(s.why for s in plan.stays if s.path == VERSIONS))
-
-    def test_a_checkout_from_before_versions_with_work_keeps_the_folder_it_is_in(self) -> None:
-        for legacy, why in (
-            (Checkout(LEGACY, managed=True, work="files git ignores (.env)"), ".env"),
-            (Checkout(LEGACY, managed=False), "not made by the installer"),
-        ):
-            plan = up.build_plan(side_by_side(legacy=(legacy,)), Choices())
-            self.assertEqual(plan.install, ())
-            self.assertIn(why, next(s.why for s in plan.stays if s.path == LEGACY))
-            self.assertTrue({VERSIONS, ROOT} <= stays(plan))
 
     def test_a_repository_the_installer_did_not_make_is_yours(self) -> None:
         plan = up.build_plan(side_by_side(checkout=Checkout(VERSIONS, managed=False)), Choices())

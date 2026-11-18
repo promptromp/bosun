@@ -79,5 +79,5 @@ your setup, or when something behaves unexpectedly. Planned work and open questi
   ([Going back](updating.md#going-back)).
 - It updates only to the newest release, or on the `main` channel the head of the branch the install follows.
 - Its unit and smoke tests run on stand-ins (fake windows and launchd); the real runs are in the macOS VM
-  (`tests/sandbox.sh mac work` and `live`: a working day updated mid-afternoon, the first update of an older install,
-  the freeze on a year of data, the real Claude Code and Codex answering its prompts).
+  (`tests/sandbox.sh mac work` and `live`: a working day updated mid-afternoon, the freeze on a year of data, the
+  real Claude Code and Codex answering its prompts).

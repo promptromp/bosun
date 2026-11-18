@@ -45,10 +45,6 @@ MOVED = (
     "the install leads to {installed}, not to the version the last update installed ({to}): going back is "
     f"then by hand ({GUIDE})"
 )
-LEGACY = (
-    "the version the last update came from is the checkout from before versions ({folder}), which has no "
-    f"hold or write check: going back to it is by hand ({GUIDE})"
-)
 BACKUP_GONE = (
     "the {store} needs the backup that update took ({why}), which is gone: a kg forget deletes every backup, "
     "and going back past it is not possible"

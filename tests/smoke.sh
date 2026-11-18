@@ -5739,8 +5739,9 @@ FAKE
   check "it is plain sh" sh -n "$ROOT/get.sh"
   check "it says how to use it" bash -c 'sh "$1/get.sh" --help | grep -q "Usage: get.sh"' _ "$ROOT"
   check "it refuses what it does not know" fails_with "unknown option" sh "$ROOT/get.sh" --typo
-  # In a home of its own, where the install is each of the three things get.sh finds there: nothing,
-  # a checkout from before versions, and a link to a version folder beside bosun.git.
+  # In a home of its own, where the install is each of the things get.sh finds there: nothing, a link to a
+  # version folder beside bosun.git (set up by bosun init, or not yet), and a checkout from before versions,
+  # which it refuses.
   G="$WORK/get"
   G_DIR="$G/share/bosun"
   G_VERSIONS="$G/share/bosun-versions"
@@ -5800,12 +5801,10 @@ FAKE
   check "a repository that cannot be reached is not a repository with no release" fails_with "could not reach $G/nowhere" \
     env HOME="$G/home" BOSUN_DIR="$G_DIR" BOSUN_REPO="$G/nowhere" sh "$ROOT/get.sh" --dry-run
   check "... and nothing was made" test ! -e "$G/share"
-  mkdir -p "$G_DIR/bin"
-  printf '#!/bin/sh\n' >"$G_DIR/bin/bosun"
-  git -C "$G_DIR" init -q
-  git -C "$G_DIR" add -A
-  git -C "$G_DIR" -c user.name=acme -c user.email=dev@example.com -c commit.gpgsign=false commit -qm "a release"
-  g_before="$(g_tree)"
+  G_VERSION="$G_VERSIONS/0123456789ab"
+  mkdir -p "$G_VERSIONS/bosun.git" "$G_VERSION/bin"
+  printf '#!/bin/sh\n' >"$G_VERSION/bin/bosun"
+  ln -s "$G_VERSION" "$G_DIR"
   G_UNFINISHED="$(get_dry)"
   G_UNFINISHED_LINE="$G_DIR is there, but ~/.local/bin/bosun does not lead into it, as bosun init leaves it: starting bosun init again"
   check "with an install bosun init has not set up yet (it stopped at what bosun needs), it starts bosun init again, as it is" says_lines "$G_UNFINISHED" \
@@ -5815,8 +5814,8 @@ FAKE
     "$(HOME="$G/home" BOSUN_DIR="$G_DIR" BOSUN_REPO="$G/upstream" sh "$ROOT/get.sh" --dry-run --unattended 2>&1)" \
     "Then it would start: BOSUN_INIT_UNATTENDED=1 $G_DIR/bin/bosun init --recommended"
   # The version there is older than this get.sh: a bosun that knows no --unattended, which says what it got.
-  printf '#!/bin/sh\necho "init got: $*, BOSUN_INIT_UNATTENDED=${BOSUN_INIT_UNATTENDED:-}"\necho "init env: channel=${BOSUN_INIT_CHANNEL:-} config_channel=${BOSUN_UPDATE_CHANNEL:-} rerun=${BOSUN_RERUN:-}"\n' >"$G_DIR/bin/bosun"
-  chmod +x "$G_DIR/bin/bosun"
+  printf '#!/bin/sh\necho "init got: $*, BOSUN_INIT_UNATTENDED=${BOSUN_INIT_UNATTENDED:-}"\necho "init env: channel=${BOSUN_INIT_CHANNEL:-} config_channel=${BOSUN_UPDATE_CHANNEL:-} rerun=${BOSUN_RERUN:-}"\n' >"$G_VERSION/bin/bosun"
+  chmod +x "$G_VERSION/bin/bosun"
   check "... and does: init --recommended, with BOSUN_INIT_UNATTENDED=1" says_lines \
     "$(HOME="$G/home" BOSUN_DIR="$G_DIR" BOSUN_REPO="$G/upstream" sh "$ROOT/get.sh" --unattended </dev/null 2>&1)" \
     "init got: init --recommended, BOSUN_INIT_UNATTENDED=1"
@@ -5831,34 +5830,12 @@ FAKE
     "$(g_init_env BOSUN_BRANCH=feature BOSUN_HARNESS=codex)" "init env: channel=main config_channel= rerun=$g_line | BOSUN_DIR=$G_DIR BOSUN_BRANCH=feature BOSUN_HARNESS=codex sh"
   check "... without a branch, init is told no channel, and the line has none (it keeps the folder)" says_lines \
     "$(g_init_env)" "init env: channel= config_channel= rerun=$g_line | BOSUN_DIR=$G_DIR sh"
-  printf '#!/bin/sh\n' >"$G_DIR/bin/bosun"
-  chmod -x "$G_DIR/bin/bosun" # as it was
+  printf '#!/bin/sh\n' >"$G_VERSION/bin/bosun"
+  chmod -x "$G_VERSION/bin/bosun" # as it was
   mkdir -p "$G/home/.local/bin"
   ln -s "$G/gone/bin/bosun" "$G/home/.local/bin/bosun"
   check "... and so with a ~/.local/bin/bosun that leads nowhere" says_lines "$(get_dry)" "$G_UNFINISHED_LINE"
   ln -sfn "$G_DIR/bin/bosun" "$G/home/.local/bin/bosun" # what install.sh links, once bosun init set it up
-  g_before="$(g_tree)"
-  G_CHECKOUT="$(get_dry)"
-  check "with a checkout from before versions, it would convert: get the head into a folder beside it, then hand over to that version's bosun update --from the checkout" says_lines "$G_CHECKOUT" \
-    "  \$ git -c core.hooksPath=/dev/null clone --quiet --bare --no-tags --single-branch --branch main $G/upstream $G_VERSIONS/bosun.git" \
-    "Then it would run: $G_VERSIONS/<commit>/bin/bosun update --from $G_DIR" \
-    "which converts the checkout at a quiet moment: it keeps it as $G_VERSIONS/legacy-<its commit>, and $G_DIR becomes a link to the new version"
-  check "... and changes nothing" test "$(g_tree)" = "$g_before"
-  # Without BOSUN_REPO, from where the checkout came: its origin (a fork, a mirror).
-  get_dry_from_origin() { HOME="$G/home" BOSUN_DIR="$G_DIR" env -u BOSUN_REPO sh "$ROOT/get.sh" --dry-run 2>&1; }
-  git -C "$G_DIR" remote add origin "$G/fork"
-  check "... cloning bosun.git from the checkout's own origin, without BOSUN_REPO" says_lines "$(get_dry_from_origin)" \
-    "  \$ git -c core.hooksPath=/dev/null clone --quiet --bare --no-tags --single-branch --branch main $G/fork $G_VERSIONS/bosun.git"
-  git -C "$G_DIR" remote set-url origin "https://0000placeholder-token@example.com/acme/bosun.git" # gitleaks:allow
-  out="$(get_dry_from_origin)"
-  check "... and never saying the token in its URL" bash -c '
-    grep -qxF "  \$ git -c core.hooksPath=/dev/null clone --quiet --bare --no-tags --single-branch --branch main https://***@example.com/acme/bosun.git $2/bosun.git" <<<"$1" &&
-      ! grep -q 0000placeholder-token <<<"$1"' _ "$out" "$G_VERSIONS"
-  git -C "$G_DIR" remote remove origin
-  mv "$G_DIR" "$G/a-checkout"
-  mkdir -p "$G_VERSIONS/bosun.git" "$G_VERSIONS/0123456789ab/bin"
-  printf '#!/bin/sh\n' >"$G_VERSIONS/0123456789ab/bin/bosun"
-  ln -s "$G_VERSIONS/0123456789ab" "$G_DIR"
   g_before="$(g_tree)"
   get_dry_plain() { HOME="$G/home" BOSUN_DIR="$G_DIR" env -u BOSUN_REPO -u BOSUN_BRANCH sh "$ROOT/get.sh" --dry-run "$@" 2>&1; }
   G_LINK="$(get_dry_plain)"
@@ -5869,8 +5846,8 @@ FAKE
     "$(get_dry_plain --unattended)" \
     "Then it would run: $G_DIR/bin/bosun update"
   check "... and its dry run changes nothing" test "$(g_tree)" = "$g_before"
-  printf '#!/bin/sh\nif [ -t 0 ]; then echo "update got: $* (stdin is a terminal)"; else echo "update got: $*"; fi\n' >"$G_VERSIONS/0123456789ab/bin/bosun"
-  chmod +x "$G_VERSIONS/0123456789ab/bin/bosun"
+  printf '#!/bin/sh\nif [ -t 0 ]; then echo "update got: $* (stdin is a terminal)"; else echo "update got: $*"; fi\n' >"$G_VERSION/bin/bosun"
+  chmod +x "$G_VERSION/bin/bosun"
   check "... and does: bosun update, with --yes when unattended" says_lines \
     "$(HOME="$G/home" BOSUN_DIR="$G_DIR" sh "$ROOT/get.sh" --unattended </dev/null 2>&1 | tail -1)" \
     "update got: update --yes"
@@ -5879,14 +5856,36 @@ FAKE
   check "... and with no terminal to ask on (none to open), bosun update as it is, which shows its plan: nothing is --yes, and its input is not a terminal" says_lines \
     "$(HOME="$G/home" BOSUN_DIR="$G_DIR" g_no_tty sh "$ROOT/get.sh" </dev/null 2>&1 | tail -1)" \
     "update got: update"
-  chmod -x "$G_VERSIONS/0123456789ab/bin/bosun"
-  printf '#!/bin/sh\n' >"$G_VERSIONS/0123456789ab/bin/bosun" # as it was
+  chmod -x "$G_VERSION/bin/bosun"
+  printf '#!/bin/sh\n' >"$G_VERSION/bin/bosun" # as it was
   check "... a BOSUN_REPO or BOSUN_BRANCH given then is kept for the updates after it, as before" says_lines \
     "$(HOME="$G/home" BOSUN_DIR="$G_DIR" BOSUN_REPO="$G/upstream" BOSUN_BRANCH=feature sh "$ROOT/get.sh" --dry-run 2>&1)" \
     "  \$ git --git-dir=$G_VERSIONS/bosun.git remote set-url origin $G/upstream" \
     "  \$ git --git-dir=$G_VERSIONS/bosun.git config bosun.branch feature" \
     "Then it would run: $G_DIR/bin/bosun update"
+  out="$(HOME="$G/home" BOSUN_DIR="$G_DIR" BOSUN_REPO="https://0000placeholder-token@example.com/acme/bosun.git" sh "$ROOT/get.sh" --dry-run 2>&1)" # gitleaks:allow
+  check "... and never says the token in a BOSUN_REPO's URL" bash -c '
+    grep -qxF "  \$ git --git-dir=$2/bosun.git remote set-url origin https://***@example.com/acme/bosun.git" <<<"$1" &&
+      ! grep -q 0000placeholder-token <<<"$1"' _ "$out" "$G_VERSIONS"
+  # A checkout of bosun at the install path, as an older get.sh made one before versions side by side: set up
+  # (~/.local/bin/bosun leads into it) or not, it is refused, saying how to install again, and nothing changes.
   rm "$G_DIR"
+  mkdir -p "$G_DIR/bin"
+  printf '#!/bin/sh\n' >"$G_DIR/bin/bosun"
+  git -C "$G_DIR" init -q
+  git -C "$G_DIR" add -A
+  git -C "$G_DIR" -c user.name=acme -c user.email=dev@example.com -c commit.gpgsign=false commit -qm "a release"
+  echo mine >"$G_DIR/notes.txt"
+  g_before="$(g_tree)"
+  G_REFUSED="$G_DIR is a checkout of bosun from before versions side by side, which this no longer updates: install bosun again."
+  check "with a checkout from before versions, it refuses: that install is installed again, never updated" fails_with "$G_REFUSED" get_dry
+  check "... saying how: its own bosun uninstall, else its bosun stop and moving it aside, then the line again" fails_with \
+    "Take it off with its own bosun uninstall ($G_DIR/bin/bosun uninstall, which keeps your settings, ledger and ontology); if that keeps the checkout for what is yours in it, or it has no uninstall, run $G_DIR/bin/bosun stop and move the checkout aside. Then run this line again." \
+    env HOME="$G/home" BOSUN_DIR="$G_DIR" BOSUN_REPO="$G/upstream" sh "$ROOT/get.sh" --unattended
+  check "... changing nothing, in the checkout or beside it" test "$(g_tree)" = "$g_before"
+  rm "$G/home/.local/bin/bosun"
+  check "... and so one bosun init never set up" fails_with "$G_REFUSED" get_dry
+  mv "$G_DIR" "$G/a-checkout"
   ln -s "$G/a-checkout" "$G_DIR"
   check "a link to anything but a version beside bosun.git is refused, not guessed at" fails_with "is a link to $G/a-checkout, which is not a version in $G_VERSIONS" get_dry
   for g_beside in "$G_VERSIONS/bosun.git" "$G_VERSIONS/not-a-version"; do
@@ -5944,7 +5943,7 @@ PY
   ug() { git -C "$U_UP" -c core.hooksPath=/dev/null -c commit.gpgsign=false -c user.name=acme -c user.email=dev@example.com "$@"; }
   ug init -q -b main
   # No housekeeping after upstream's commits: git (2.54 at least) starts a detached repack after a commit of
-  # a few hundred objects, and a local clone (here, update-convert's) hardlinks upstream's objects while that
+  # a few hundred objects, and a local clone (here, an install section's) hardlinks upstream's objects while that
   # repack writes its tmp_pack, and dies ("hardlink different from source"). As lib/knowledge_store.py does.
   ug config maintenance.auto false
   ug config gc.auto 0
@@ -6493,55 +6492,6 @@ HAND
     [ "$1" = 1 ] && cmp -s "$2.plist" "$3/morning.plist" && cmp -s "$2.watchdog.plist" "$3/watchdog.plist" && [ "$4" = "$5" ]' \
     _ "$rc" "$u_jobs" "$U" "$bootouts" "$(u_bootouts)"
 
-  section update-convert "the first update converts a checkout from before versions (fake launchctl)" needs update covers 'get.sh,docs/updating.md,lib/update*.py,libexec/bosun-update,libexec/bosun-ledger'
-  # An install an earlier get.sh made: a checkout of upstream at v1 in the install path, with a ledger
-  # v1 wrote. get.sh adds bosun.git beside it and v2's folder, then runs v2's bosun update --from the
-  # checkout, as here. No tmux session runs, so it is a quiet moment at once.
-  mkdir -p "$WORK/c/share" "$WORK/c/state" "$WORK/c/config"
-  C="$(cd "$WORK/c" && pwd -P)" # as the update names its folders
-  C_LINK="$C/share/bosun"
-  C_VERSIONS="$C/share/bosun-versions"
-  git clone -q "$U_UP" "$C_LINK"
-  git -C "$C_LINK" -c core.hooksPath=/dev/null reset -q --hard "$U_V1_COMMIT"
-  git -C "$C_LINK" config bosun.managed true
-  git -c core.hooksPath=/dev/null clone -q --bare --single-branch --branch main "$U_UP" "$C_VERSIONS/bosun.git"
-  git --git-dir="$C_VERSIONS/bosun.git" config bosun.managed true
-  git --git-dir="$C_VERSIONS/bosun.git" -c core.hooksPath=/dev/null fetch -q origin +refs/heads/main:refs/remotes/origin/main
-  git --git-dir="$C_VERSIONS/bosun.git" -c core.hooksPath=/dev/null worktree add -q --detach "$C_VERSIONS/${U_V2_COMMIT:0:12}" "$U_V2_COMMIT"
-  C_V2="$(cd "$C_VERSIONS/${U_V2_COMMIT:0:12}" && pwd -P)"
-  C_LEGACY="$C_VERSIONS/legacy-${U_V1_COMMIT:0:12}"
-  C_ENV=(env BOSUN_STATE_DIR="$C/state" BOSUN_LOG_DIR="$C/state/logs" BOSUN_CONFIG_DIR="$C/config"
-    BOSUN_SESSION_NAME=convert-test BOSUN_LAUNCHD_LABEL=com.bosun.convert-test BOSUN_SKIP_PREFLIGHT=1
-    BOSUN_KNOWLEDGE_GIT=0 BOSUN_CLAUDE_BIN="$U/quiet-claude")
-  "${C_ENV[@]}" "$C_LINK/bin/bosun" ledger upsert 'review:acme/api#7' --kind review-request --title "Written on v1" >/dev/null
-  c_update() { "${C_ENV[@]}" "$C_V2/bin/bosun" update --from "$C_LINK" "$@" 2>&1; }
-  echo "a stray note" >"$C_LINK/notes.txt"
-  check "a checkout with anything of yours in it is not converted (exit 1), saying what" fails_with "$C_LINK has uncommitted changes" c_update --yes
-  rm "$C_LINK/notes.txt"
-  c_before="$(cd "$C" && find state config -type f ! -name '*.lock' -print0 | LC_ALL=C sort -z | xargs -0 shasum)"
-  out="$(c_update --dry-run)"
-  check "a dry run shows the plan and what converting adds: the quiet moment, its own work stopped, the checkout kept" bash -c '
-    grep -q "ledger: format 1 -> 2" <<<"$1" && grep -q "This first update converts $2, a checkout from before versions" <<<"$1" &&
-      grep -q "keeping the checkout as $3" <<<"$1" && grep -q "A dry run: nothing has changed." <<<"$1"' _ "$out" "$C_LINK" "$C_LEGACY"
-  check "... and changes nothing" bash -c '[ ! -L "$1" ] && [ ! -e "$2" ] && [ "$(cd "$3" && find state config -type f ! -name "*.lock" -print0 | LC_ALL=C sort -z | xargs -0 shasum)" = "$4" ]' \
-    _ "$C_LINK" "$C_LEGACY" "$C" "$c_before"
-  c_update --yes >"$C/convert.out"
-  rc=$?
-  check "--yes converts (exit 0)" u_ended_well "$rc" "$C/convert.out"
-  check "... the install path a link to v2, the checkout swapped out in one step and kept as legacy-<v1>" bash -c '
-    [ -L "$1" ] && [ "$(cd "$1" && pwd -P)" = "$2" ] && [ "$(git -C "$3" rev-parse HEAD)" = "$4" ] && [ -z "$(ls -A "$(dirname "$1")" | grep "^\.bosun\.link-")" ]' \
-    _ "$C_LINK" "$C_V2" "$C_LEGACY" "$U_V1_COMMIT"
-  c_bosun() { "${C_ENV[@]}" "$C_LINK/bin/bosun" "$@" 2>&1; }
-  check "... the ledger v1 wrote migrated to format 2" test "$(jq -r '"\(.version) \(.items["review:acme/api#7"].title)"' "$C/state/ledger.json")" = "2 Written on v1"
-  check "... and valid against its journal" test "$(c_bosun ledger validate --journal)" = "ledger is valid"
-  check "... the record says done, from the legacy folder" jq -e --arg legacy "$C_LEGACY" '.step == "done" and .from_root == $legacy' "$C/state/update.json"
-  check "... and the mark of what it stopped of bosun's own work is gone: the release brought that back" test ! -e "$C/state/update/own-work.json"
-  check "... its jobs loaded on the link" bash -c 'grep -qF "exec \"$2/bin/bosun\" " "$1/Library/LaunchAgents/com.bosun.convert-test.watchdog.plist"' _ "$HOME" "$C_LINK"
-  check "... and it ends with where the checkout is, and the summary" bash -c '
-    grep -qF "The checkout is kept as $2 until the next update" "$1" && grep -q "^bosun updated: ${3:0:7} -> ${4:0:7}" "$1" &&
-      [ "$(tail -1 "$1")" = "Going back: bosun update --back (docs/updating.md#going-back)" ]' _ "$C/convert.out" "$C_LEGACY" "$U_V1_COMMIT" "$U_V2_COMMIT"
-  check "an update after it is one between versions: from v2, up to date" contains "$("${C_ENV[@]}" "$C_V2/bin/bosun" update --from "$C_V2" --dry-run 2>&1)" "bosun is up to date (${U_V2_COMMIT:0:7})"
-
   section update-back "bosun update --back: one step back, what it restores and what it keeps (fake launchctl)" needs update-upstream covers 'tests/sandbox/update_patch.sh,lib/update_back*.py,lib/update.py,lib/update_state.py,lib/update_backups.py,lib/update_summary.py,lib/update_lookup.py,lib/migrations.py,libexec/bosun-update'
   # An install of its own at the origin's v1 (its ledger at format 1, its common.sh without the
   # connector keys), following upstream's branch b-main: at v2 first (the ledger's format 2, and the kept keys
@@ -6751,9 +6701,6 @@ done
 check "what it left in the knowledge base's config" knows_all_of "$WORK/state" "$WORK/kg-config"
 if [ -d "$WORK/u/state" ]; then
   check "what bosun update left in its state and config" knows_all_of "$WORK/u/state" "$WORK/u/config"
-fi
-if [ -d "$WORK/c/state" ]; then
-  check "what the first update, converting, left in its state and config" knows_all_of "$WORK/c/state" "$WORK/c/config"
 fi
 
 always_run "the repository this ran from"
