@@ -95,9 +95,10 @@ own scan still reads them), and queues one `slack` event per new message.
 
 - **It only reads, enforced by Claude Code, not by the prompt:** no built-in tools (`--tools ""`), only the Slack MCP
   server (`--strict-mcp-config` with the Slack plugin's server, or the one in `BOSUN_SLACK_WATCH_MCP_CONFIG`), no
-  settings files (`--setting-sources ""`: no allow rules or hooks of yours), Slack's send, schedule, draft, reaction,
-  canvas and conversation tools removed (`--disallowedTools`), and in `dontAsk` mode every tool not on the read list
-  is denied without a prompt. A call whose tool list shows a write tool is refused. The watcher never posts and never
+  settings files (`--setting-sources ""`: no allow rules or hooks of yours), none of your plugins but the Slack plugin
+  its server comes from (a `false` for each installed plugin in its `--settings`: with no settings files, Claude Code
+  2.1.308 loaded none of them in the Mac VM, but bosun does not rely on that), Slack's send, schedule, draft, reaction, canvas and conversation tools removed
+  (`--disallowedTools`), and in `dontAsk` mode every tool not on the read list is denied without a prompt. A call whose tool list shows a write tool is refused. The watcher never posts and never
   writes the ledger.
 - **Untrusted text stays out:** an event carries the link, the kind, the author and a redacted excerpt of at most
   120 characters, labelled untrusted.

@@ -72,7 +72,12 @@ evidence rather than static framework files.
 2. `lib/learn.py` gives the digest to **one headless Claude** (`claude -p`) with the prompt in
    `orchestrator/learn.md` (versioned in the repo, generic) plus `$BOSUN_CONFIG_DIR/learn.md`.
    It runs with no tools (`--tools ""`), no MCP servers (`--strict-mcp-config`), `dontAsk` and no
-   permission prompts, no session file, a budget cap and a JSON schema for its answer. It returns
+   permission prompts, no session file, a budget cap and a JSON schema for its answer, and none of my
+   Claude Code plugins: its one `--settings` holds its effort and an `enabledPlugins` with a `false` for
+   each plugin a call in its run folder would load (`plugins_claude.headless_settings`, as the
+   orchestrator's empty list; [connectors](connectors.md#plugins)), since a plugin's hook or skill could
+   stop it at a question before its JSON. An `installed_plugins.json` that does not parse fails the run
+   in one line, before the call. It returns
    **findings**: category (stall, mishap, duplicate, repeated correction, gap, prompt gap, setup,
    outreach, memory, ledger hygiene), severity, a stable kebab-case key, a summary, evidence
    (source, ref, time and a verbatim quote of a digest line) and optionally one **proposal**

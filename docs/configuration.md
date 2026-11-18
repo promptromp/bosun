@@ -163,7 +163,10 @@ settings: a plugin those force on loads anyway, and the launch logs it. A name n
 On Codex a list other than `all` switches every plugin off (Codex cannot keep some and not others); an Antigravity
 window with one does not start. `bosun doctor` has a line for each window: all of yours, or none or the ones it
 keeps, how many it switches off, and what it keeps for its connectors. An install from before this setting keeps
-`all` for the orchestrator (`bosun update` writes it to `bosun.env`). More:
+`all` for the orchestrator (`bosun update` writes it to `bosun.env`). Every headless call bosun makes,
+[learning](learning.md)'s analysis, the [Slack watcher](events.md#slack-watcher)'s call, the login check and
+[`bosun alert`](watchdog.md)'s Slack DM, loads none of your plugins, whatever these lists say (the watcher and the
+alert keep the Slack plugin their Slack server may come from). More:
 [design/connectors.md](design/connectors.md#plugins).
 
 ## Running repo sessions on Codex
@@ -299,7 +302,9 @@ It reads, best signal first (`lib/login.py`; the Claude Code formats are in `lib
    makes no request (it answers the same with the network cut off), so a token the server revoked still shows
    `loggedIn: true`. It does catch a missing login (`loggedIn: false`, exit 1).
 3. **A login check request:** one tiny headless request (`claude -p`, a small model, no tools, settings, MCP
-   servers or transcript, but the API key helper below if you use one; about $0.002). `ensure_claude_login` makes
+   servers, plugins of yours or transcript, but the API key helper below if you use one; about $0.002). An
+   `installed_plugins.json` that does not parse makes no request: the check says it could not tell, and why.
+   `ensure_claude_login` makes
    one each morning; the check-in loop makes one while the orchestrator needs a login or the last check failed, at
    most every 30 minutes, to learn when the login works again (a `/login` itself is not written to any
    transcript). A failure before any request (for example settings that could not load without network) gives no

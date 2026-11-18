@@ -1868,7 +1868,7 @@ class Inputs:
     record: Callable[[int], dict[str, Any] | None] = agent_state.record
     alive: Callable[[int], bool] = pid_alive
     auth_status: Callable[[str], claude_state.AuthStatus] = claude_state.auth_status
-    probe: Callable[[str], claude_state.ProbeResult] = claude_state.probe
+    probe: Callable[[str], claude_state.ProbeResult] = login.probe
     send: Callable[[str, str], bool] = bosun_send
     restart: Callable[[str], bool] = bosun_restart
 
@@ -1924,7 +1924,8 @@ def probe_if_due(inputs: Inputs, state: State) -> dict[str, str] | None:
     ):
         return state.limit_probe
     result = inputs.probe(inputs.config.claude_bin)
-    log(f"usage-limit probe: {result.outcome}")
+    why = f" ({result.code})" if result.outcome != claude_state.PROBE_OK and result.code else ""
+    log(f"usage-limit probe: {result.outcome}{why}")
     return {"at": stamp(inputs.now), "outcome": result.outcome}
 
 

@@ -167,14 +167,21 @@ def _why_on(plugin: str, plugin_list: Allowed, needed: Sequence[str], facts: Plu
     return next((reason for reason, holds in reasons if holds), "off")
 
 
+def _grouped(
+    candidates: Iterable[str], plugin_list: Allowed, needed: Sequence[str], facts: PluginFacts
+) -> dict[str, list[str]]:
+    """<candidates> by why each stays on (_why_on), or `off`."""
+    groups: dict[str, list[str]] = {"kept": [], "connectors": [], "site": [], "managed": [], "off": []}
+    for plugin in candidates:
+        groups[_why_on(plugin, plugin_list, needed, facts)].append(plugin)
+    return groups
+
+
 def plan(plugin_list: Allowed, connector_list: Allowed, facts: PluginFacts) -> PluginPlan:
     """Which of the plugins a window would load (loaded) its launch keeps, and which it switches off."""
     if plugin_list.everything:
         return PluginPlan(everything=True)
-    needed = server_plugins(connector_list)
-    groups: dict[str, list[str]] = {"kept": [], "connectors": [], "site": [], "managed": [], "off": []}
-    for plugin in loaded(facts):
-        groups[_why_on(plugin, plugin_list, needed, facts)].append(plugin)
+    groups = _grouped(loaded(facts), plugin_list, server_plugins(connector_list), facts)
     ids = known(facts)
     return PluginPlan(
         kept=tuple(groups["kept"]),
@@ -183,6 +190,23 @@ def plan(plugin_list: Allowed, connector_list: Allowed, facts: PluginFacts) -> P
         off=tuple(groups["off"]),
         managed=tuple(groups["managed"]),
         not_found=tuple(name for name in plugin_list.names if not _allowed_by_any(name, ids)),
+        unread=tuple(facts.unread),
+    )
+
+
+def headless_plan(keep: Allowed, facts: PluginFacts) -> PluginPlan:
+    """bosun's own headless calls (lib/plugins_claude.py's headless_settings): a `false` for every plugin
+    the facts name (known: installed, or mentioned by a settings scope either way), not only those a window
+    would load, as some of those calls read no settings file, so a plugin my settings switch off may be on
+    for them; a `false` for one that is off anyway changes nothing. Left on: the plugins <keep> names, and
+    those managed settings force on; never an `@inline` one. Names of <keep> no plugin has are bosun's own
+    rule finding nothing, so not_found stays empty."""
+    candidates = sorted(plugin for plugin in known(facts) if not plugin.endswith(SESSION_ONLY))
+    groups = _grouped(candidates, keep, (), facts)
+    return PluginPlan(
+        kept=tuple(groups["kept"]),
+        off=tuple(groups["off"]),
+        managed=tuple(groups["managed"]),
         unread=tuple(facts.unread),
     )
 
