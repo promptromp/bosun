@@ -196,6 +196,8 @@ answer_screen() { # <session>
 
 # Claude Code's input box, empty, between its two rules (a line of ─ above and below `❯`): it is past every screen
 # it shows at its start and waits for a prompt. A menu's cursor (`❯ 1. Yes`) has text after it, so it is no box.
+# The first box seen is taken as the end: a Claude Code that drew its box and then a screen of its own over it
+# would leave that screen unanswered; one with a placeholder after `❯` is never seen, and waits out the 90 s.
 input_box_shows() { # <session>
   tmux -L person capture-pane -p -t "$1" 2>/dev/null | python3 -c '
 import sys
@@ -1188,8 +1190,9 @@ offers_nothing_of_bosun() { ! claude_offers | grep -q "bosun:"; }
 
 # After real windows on the real agents: nothing of bosun may stay behind in either of them.
 off_again() {
-  local checkout="$HOME/.local/share/bosun" out="$OUT/uninstall.txt"
+  local checkout="$HOME/.local/share/bosun" out="$OUT/uninstall.txt" ledger
   echo "off again"
+  [ -s "$STATE/ledger.json" ] && ledger=there # none after the install alone: no write has made it yet
   check "with its plugin, Claude Code offers /bosun:chores, so the next check can see one" offers_chores --plugin-dir "$checkout/orchestrator/plugin"
   record_what_stops &
   recording=$!
@@ -1204,7 +1207,7 @@ off_again() {
   runs_from "$checkout-versions"
   check "the install link is gone" bash -c '[ ! -e "$1" ] && [ ! -L "$1" ]' _ "$checkout"
   check "... and bosun-versions, every version in it" test ! -e "$checkout-versions"
-  check "your ledger stays" test -s "$STATE/ledger.json"
+  check "your ledger stays (if there was one)" bash -c '[ -z "$1" ] || [ -s "$2" ]' _ "${ledger:-}" "$STATE/ledger.json"
   check "Claude Code no longer offers /bosun:chores" offers_nothing_of_bosun
   check "... and still works" bash -c 'claude -p "Reply with the single word OK." --model haiku --max-turns 1 --no-session-persistence | grep -q OK'
   check "its settings do not name bosun" bash -c '! grep -qi bosun "$HOME/.claude/settings.json" 2>/dev/null'

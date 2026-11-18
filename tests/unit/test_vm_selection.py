@@ -32,6 +32,18 @@ import vm_select as vs  # noqa: E402
 
 
 ID = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+# What the suites source, whose functions a statement outside every part might call.
+HELPERS = (
+    "tests/sandbox/e2e_lib.sh",
+    "tests/sandbox/e2e_parts.sh",
+    "tests/sandbox/acme_week.sh",
+    "tests/sandbox/live_agy.sh",
+)
+# The calls a suite's top level may make, outside its parts: its guards, the halves and steps it dispatches
+# to, and the parts themselves.
+TOP_LEVEL_CALLS = frozenset({"copied_in", "after_reboot", "other_steps", "part", "parts_end"})
+# A plain assignment, which calls nothing unless it holds a command substitution.
+PLAIN_ASSIGNMENT = re.compile(r"^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=")
 
 
 def repository_files() -> list[str]:
@@ -209,6 +221,17 @@ class ScriptsTest(Guard):
                     ]
                     self.assertEqual(calls, [], f"{name} is called outside `part`: lines {calls}")
 
+    def test_no_statement_outside_the_parts_calls_a_suite_s_step(self) -> None:
+        """What runs at the top level runs in every partial run, unchosen: it may only guard, dispatch and run
+        the parts (TOP_LEVEL_CALLS), wherever it stands in the script, above the parts too."""
+        steps = {f.name for path in HELPERS for f in sl.read((ROOT / path).read_text()).functions}
+        for suite, text in self.texts.items():
+            with self.subTest(suite=suite):
+                script = sl.read(text)
+                names = (steps | {f.name for f in script.functions}) - TOP_LEVEL_CALLS
+                calls = sl.calls(top_level_code(script, text), names)
+                self.assertEqual(sorted(calls), [], f"called outside every part in {vs.SUITES[suite]}")
+
     def test_the_main_body_is_the_part_lines_then_parts_end(self) -> None:
         """What runs outside a part runs in every partial run, unchosen: from the first `part` line on, only
         part lines, then parts_end."""
@@ -224,6 +247,21 @@ class ScriptsTest(Guard):
                 stray = [f"{n}: {line}" for n, line in code if n not in markers][:-1]
                 self.assertEqual(stray, [], f"code between the part lines of {vs.SUITES[suite]}")
                 self.assertEqual(code[-1][1], "parts_end", f"{vs.SUITES[suite]} does not end with parts_end")
+
+
+def top_level_code(script: sl.Script, text: str) -> str:
+    """The code of <script> outside every function, but its part lines (checked apart) and its plain
+    assignments (a string's words are no calls), with the lines a string of theirs runs on over."""
+    markers = {n for n, _ in sel.marker_lines(text, vs.KEYWORD, vs.FLAGS)}
+    kept: list[str] = []
+    skipping = False
+    for number, line in enumerate(script.code_lines, 1):
+        begins = script.starts[number - 1]
+        if begins:
+            skipping = bool(PLAIN_ASSIGNMENT.match(line)) and "$(" not in line and "`" not in line
+        if script.function_at(number) is None and number not in markers and not skipping:
+            kept.append(line)
+    return "\n".join(kept)
 
 
 class AnswersTest(Guard):
@@ -249,7 +287,7 @@ class AnswersTest(Guard):
 
     def test_going_back_runs_run_branch_work_ways_back_and_names_live_update_as_paid(self) -> None:
         got = self.choices(["lib/update_back.py"])
-        self.assertEqual(got["run"].parts, ("install", "releases", "branch"))
+        self.assertEqual(got["run"].parts, ("install", "console-job", "releases", "branch"))
         self.assertEqual(got["work"].parts, ("install", "week", "afternoon-update", "ways-back"))
         self.assertEqual(got["app"].parts, ())
         self.assertEqual((got["live"].parts, got["live"].paid), (("install", "windows", "update"), True))

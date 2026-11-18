@@ -776,6 +776,7 @@ part_settings() {
 # (after_reboot), which tests/sandbox/mac.sh runs once the clone is back from its restart.
 part_reboot() {
   before_the_restart
+  parts_names_known # (the last part line: every one is behind it)
   echo "$passed $failed" >"$RESULTS"
   echo
   echo "the restart follows (tests/sandbox/mac.sh), then tests/app_e2e.sh after-reboot"

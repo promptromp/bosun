@@ -1289,12 +1289,12 @@ folder_two_commits_back() {
 
 an_older_bosun_forgets() {
   echo "  an older bosun (from before the knowledge base's journal), from a checkout of its own, forgets Lee in the same knowledge folder"
-  local installed
+  local installed # the next version, after the afternoon update; else the one installed before the older bosun ran
   installed="$(git -C "$DIR" rev-parse HEAD)"
   check "the older bosun, beside the installed one" git clone -q --branch sandbox-mac-tree "$HOME/repo-base.bundle" "$OUT/older"
   check "Lee asked to be forgotten: the older bosun deletes him" says "deleted the person" "$OUT/older/bin/bosun" kg forget person/lee
   check "... kept as a plain hash, as that bosun keeps it" last_forgotten 'has("hash_kind") | not'
-  check "the installed bosun is as it was" test "$(git -C "$DIR" rev-parse HEAD)" = "$installed"
+  check "the installed bosun is as it was" test "$(git -C "$DIR" rev-parse HEAD)" = "${B_COMMIT:-$installed}"
   validate_notes
   kg_says "the next write deletes him from the journal too, and says so" "deleted on request are gone" \
     propose feature/csv-export caveat --value "After the older bosun's forget: the export check passed" --source "ledger:$T_JSON"

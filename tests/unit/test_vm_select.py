@@ -418,6 +418,11 @@ class PartsTest(unittest.TestCase):
         self.assertIn("partial run, not the whole suite: one three", done.stdout)
         self.assertEqual((done.stdout.splitlines()[-1], done.returncode), ("2 passed, 0 failed", 0))
 
+    def test_a_part_named_that_the_suite_does_not_have_fails_the_run(self) -> None:
+        done = run_parts(E2E_PARTS="one,nosuch")
+        self.assertIn("FAIL  E2E_PARTS names nosuch, which is no part of this suite", done.stdout)
+        self.assertEqual((done.stdout.splitlines()[-1], done.returncode), ("1 passed, 1 failed", 1))
+
     def test_exitfirst_starts_no_part_after_a_failure_and_names_what_it_left_out(self) -> None:
         done = run_parts(E2E_EXITFIRST="1")
         self.assertIn("ran two-words", done.stdout)
