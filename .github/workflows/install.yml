@@ -2,11 +2,12 @@
 # piped installer, launchd jobs that really fire, the real pmset and plutil, and an update from a release to the
 # next, from an origin with a release in it, as tests/sandbox/mac.sh makes it), and the wizard through a real
 # terminal in the Docker sandbox (tests/sandbox.sh), which would otherwise only run by hand and rot. On a pull
-# request, `changes` asks tools/vm_select.py which parts of the suite the change reaches (the parts' `covers` and
-# tests/vm_selection.txt, as `tests/sandbox.sh mac run --changed` does) and the runner runs those; the change that
-# reaches none starts no runner. Weekly and by hand, the whole suite, to notice when a new macOS or Homebrew breaks
-# it. Not required checks: they run only when the install could have changed, and a required check that does not
-# run blocks a merge.
+# request, `install-select` asks tools/vm_select.py which parts of the suite the change reaches (the parts' `covers`
+# and tests/vm_selection.txt, as `tests/sandbox.sh mac run --changed` does) and the runner runs those; the change
+# that reaches none starts no runner. The Docker sandbox runs when the suite does, or its own files changed. Weekly
+# and by hand, both whole, to notice when a new macOS or Homebrew breaks them. Not required checks: they run only
+# when the install could have changed, and a required check that does not run blocks a merge. (Not named `changes`:
+# that is ci.yml's job, a required check, and a second check of the same name would muddle which one counts.)
 name: Install
 
 on:
@@ -23,12 +24,15 @@ jobs:
   # Which parts of tests/install_e2e.sh the pull request reaches: `run` is false when it reaches none, `parts` the
   # ones to run (with what they need), empty for the whole suite. Not a pull request: the whole suite. Only an
   # answer from a run that succeeded narrows it: a failed run, or no answer line, runs the whole suite (fail closed).
-  changes:
+  # `sandbox`: the Docker sandbox's first day runs when the suite does, or when its own files changed (which no part
+  # of the Mac suite covers).
+  install-select:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       run: ${{ steps.select.outputs.run }}
       parts: ${{ steps.select.outputs.parts }}
+      sandbox: ${{ steps.sandbox.outputs.sandbox }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -58,10 +62,38 @@ jobs:
               ;;
             *) printf 'run=true\nparts=\n' >>"$GITHUB_OUTPUT" ;;
           esac
+      - name: Does the change reach the Docker sandbox's first day?
+        id: sandbox
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          RUN: ${{ steps.select.outputs.run }}
+        run: |
+          set -u
+          if [ "$EVENT" != pull_request ] || [ "$RUN" = true ]; then
+            echo "sandbox=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! since=$(git merge-base "$BASE" HEAD) || ! files=$(git diff --name-only --no-color --no-renames "$since" HEAD); then
+            echo "No merge base or no diff: the sandbox runs."
+            echo "sandbox=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          sandbox=false
+          while IFS= read -r file; do
+            case $file in
+              tests/sandbox.sh | tests/sandbox/Dockerfile | tests/sandbox/fresh_user.sh | tests/sandbox/world.sh | tests/sandbox/inside.sh | tests/sandbox/drive.py | tests/sandbox/macos/*)
+                echo "Changed: $file"
+                sandbox=true
+                ;;
+              *) ;;
+            esac
+          done <<<"$files"
+          echo "sandbox=$sandbox" >>"$GITHUB_OUTPUT"
 
   clean-mac:
-    needs: changes
-    if: ${{ needs.changes.outputs.run == 'true' }}
+    needs: install-select
+    if: ${{ needs.install-select.outputs.run == 'true' }}
     runs-on: macos-latest
     timeout-minutes: 30
     env:
@@ -81,13 +113,13 @@ jobs:
           GH_TOKEN: ${{ github.token }} # so `gh auth status` passes, as for someone logged in
           HOMEBREW_NO_AUTO_UPDATE: "1"
           HOMEBREW_NO_INSTALL_CLEANUP: "1"
-          E2E_PARTS: ${{ needs.changes.outputs.parts }} # empty: the whole suite
+          E2E_PARTS: ${{ needs.install-select.outputs.parts }} # empty: the whole suite
 
   # The first day in the Docker sandbox walks the same install (the wizard, a morning, re-runs, an uninstall): it
-  # runs when the install suite does.
+  # runs when the install suite does, or when its own files changed.
   sandbox:
-    needs: changes
-    if: ${{ needs.changes.outputs.run == 'true' }}
+    needs: install-select
+    if: ${{ needs.install-select.outputs.sandbox == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
