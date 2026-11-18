@@ -163,7 +163,9 @@ settings: a plugin those force on loads anyway, and the launch logs it. A name n
 On Codex a list other than `all` switches every plugin off (Codex cannot keep some and not others); an Antigravity
 window with one does not start. `bosun doctor` has a line for each window: all of yours, or none or the ones it
 keeps, how many it switches off, and what it keeps for its connectors. An install from before this setting keeps
-`all` for the orchestrator (`bosun update` writes it to `bosun.env`). More:
+`all` for the orchestrator (`bosun update` writes it to `bosun.env`). bosun's own headless calls,
+[learning](learning.md)'s analysis and the [Slack watcher](events.md#slack-watcher)'s call, load none of your
+plugins, whatever these lists say (the watcher keeps the Slack plugin its server comes from). More:
 [design/connectors.md](design/connectors.md#plugins).
 
 ## Running repo sessions on Codex

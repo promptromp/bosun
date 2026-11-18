@@ -22,7 +22,8 @@
 #             a window with BOSUN_CONNECTORS reaches only the local test servers it names, also resumed;
 #             on Claude Code a repo whose own settings allow more keeps it from starting until the list
 #             names that, and whether `claude mcp list` writes ~/.claude.json; then plugins: a local plugin
-#             with a SessionStart hook runs in a repo window's start and not in the orchestrator's
+#             with a SessionStart hook runs in a repo window's start and in a plain `claude -p`, and not in the
+#             orchestrator's, nor in a real learning analysis or the Slack watcher's call (a local server)
 #             On Claude Code, right after the hand-over (before the update, whose end uninstalls bosun, and before the
 #             connectors, whose list would limit the windows): the ontology end to end, below
 #   ontology  claude only: the install and the real windows, then the ontology step alone (`go` runs it too)
@@ -926,8 +927,54 @@ orchestrator_restarted() {
   bosun refresh orchestrator >>"$OUT/plugin-refresh.txt" 2>&1
   check "... and it starts again" wait_for 120 idle orchestrator
 }
+# bosun's own headless calls load none of my plugins either, whatever the lists say. Each runs in a folder of its own,
+# and the hook's lines say where each session started: so a line under that folder is a call of it that loaded the
+# plugin, and no line one that did not. First a plain `claude -p` of mine, which loads it, so that no line from
+# bosun's calls means they kept it off, not that a headless call runs no hook.
+hook_ran_under() { # <folder>: a line of the hook names a session started in it or below it (as given, or resolved)
+  local resolved
+  resolved="$(cd "$1" 2>/dev/null && pwd -P)"
+  awk -v given="$1" -v resolved="${resolved:-$1}" '
+    { cwd = substr($0, index($0, " ") + 1) }
+    cwd == given || cwd == resolved || index(cwd, given "/") == 1 || index(cwd, resolved "/") == 1 { found = 1 }
+    END { exit !found }' "$PLUGIN_STARTS" 2>/dev/null
+}
+no_hook_under() { # <folder>: the hook ran in no session started in it or below it; else its lines
+  ! hook_ran_under "$1" || {
+    echo "the hook's lines: $(tr "\n" " " <"$PLUGIN_STARTS")"
+    return 1
+  }
+}
+no_hook_in_watch_calls() { # the hook ran in no session started in a folder of a watcher's dry run (slack-watch-dry-*)
+  ! awk '{ cwd = substr($0, index($0, " ") + 1) } cwd ~ /\/slack-watch-dry-[^\/]*$/ { found = 1 } END { exit !found }' \
+    "$PLUGIN_STARTS" 2>/dev/null || {
+    echo "the hook's lines: $(tr "\n" " " <"$PLUGIN_STARTS")"
+    return 1
+  }
+}
+# A real learning analysis: a dry run (no proposals, no state) on haiku over the last half hour, its digest capped
+# small, about a cent. The Slack watcher's call against a local stdio server standing for Slack's (BOSUN_SLACK_WATCH_
+# MCP_CONFIG, a dry run that queues nothing): its server's `watch initialize` says the call started; whether it found
+# anything is only a note, as there is no Slack to search.
+headless_calls_load_none() {
+  local plain="$OUT/headless-plain" learn_out="$OUT/learn-headless" watch_mcp="$OUT/watch-mcp.json"
+  mkdir -p "$plain"
+  (cd "$plain" && claude -p "Reply with the single word OK." --model haiku --max-turns 1 --no-session-persistence) >"$OUT/headless-plain.txt" 2>&1
+  check "a plain headless claude -p of mine runs probe-hook's hook, in its folder" wait_for 30 hook_ran_under "$plain"
+  check "a real learning analysis runs while probe-hook is on (a dry run on haiku, the last 30 minutes)" bash -c '
+    BOSUN_LEARN_MODEL=haiku BOSUN_LEARN_MAX_DIGEST_KB=40 bosun learn --dry-run --since 30m --out "$1" >"$2" 2>&1 &&
+      grep -q "dry run: [0-9]* finding(s)" "$2" || { tail -5 "$2"; exit 1; }' _ "$learn_out" "$OUT/learn-headless.txt"
+  check "... and the plugin's hook ran in none of its calls" no_hook_under "$learn_out"
+  jq -n --arg python "$(command -v python3)" --argjson args "$(probe_args watch)" \
+    '{mcpServers: {"probe-watch": {command: $python, args: $args}}}' >"$watch_mcp"
+  : >"$PROBE_LOG"
+  BOSUN_SLACK_WATCH_MCP_CONFIG="$watch_mcp" bosun slack-watch --dry-run >"$OUT/slack-watch-dry.txt" 2>&1
+  echo "  note  the watcher's dry run said: $(tail -4 "$OUT/slack-watch-dry.txt" | tr '\n' ' ' | cut -c1-300)"
+  check "the Slack watcher's call starts, against a local server standing for Slack's" started_only watch
+  check "... and the plugin's hook ran in none of its calls" no_hook_in_watch_calls
+}
 plugins_of_mine() {
-  echo "plugins: repo windows keep mine, the orchestrator loads none of them"
+  echo "plugins: repo windows keep mine, the orchestrator and bosun's headless calls load none of them"
   PLUGIN_MARKET="$HOME/probe-claude-market" PLUGIN_STARTS="$OUT/plugin-starts.log" PLUGIN_ID="probe-hook@probe-local"
   check "Claude Code installs a local plugin, probe-hook, enabled in my user settings" a_claude_plugin
   : >"$PLUGIN_STARTS"
@@ -942,6 +989,7 @@ plugins_of_mine() {
   check "doctor's line: the orchestrator loads none of mine" grep -qF "orchestrator: plugins: none of yours (" "$OUT/plugin-doctor.txt"
   check "doctor's line: the probe window loads all of mine" grep -q "$PROBE_WINDOW: plugins: all of yours" "$OUT/plugin-doctor.txt"
   grep ": plugins: " "$OUT/plugin-doctor.txt" | sed 's/^/  note  doctor: /'
+  headless_calls_load_none
   claude plugin uninstall "$PLUGIN_ID" >>"$OUT/claude-plugin-add.txt" 2>&1 || echo "  note  could not uninstall $PLUGIN_ID"
   claude plugin marketplace remove probe-local >>"$OUT/claude-plugin-add.txt" 2>&1 || echo "  note  could not remove the marketplace probe-local"
   rm -rf "$PLUGIN_MARKET"

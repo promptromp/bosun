@@ -30,8 +30,9 @@ import update_gate  # noqa: E402
 
 
 FAKE_CLAUDE = """#!/usr/bin/env python3
-import os, sys
+import json, os, sys
 sys.stdin.read()
+open(os.environ["FAKE_LEARN_ARGS"], "w").write(json.dumps(sys.argv[1:]))
 print(open(os.environ["FAKE_LEARN_RESULT"]).read())
 sys.exit(int(os.environ.get("FAKE_LEARN_EXIT", "0")))
 """
@@ -86,15 +87,23 @@ class LearnCase(unittest.TestCase):
         fake.write_text(FAKE_CLAUDE)
         fake.chmod(0o755)
         self.result_file = self.base / "result.json"
+        self.args_file = self.base / "claude-args.json"  # what the fake was called with
         env = {
             **self.world.env(),
             "BOSUN_CLAUDE_BIN": str(fake),
             "BOSUN_LEARN_ENABLED": "1",
             "FAKE_LEARN_RESULT": str(self.result_file),
+            "FAKE_LEARN_ARGS": str(self.args_file),
         }
+        # Claude Code's own files in a scratch home, never mine: the plugins the analysis switches off
+        self.home_settings = self.base / "home" / ".claude" / "settings.json"
+        self.installed = self.base / "home" / ".claude" / "plugins" / "installed_plugins.json"
         for patch in (
             mock.patch.dict(os.environ, env),
             mock.patch.object(claude_state, "PROJECTS_DIR", self.world.projects),
+            mock.patch.object(claude_state, "SETTINGS_FILE", self.home_settings),
+            mock.patch.object(claude_state, "INSTALLED_PLUGINS", self.installed),
+            mock.patch.object(claude_state, "MANAGED_DIR", self.base / "managed"),
         ):
             patch.start()
             self.addCleanup(patch.stop)
@@ -271,7 +280,7 @@ class RunTest(LearnCase):
         self.assertEqual(learn.estimated_cost("a-new-model", 1000), learn.estimated_cost("opus", 1000))
 
     def test_the_claude_command_has_no_tools_mcp_or_prompts(self) -> None:
-        command = learn.claude_command(self.config, "prompt")
+        command = learn.claude_command(self.config, "prompt", {"effortLevel": "medium"})
         for flags in (
             ["--tools", ""],
             ["--strict-mcp-config"],
@@ -281,6 +290,52 @@ class RunTest(LearnCase):
             joined = " ".join(command)
             self.assertIn(" ".join(flags), joined)
         self.assertIn("--json-schema", command)
+
+    def analysis_settings(self) -> dict[str, Any]:
+        """The one --settings the analysis was called with (the fake recorded its arguments)."""
+        args = json.loads(self.args_file.read_text())
+        self.assertEqual(args.count("--settings"), 1, args)
+        settings: dict[str, Any] = json.loads(args[args.index("--settings") + 1])
+        return settings
+
+    def test_the_analysis_loads_none_of_my_plugins(self) -> None:
+        """A `false`, beside its effort, for a plugin my settings enable and for one installed that no scope
+        names, so that no hook or skill of mine stops it at a question."""
+        self.home_settings.parent.mkdir(parents=True)
+        self.home_settings.write_text(json.dumps({"enabledPlugins": {"probe@local": True}}))
+        self.installed.parent.mkdir(parents=True)
+        self.installed.write_text(json.dumps({"plugins": {"acme-helper@acme-market": [{"scope": "user"}]}}))
+        self.analysis_returns(STALL)
+        code, out = self.run_learn("--dry-run", "--out", str(self.base / "out"))
+        self.assertEqual(code, 0, out)
+        self.assertEqual(
+            self.analysis_settings(),
+            {
+                "effortLevel": "medium",
+                "enabledPlugins": {"acme-helper@acme-market": False, "probe@local": False},
+            },
+        )
+
+    def test_with_no_plugins_its_table_is_empty(self) -> None:
+        self.analysis_returns(STALL)
+        self.assertEqual(self.run_learn("--dry-run", "--out", str(self.base / "out"))[0], 0)
+        self.assertEqual(self.analysis_settings(), {"effortLevel": "medium", "enabledPlugins": {}})
+
+    def test_an_installed_plugins_file_that_does_not_parse_fails_the_run_in_one_line(self) -> None:
+        self.installed.parent.mkdir(parents=True)
+        self.installed.write_text("{not json")
+        self.analysis_returns(STALL)
+        code, out = self.run_learn()
+        self.assertEqual(code, 1)
+        error = (
+            f"the analysis was not started: {self.installed} does not parse, so bosun cannot tell which "
+            "plugins to switch off"
+        )
+        self.assertEqual(out.splitlines()[-1], f"learn: {error}")
+        self.assertIn(f"[learn] ERROR: {error}", out)  # and in the learn log
+        self.assertFalse(self.args_file.exists(), "Claude was called")
+        run = self.state().runs[-1]  # what the watchdog's learning check says
+        self.assertEqual((run["outcome"], run["error"]), ("failed", error))
 
 
 class UpdateGateTest(LearnCase):

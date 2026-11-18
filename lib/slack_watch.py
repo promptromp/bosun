@@ -6,12 +6,13 @@ Usage: slack_watch.py run [--scheduled] [--dry-run]    (run it as `bosun slack-w
        slack_watch.py status
 
 One run is one headless `claude -p` with a small model (BOSUN_SLACK_WATCH_MODEL) that may use
-only Slack's read tools: no built-in tools, no other MCP server, no settings files, the write tools
-removed and anything not allowed denied without a prompt. It lists the messages since the last
-watch (with a few minutes of overlap) that @-mention or name me, DMs and group DMs to me, and
-replies in threads I started or replied in, as strict JSON: permalink, channel, ts, thread_ts,
-author, kind and a short excerpt. Slack text is untrusted, so the excerpt is all of it that is
-kept: redacted, at most EXCERPT_LENGTH characters, labelled untrusted in the event.
+only Slack's read tools: no built-in tools, no other MCP server, no settings files, none of my
+plugins but the Slack plugin its server comes from, the write tools removed and anything not allowed
+denied without a prompt. It lists the messages since the last watch (with a few minutes of overlap)
+that @-mention or name me, DMs and group DMs to me, and replies in threads I started or replied in,
+as strict JSON: permalink, channel, ts, thread_ts, author, kind and a short excerpt. Slack text is
+untrusted, so the excerpt is all of it that is kept: redacted, at most EXCERPT_LENGTH characters,
+labelled untrusted in the event.
 
 Code, not the model, then checks every entry, drops messages the ledger has processed (`ledger
 seen`, matched by channel and ts), messages in the conversation of open outreach (step 5 of the
@@ -53,7 +54,9 @@ import claude_state
 import event_model
 import events
 import ledger
+import plugins_claude
 import redact
+from connectors import ConnectorsError
 
 
 PROMPT_FILE = Path(__file__).resolve().parent.parent / "orchestrator" / "slack-watch.md"
@@ -399,14 +402,30 @@ def mcp_document(config: Config) -> dict[str, Any]:
     return document
 
 
-def claude_command(config: Config, mcp_file: Path, prefix: str, prompt: str) -> list[str]:
+def call_settings(config: Config, workdir: Path) -> dict[str, Any]:
+    """The watch call's one --settings: the API key helper it signs in with, if any
+    (claude_state.credential_setting), and none of my plugins (a `false` for each that a call in <workdir>
+    would load: plugins_claude.headless_settings), but the Slack plugin when the server is its own. No
+    settings file names a plugin for it, but an installed plugin can be on without one. WatchError when
+    installed_plugins.json does not parse."""
+    keep = () if config.mcp_config else (claude_state.SLACK_PLUGIN,)
+    try:
+        plugin_settings = plugins_claude.headless_settings(workdir, keep, who="the watch call")
+    except ConnectorsError as exc:
+        raise WatchError(f"the watch call was not started: {exc}") from exc
+    return {**claude_state.credential_setting(), **plugin_settings}
+
+
+def claude_command(
+    config: Config, mcp_file: Path, prefix: str, prompt: str, settings: Mapping[str, Any]
+) -> list[str]:
     """One headless Claude that may use only Slack's read tools: no built-in tools, only the Slack
-    MCP server, no settings files (so no allow rules or hooks of mine) but the API key helper it signs in
-    with, if any (claude_state.credential_settings), the write tools removed, and anything else denied
+    MCP server, no settings files (so no allow rules or hooks of mine) but <settings> (call_settings: the
+    API key helper it signs in with, none of my plugins), the write tools removed, and anything else denied
     without a prompt."""
     return [
         config.claude_bin, "-p", "--model", config.model,
-        "--setting-sources", "", *claude_state.credential_settings(),
+        "--setting-sources", "", "--settings", json.dumps(settings),
         "--strict-mcp-config", "--mcp-config", str(mcp_file), "--tools", "",
         "--allowedTools", *(prefix + tool for tool in READ_TOOLS),
         "--disallowedTools", *(prefix + tool for tool in DENIED_TOOLS),
@@ -521,6 +540,7 @@ def tool_problem(tools: list[str], prefix: str) -> str | None:
 
 def call(config: Config, document: dict[str, Any], since: datetime, workdir: Path) -> CallResult:
     """Run the watch call in <workdir> (it holds the MCP config file, nothing else)."""
+    settings = call_settings(config, workdir)  # first: it may refuse the call
     mcp_file = workdir / MCP_FILE
     mcp_file.write_text(json.dumps(document))
     prefix = server_prefix(next(iter(document["mcpServers"])))
@@ -528,7 +548,7 @@ def call(config: Config, document: dict[str, Any], since: datetime, workdir: Pat
         f"Scan start: {iso(since)} (Unix time {int(since.timestamp())}). "
         f"Now: {iso(datetime.now(UTC))}. List the new Slack activity for me since the scan start."
     )
-    command = claude_command(config, mcp_file, prefix, prompt_text())
+    command = claude_command(config, mcp_file, prefix, prompt_text(), settings)
     try:
         done = subprocess.run(
             command,

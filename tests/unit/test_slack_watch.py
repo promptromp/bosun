@@ -48,6 +48,8 @@ SLACK = "https://acme.slack.com/archives/"
 CHANNEL = "C0000000001"
 DM = "D0000000002"
 PREFIX = "mcp__plugin_slack_slack__"
+PLUGIN = "probe@local"  # a plugin of mine
+SLACK_PLUGIN = "slack@acme-market"  # the plugin the Slack server comes from
 SERVER = {"mcpServers": {"plugin:slack:slack": {"type": "http", "url": "https://mcp.example.com/mcp"}}}
 
 
@@ -95,6 +97,17 @@ class WatchTestCase(unittest.TestCase):
             mcp_config=str(mcp),
         )
         ledger.configure(self.state_dir)
+        # Claude Code's own files in a scratch home, never mine: the plugins the call switches off
+        self.home_settings = self.state_dir / "home" / ".claude" / "settings.json"
+        self.installed = self.state_dir / "home" / ".claude" / "plugins" / "installed_plugins.json"
+        for name, value in (
+            ("SETTINGS_FILE", self.home_settings),
+            ("INSTALLED_PLUGINS", self.installed),
+            ("MANAGED_DIR", self.state_dir / "managed"),
+        ):
+            patch = unittest.mock.patch.object(claude_state, name, value)
+            patch.start()
+            self.addCleanup(patch.stop)
         self.calls: list[datetime] = []
         tools = [PREFIX + t for t in slack_watch.READ_TOOLS]
         self.reply: CallResult | Exception = CallResult(tools, result(), cost=0.04)
@@ -270,9 +283,25 @@ class FailureTest(WatchTestCase):
                 self.assertEqual(slack_watch.main(["run", "--scheduled"]), 1)
 
 
+def write(path: Path, value: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value))
+
+
 class CommandTest(WatchTestCase):
+    def command(self, config: Config | None = None) -> list[str]:
+        config = config or self.config
+        settings = slack_watch.call_settings(config, self.state_dir)
+        return slack_watch.claude_command(config, self.state_dir / "mcp.json", PREFIX, "prompt", settings)
+
+    def call_settings(self, command: list[str]) -> dict[str, Any]:
+        """The command's one --settings."""
+        self.assertEqual(command.count("--settings"), 1, command)
+        settings: dict[str, Any] = json.loads(command[command.index("--settings") + 1])
+        return settings
+
     def test_the_call_can_only_read_slack(self) -> None:
-        command = slack_watch.claude_command(self.config, self.state_dir / "mcp.json", PREFIX, "prompt")
+        command = self.command()
         joined = " ".join(command)
         for flag in ("--strict-mcp-config", "--permission-mode dontAsk", "--permission-prompts none"):
             self.assertIn(flag, joined)
@@ -282,16 +311,47 @@ class CommandTest(WatchTestCase):
         self.assertEqual(allowed, [PREFIX + t for t in slack_watch.READ_TOOLS])
         self.assertIn(PREFIX + "slack_send_message", command)
         self.assertNotIn("Bash", joined)
-        self.assertNotIn("--settings", command)
+        self.assertEqual(self.call_settings(command), {"enabledPlugins": {}}, "no key helper, no plugins")
 
     def test_it_keeps_the_api_key_helper_it_signs_in_with(self) -> None:
         # a command that prints a key, not a key
         helper = {"apiKeyHelper": "cat ~/.key"}  # pragma: allowlist secret gitleaks:allow
-        settings = self.state_dir / "settings.json"
-        settings.write_text(json.dumps({**helper, "permissions": {"allow": ["Bash"]}}))
-        with unittest.mock.patch.object(claude_state, "SETTINGS_FILE", settings):
-            command = slack_watch.claude_command(self.config, self.state_dir / "mcp.json", PREFIX, "prompt")
-        self.assertEqual(json.loads(command[command.index("--settings") + 1]), helper)
+        write(
+            self.home_settings,
+            {**helper, "permissions": {"allow": ["Bash"]}, "enabledPlugins": {PLUGIN: True}},
+        )
+        self.assertEqual(self.call_settings(self.command()), {**helper, "enabledPlugins": {PLUGIN: False}})
+        self.assertEqual(
+            claude_state.credential_settings(), ["--settings", json.dumps(helper)], "the login check's"
+        )
+
+    def test_it_loads_none_of_my_plugins_but_the_slack_plugin_its_server_comes_from(self) -> None:
+        """A `false` for a plugin my settings enable and for one installed that no scope names (no settings
+        file is read, but an installed plugin can be on without one); the Slack plugin stays on when the
+        server is its own, and goes with the rest when a site's MCP config holds it."""
+        write(self.home_settings, {"enabledPlugins": {PLUGIN: True}})
+        write(self.installed, {"plugins": {"acme-helper@acme-market": [], SLACK_PLUGIN: []}})
+        site = self.call_settings(self.command())
+        self.assertEqual(
+            site, {"enabledPlugins": {"acme-helper@acme-market": False, PLUGIN: False, SLACK_PLUGIN: False}}
+        )
+        own = self.call_settings(self.command(replace(self.config, mcp_config="")))
+        self.assertEqual(own, {"enabledPlugins": {"acme-helper@acme-market": False, PLUGIN: False}})
+
+    def test_an_installed_plugins_file_that_does_not_parse_stops_the_call_in_one_line(self) -> None:
+        self.installed.parent.mkdir(parents=True)
+        self.installed.write_text("{not json")
+        with (
+            unittest.mock.patch("subprocess.run") as run,
+            self.assertRaises(slack_watch.WatchError) as caught,
+        ):
+            slack_watch.call(self.config, SERVER, NOW, self.state_dir)
+        self.assertEqual(
+            str(caught.exception),
+            f"the watch call was not started: {self.installed} does not parse, so bosun cannot tell which "
+            "plugins to switch off",
+        )
+        run.assert_not_called()
 
     def test_a_call_that_could_see_a_write_tool_or_another_tool_is_refused(self) -> None:
         self.assertIsNone(

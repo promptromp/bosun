@@ -12,10 +12,11 @@ Run it as `bosun learn`, which passes the settings in the environment and the wi
 (`bosun sessions --json`) in a file (to a run, and to apply, which finds a memory note's folder).
 
 A run has two stages. lib/learn_digest.py turns the window's sessions, ledger, logs and watchdog
-alerts into a compact, redacted digest. Then one headless Claude, with no tools and no MCP servers,
-reads it with the prompt in orchestrator/learn.md (plus $BOSUN_CONFIG_DIR/learn.md) and returns
-findings as JSON: each with a category, a stable key, evidence quoted from the digest and, if
-something should change, one proposal. Findings whose evidence is not in the digest are dropped.
+alerts into a compact, redacted digest. Then one headless Claude, with no tools, no MCP servers and
+none of my plugins (whose hooks or skills could stop it at a question), reads it with the prompt in
+orchestrator/learn.md (plus $BOSUN_CONFIG_DIR/learn.md) and returns findings as JSON: each with a
+category, a stable key, evidence quoted from the digest and, if something should change, one
+proposal. Findings whose evidence is not in the digest are dropped.
 
 Nothing is applied on its own. New proposals (at most BOSUN_LEARN_MAX_PROPOSALS a run) become
 `learn:<YYYY-MM-DD>/<id>` ledger items (the UTC day; the id is hashed from the finding's key and
@@ -64,8 +65,10 @@ import agent_changes
 import claude_state
 import learn_digest
 import ledger
+import plugins_claude
 import update_gate
 from change_log import canonical, mint_suffix
+from connectors import ConnectorsError
 from learn_digest import Window
 
 
@@ -545,11 +548,23 @@ def prompt_text(config: Config) -> str:
     return prompt + "\n"
 
 
-def claude_command(config: Config, prompt: str) -> list[str]:
-    """One headless Claude with no tools, no MCP servers and no permission prompts."""
+def call_settings(config: Config, run_dir: Path) -> dict[str, Any]:
+    """The analysis call's one --settings: its effort, and none of my plugins (a `false` for each that a call
+    in <run_dir> would load: plugins_claude.headless_settings), so that no hook or skill of mine can stop it
+    at a question or before its JSON. LearnError when installed_plugins.json does not parse."""
+    try:
+        plugin_settings = plugins_claude.headless_settings(run_dir, who="the analysis")
+    except ConnectorsError as exc:
+        raise LearnError(f"the analysis was not started: {exc}") from exc
+    return {"effortLevel": config.effort, **plugin_settings}
+
+
+def claude_command(config: Config, prompt: str, settings: Mapping[str, Any]) -> list[str]:
+    """One headless Claude with no tools, no MCP servers, no permission prompts and <settings>
+    (call_settings: its effort, none of my plugins)."""
     return [
         config.claude_bin, "-p", "--model", config.model,
-        "--settings", json.dumps({"effortLevel": config.effort}),
+        "--settings", json.dumps(settings),
         "--strict-mcp-config", "--tools", "", "--permission-mode", "dontAsk",
         "--permission-prompts", "none", "--no-session-persistence", "--output-format", "json",
         "--max-budget-usd", f"{config.max_budget_usd:g}", "--json-schema", json.dumps(SCHEMA),
@@ -590,10 +605,11 @@ def analyze(config: Config, digest: str, run_dir: Path) -> dict[str, Any]:
     """Run the analysis; returns Claude's JSON result (structured_output holds the findings)."""
     prompt = prompt_text(config)
     (run_dir / "prompt.md").write_text(prompt)
+    command = claude_command(config, prompt, call_settings(config, run_dir))
     message = digest_message(digest)
     try:
         done = subprocess.run(
-            claude_command(config, prompt),
+            command,
             input=message,
             capture_output=True,
             text=True,

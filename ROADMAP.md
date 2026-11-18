@@ -268,9 +268,7 @@ watchdog has); check whether an applied change stops its finding from recurring 
 findings that came back, not yet against when their fix was applied); sandboxed on-demand reads of
 transcript excerpts; proposals as diffs to the generic prompts (reviewed as PRs); a second harness
 adapter, for Codex windows. Open: whether `learn apply` should also need a permission prompt once
-phone approvals are verified; and the analysis call, which still loads every Claude Code plugin of mine (the
-Slack watcher's loads no settings files, and the orchestrator loads none of my plugins since 2026-11-17,
-`BOSUN_ORCHESTRATOR_PLUGINS`).
+phone approvals are verified.
 
 ### 6. Sync and sharing
 
@@ -362,7 +360,9 @@ Code window loaded all of my plugins, their hooks, skills and commands, so one w
 reply could stop the orchestrator's unattended chores at a question. Now the orchestrator loads none of mine unless
 `BOSUN_ORCHESTRATOR_PLUGINS` names them (an older install keeps `all`), repo windows keep them (`BOSUN_PLUGINS`,
 `plugins:` per window), a plugin a window's connectors need stays on, and `bosun doctor` says what each loads. Run
-in the macOS VM with real Claude Code and a local plugin's hook. Design note:
+in the macOS VM with real Claude Code and a local plugin's hook. bosun's own headless calls, learning's analysis and
+the Slack watcher's call, load none of my plugins either, whatever the lists say (the watcher keeps the Slack plugin
+its server comes from; 2026-11-18). Design note:
 [docs/design/connectors.md](docs/design/connectors.md).
 
 **Done (2026-11-10): a hardening round.** Gaps an inventory of the adversarial cases turned up, each now

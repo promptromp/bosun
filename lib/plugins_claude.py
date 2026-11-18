@@ -4,8 +4,9 @@ sessions.yml) turned into the `enabledPlugins` of its launch settings: a `false`
 settings scopes would load that the list leaves out, unless its connectors need it or the orchestrator's own
 settings file enables it. Claude Code ranks the launch's `--settings` above my local, project and user
 settings, merging `enabledPlugins` key by key, so that `false` wins; only managed settings rank above it. The
-plan is lib/plugins.py's; what Claude Code's files say, lib/claude_state.py's. Design:
-docs/design/connectors.md, "Plugins".
+plan is lib/plugins.py's; what Claude Code's files say, lib/claude_state.py's. bosun's own headless calls
+(learning's analysis, the Slack watcher's) take the empty list's settings from headless_settings, whatever the
+lists say. Design: docs/design/connectors.md, "Plugins".
 
 Usage: plugins_claude.py --plugins <value> --connectors <value> --cwd <dir> [--settings-file <file>]
            Claude Code's settings, always a JSON object: {} for `all`, else {"enabledPlugins": {...}} with a
@@ -26,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -74,6 +76,19 @@ def launch_settings(plan: plugins.PluginPlan) -> dict[str, Any]:
     return {claude_state.ENABLED_PLUGINS: dict.fromkeys(plan.off, False)}
 
 
+def headless_settings(cwd: Path, keep: Sequence[str] = (), who: str = "this call") -> dict[str, Any]:
+    """Claude Code's settings for one of bosun's own headless calls (learning's analysis, the Slack
+    watcher's), which load none of my plugins: an `enabledPlugins` with a `false` for each plugin a call
+    started in <cwd> would load, but those <keep> names (a plugin id, or a bare name from any marketplace):
+    the empty list's plan, with no connectors; an empty one when there is none. A plugin managed settings
+    force on stays on, as no setting can switch it off; that, a name of <keep> no plugin has and a settings
+    scope that does not parse are said on stderr, of <who>. ConnectorsError when installed_plugins.json is
+    there but does not parse."""
+    plan = plugins.plan(Allowed(tuple(keep)), Allowed(), facts(cwd))
+    say_plan(plan, who)
+    return launch_settings(plan)
+
+
 def plugins_doctor_line(
     args: argparse.Namespace, plugin_list: Allowed, connector_list: Allowed
 ) -> tuple[str, str]:
@@ -84,12 +99,12 @@ def plugins_doctor_line(
     return plugins.report(args.window, plugins.plan(plugin_list, connector_list, window_facts))
 
 
-def say_plan(plan: plugins.PluginPlan) -> None:
+def say_plan(plan: plugins.PluginPlan, who: str = "this window") -> None:
     """What the launch logs of a plan: each name not found, each plugin forced on, each scope not read."""
     for name in plan.not_found:
-        say(f"{name} not found, so this window starts without it")
+        say(f"{name} not found, so {who} starts without it")
     for plugin in plan.managed:
-        say(f"{plugin} is forced on by managed settings, so this window loads it anyway")
+        say(f"{plugin} is forced on by managed settings, so {who} loads it anyway")
     for path in plan.unread:
         say(f"{path} does not parse, so what it says of plugins is not read")
 

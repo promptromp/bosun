@@ -8,10 +8,10 @@
 # Look back over recent work and propose what should change. A digest of the window (each
 # bosun window's sessions: prompts, permission prompts and how long they waited, refused and
 # failed tool calls, guard denials, questions, bosun commands; the ledger's activity; the logs;
-# the watchdog's alerts) goes to one headless Claude with no tools and no MCP servers (the prompt is
-# orchestrator/learn.md, plus $BOSUN_CONFIG_DIR/learn.md). It returns findings with evidence
-# quoted from the digest: mishaps, stalls, gaps, duplicates, corrections you repeated, instruction
-# gaps, setup and outreach ideas, memory candidates.
+# the watchdog's alerts) goes to one headless Claude with no tools, no MCP servers and none of your
+# plugins (the prompt is orchestrator/learn.md, plus $BOSUN_CONFIG_DIR/learn.md). It returns
+# findings with evidence quoted from the digest: mishaps, stalls, gaps, duplicates, corrections you
+# repeated, instruction gaps, setup and outreach ideas, memory candidates.
 #
 # Nothing is applied on its own: each new proposal (at most BOSUN_LEARN_MAX_PROPOSALS) becomes a
 # learn:<YYYY-MM-DD>/<id> ledger item holding the exact change, which the orchestrator lists under

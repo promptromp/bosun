@@ -2557,6 +2557,24 @@ check "the call gets only Slack's read tools, no built-in tools and no settings"
     grep -qF -- "$want" <<<"$args" || { echo "missing: $want"; exit 1; }
   done
   ! grep -qE "Bash|--dangerously" <<<"$args"' _ "$WORK/slack-claude.args"
+# My plugins: one my settings enable, and the Slack plugin installed with its server. The call loads none of them
+# (no settings file is read, but an installed plugin can be on without one), but the Slack plugin when the server
+# is its own.
+mkdir -p "$HOME/.claude/plugins" "$WORK/slack-plugin"
+echo '{"enabledPlugins": {"probe@local": true}}' >"$HOME/.claude/settings.json"
+printf '{"plugins": {"slack@acme-market": [{"scope": "user", "installPath": "%s"}]}}\n' "$WORK/slack-plugin" >"$HOME/.claude/plugins/installed_plugins.json"
+echo '{"mcpServers": {"slack": {"type": "http", "url": "https://mcp.example.com/mcp"}}}' >"$WORK/slack-plugin/.mcp.json"
+call_plugins() { grep -m1 -A1 -x -- --settings "$WORK/slack-claude.args" | tail -1 | jq -c .enabledPlugins; }
+SWE --dry-run >/dev/null
+check "the call switches off each plugin of mine, the Slack plugin too when a site's file holds the server" \
+  test "$(call_plugins)" = '{"probe@local":false,"slack@acme-market":false}'
+BOSUN_EVENTS_ENABLED=1 BOSUN_CLAUDE_BIN="$WORK/slack-claude" "$BOSUN" slack-watch --dry-run >/dev/null 2>&1
+check "... and keeps the Slack plugin when the server is its own" test "$(call_plugins)" = '{"probe@local":false}'
+echo '[not an object]' >"$HOME/.claude/plugins/installed_plugins.json"
+check "an installed_plugins.json that does not parse stops the call, saying which file and why" fails_with \
+  "slack-watch: the watch call was not started: $HOME/.claude/plugins/installed_plugins.json does not parse, so bosun cannot tell which plugins to switch off" \
+  env BOSUN_EVENTS_ENABLED=1 BOSUN_CLAUDE_BIN="$WORK/slack-claude" BOSUN_SLACK_WATCH_MCP_CONFIG="$WORK/slack-mcp.json" "$BOSUN" slack-watch --dry-run
+rm -rf "$HOME/.claude/settings.json" "$HOME/.claude/plugins" "$WORK/slack-plugin"
 check "a watch queues one slack event per new message" contains "$(SWE)" "1 message(s) (1 mention, 0 dm, 0 thread-reply), 1 new"
 check "... which the event list shows with its permalink" contains "$("$BOSUN" events --list)" "slack     slack-watch    https://acme.slack.com/archives/C0000000001/p"
 check "... and the dispatcher frames as untrusted, for chores step 1" contains "$(BOSUN_EVENTS_ENABLED=1 BOSUN_EVENTS_FAST_DEBOUNCE_SECONDS=0 BOSUN_SEND_DRY_RUN=1 "$BOSUN" events --dry-run 2>&1)" "untrusted excerpt: \"can you check the exporter header?\""
@@ -2661,8 +2679,9 @@ check "status reports the watchdog" contains "$("$BOSUN" status 2>&1)" "Watchdog
 unset BOSUN_WATCHDOG_NOW BOSUN_DAYS BOSUN_ALERT_SLACK_USER BOSUN_LAUNCHD_LABEL
 
 section sessions-learn "sessions and learn (fake analysis Claude)" covers 'libexec/bosun-learn,libexec/bosun-ledger,libexec/bosun-sessions,libexec/bosun-watchdog'
-cat >"$WORK/learn-claude" <<'EOF'
+cat >"$WORK/learn-claude" <<EOF
 #!/bin/bash
+printf '%s\n' "\$@" >"$WORK/learn-claude.args"
 cat >/dev/null
 echo '{"total_cost_usd": 0.05, "structured_output": {"summary": "quiet", "findings": [{"key": "smoke-rule", "category": "prompt-gap", "severity": "low", "title": "Smoke rule", "summary": "s", "evidence": [{"source": "session", "ref": "x", "quote": "Bosun activity digest"}], "proposal": {"target": "policy", "text": "Smoke rule text.", "rationale": "r"}}]}}'
 EOF
@@ -2687,6 +2706,20 @@ check "apply appends the rule to the site policy" bash -c '"$1" learn apply "$2"
 check "... and closes the item" contains "$("$BOSUN" ledger show "$LEARNED")" '"state": "applied"'
 check "a second run does not propose it again" contains "$(LEARN --since 2h)" "new proposals: none"
 check "the watchdog checks the learning run once it is enabled" contains "$(BOSUN_LEARN_ENABLED=1 "$BOSUN" watchdog --status 2>&1)" "learn            "
+# My plugins: one my settings enable, and one installed that no scope names. The analysis loads none of them.
+mkdir -p "$HOME/.claude/plugins"
+echo '{"enabledPlugins": {"probe@local": true}}' >"$HOME/.claude/settings.json"
+echo '{"plugins": {"acme-helper@acme-market": [{"scope": "user"}]}}' >"$HOME/.claude/plugins/installed_plugins.json"
+LEARN --dry-run --since 2h --out "$WORK/learn-plugins" >/dev/null
+check "the analysis switches off each plugin of mine, in its one --settings beside its effort" bash -c '
+  [ "$(grep -cx -- --settings "$1")" = 1 ] && grep -m1 -A1 -x -- --settings "$1" | tail -1 |
+    jq -e ".enabledPlugins == {\"acme-helper@acme-market\": false, \"probe@local\": false} and (.effortLevel | type) == \"string\"" >/dev/null' \
+  _ "$WORK/learn-claude.args"
+echo '[not an object]' >"$HOME/.claude/plugins/installed_plugins.json"
+check "an installed_plugins.json that does not parse fails the run, saying which file and why" fails_with \
+  "learn: the analysis was not started: $HOME/.claude/plugins/installed_plugins.json does not parse, so bosun cannot tell which plugins to switch off" \
+  env BOSUN_CLAUDE_BIN="$WORK/learn-claude" "$BOSUN" learn --dry-run --since 2h --out "$WORK/learn-plugins"
+rm -rf "$HOME/.claude/settings.json" "$HOME/.claude/plugins" "$WORK/learn-plugins"
 rm -f "$BOSUN_CONFIG_DIR/policy.md"
 
 section folder-trust "folder trust" covers 'libexec/bosun-trust'

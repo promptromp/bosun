@@ -10,8 +10,9 @@
 # and never writes the ledger.
 #
 # The call has no built-in tools, only the Slack MCP server (the Slack plugin's, or the one in
-# BOSUN_SLACK_WATCH_MCP_CONFIG), no settings files, Slack's write tools removed and everything
-# else it was not allowed denied without a prompt; a call that could see a write tool is refused.
+# BOSUN_SLACK_WATCH_MCP_CONFIG), no settings files, none of your plugins but the Slack plugin its
+# server comes from, Slack's write tools removed and everything else it was not allowed denied without
+# a prompt; a call that could see a write tool is refused.
 #   --once       a run now (the default): needs BOSUN_EVENTS_ENABLED=1, no other run going, and
 #                BOSUN_SLACK_WATCH_MAX_USD_PER_CALL left of BOSUN_SLACK_WATCH_MAX_USD_PER_DAY
 #   --scheduled  what the check-in loop runs: also only with BOSUN_SLACK_WATCH_ENABLED=1, at any

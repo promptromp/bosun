@@ -317,7 +317,11 @@ together, minus my own messages, they are the replies in my threads. The date fi
 
 **Read-only, enforced by Claude Code.** The call gets `--tools ""` (no built-in tools: no Bash, no
 file tools), `--strict-mcp-config` with an MCP config holding only the Slack server, `--setting-
-sources ""` (none of my settings files: no allow rules, hooks or plugins), `--allowedTools` with the
+sources ""` (none of my settings files: no allow rules or hooks), one `--settings` with the API key
+helper it signs in with, if any, and an `enabledPlugins` with a `false` for each plugin of mine it would
+load but the Slack plugin when the server is its own (`plugins_claude.headless_settings`: no settings file
+enables a plugin for it, but an installed plugin can be on without one; an `installed_plugins.json` that
+does not parse fails the run in one line), `--allowedTools` with the
 five read tools (search public, search public and private, read thread, read channel, read user
 profile), `--disallowedTools` with the write tools (send, send draft, schedule, add reaction,
 create and update canvas, create conversation), `--permission-mode dontAsk --permission-prompts
