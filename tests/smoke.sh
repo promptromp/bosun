@@ -1610,7 +1610,7 @@ L ws set-state widgets active --note reopened >/dev/null
 check "ws list counts by how items were assigned" contains "$(L ws list)" "ws:widget-gen  [active] Automated widget generation | 4 item(s) (explicit 3, inherited 1), 4 open"
 rm "$BOSUN_CONFIG_DIR/workstreams.json"
 
-section repo-window-prompts "what I say in a repo window, and what a window works on" needs tasks-links-tickets covers 'libexec/bosun-launch,libexec/bosun-ledger'
+section repo-window-prompts "what I say in a repo window, and what a window works on" needs tasks-links-tickets covers 'libexec/bosun-launch,libexec/bosun-ledger,libexec/bosun-hook'
 said_payload='{"hook_event_name":"UserPromptSubmit","session_id":"s-1","prompt":"go with option b for the suites"}'
 check "the prompt hook does nothing while events are off" bash -c '"$1" hook user-prompt --window exporter <<<"$2" && [ "$("$1" ledger said)" = "(nothing I said in a repo window matches)" ]' _ "$BOSUN" "$said_payload"
 check "the prompt hook records what I type on the item the window holds" bash -c '
@@ -3464,7 +3464,7 @@ check "with events alone the loop keeps running and sends no check-in" bash -c '
   [ "$1" = "2 1" ] && ! grep -q "chores check-in" "$2" || { echo "ticks, running: $1"; cat "$2"; exit 1; }' \
   _ "$(loop_ticks 2 "$WORK/events-loop.out" BOSUN_CHECKIN_MINUTES=0 BOSUN_EVENTS_ENABLED=1 BOSUN_EVENTS_WITHOUT_CHECKINS=1 BOSUN_EVENTS_INTERVAL_SECONDS=1)" "$WORK/events-loop.out"
 
-section delegate "delegate (task types)" covers 'libexec/bosun-delegate,libexec/bosun-ledger'
+section delegate "delegate (task types)" covers 'libexec/bosun-delegate,libexec/bosun-ledger,libexec/bosun-kg'
 L upsert 'review:acme/api#5' --kind review-request --title 'Add X' >/dev/null
 L upsert 'slack:C7/1' --kind mention >/dev/null
 check "--list shows every task type" bash -c 'for t in review fix-my-pr new-work investigate; do grep -q "^$t: " <<<"$1" || exit 1; done' _ "$("$BOSUN" delegate --list)"
@@ -3877,7 +3877,7 @@ check "with BOSUN_CONSOLE_ALWAYS=1 bosun start makes console/wanted, which the c
 check "a start with it off again takes the marker away" test ! -e "$BOSUN_STATE_DIR/console/wanted"
 "$BOSUN" stop >/dev/null 2>&1
 
-section status-json "status --json (the menu bar app's one source of how bosun is)" needs stopped-until-started covers 'libexec/bosun-status,libexec/bosun-start,libexec/bosun-stop,lib/menu_status*.py'
+section status-json "status --json (the menu bar app's one source of how bosun is)" needs stopped-until-started covers 'libexec/bosun-status,libexec/bosun-start,libexec/bosun-stop,lib/menu_status*.py,libexec/bosun-watchdog'
 "$BOSUN" stop >/dev/null 2>&1 # what a stop made today leaves (the section before ends with it too)
 # said_has <JSON> <python condition over d, that object>: for an object one run printed, read by several checks.
 said_has() { python3 -I -c 'import json, sys; d = json.loads(sys.argv[1]); sys.exit(not eval(sys.argv[2]))' "$1" "$2"; }
@@ -4258,7 +4258,7 @@ stop_keep_awake_leaves_it() { # bosun stop --keep-awake keeps the caffeinate and
 check "bosun stop --keep-awake leaves the caffeinate and its files alone; a plain stop releases them" stop_keep_awake_leaves_it
 plain_fake launchctl 113 # the fake above; this section's alone
 
-section settings "settings (bosun settings get|set: bosun.env through init's writer, the jobs and the wake)" covers 'libexec/bosun-settings,lib/settings.py,lib/run_locked.py,templates/launchd*.plist'
+section settings "settings (bosun settings get|set: bosun.env through init's writer, the jobs and the wake)" covers 'libexec/bosun-settings,lib/settings.py,lib/run_locked.py,libexec/bosun-init,templates/launchd*.plist'
 # Its own config, state and launchd label, so what it writes and reloads is its alone; launchd has a job while it
 # has its plist, pmset's repeating event is what $SET_SCHED holds, pmset repeat fails while
 # $WORK/settings-pmset-fails is there, launchctl bootstrap while $WORK/settings-bootstrap-fails is. sudo is sudoers
@@ -5680,7 +5680,7 @@ for line in sys.stdin:
   check "a Codex window with plugins: [] switches every plugin off, and nothing else, for connectors: all" bash -c '
     grep -qF -- " --disable plugins" <<<"$1" && ! grep -qF mcp_servers <<<"$1" && ! grep -qF -- "--disable apps" <<<"$1"' _ "$out"
 
-  section agy-launch "a window on agy (launch, with a stand-in that records what it was started with)" needs codex-launch,setup-steps covers 'libexec/bosun-launch,libexec/bosun-morning,libexec/bosun-preflight,libexec/bosun-sessions,tests/sandbox/agy-stand-in,tests/fixtures/agy/**,agents/agy-plugin/**,lib/agy_*.py,lib/connectors_agy.py'
+  section agy-launch "a window on agy (launch, with a stand-in that records what it was started with)" needs codex-launch,setup-steps covers 'libexec/bosun-launch,libexec/bosun-morning,libexec/bosun-preflight,libexec/bosun-sessions,tests/sandbox/agy-stand-in,tests/fixtures/agy/**,agents/agy-plugin/**,lib/agy_*.py,lib/connectors_agy.py,libexec/bosun-doctor'
   AGY_REPO="$WORK/agy-repo"
   mkdir -p "$AGY_REPO"
   git -C "$AGY_REPO" init -q
