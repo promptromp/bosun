@@ -676,11 +676,12 @@ def plan_from(
 THIS = Path(__file__).resolve().parents[1]  # this code's folder, whose helpers act for any version
 
 
-# What a version's jobs run, as lib/common.sh's job_kinds says: one from before it lists job_labels, each a
-# job that runs bosun (it had no job that runs anything else it could drop).
+# What a version's jobs run, as lib/common.sh's job_kinds says. One from before it lists job_labels: each a
+# job that runs bosun, but the menu bar app's Open at Login job, where it has app_label (released ones do).
 JOB_KINDS = (
     "if declare -F job_kinds >/dev/null; then job_kinds; "
-    'else for l in $(job_labels); do printf "%s\\tbosun\\n" "$l"; done; fi'
+    'else app="$(declare -F app_label >/dev/null && app_label)"; for l in $(job_labels); do '
+    'k=bosun; [ -n "$app" ] && [ "$l" = "$app" ] && k=app; printf "%s\\t%s\\n" "$l" "$k"; done; fi'
 )
 BOSUN_JOB = "bosun"  # a job that runs a bosun command; `app` runs the menu bar app's own binary
 

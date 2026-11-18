@@ -126,10 +126,9 @@ def _installed_is(over: UpdateState) -> None:
 
 
 # A fetch over the network: no terminal to ask in (a private https origin never prompts while update.lock is
-# held), a transfer slower than 1 KB/s for 30 seconds given up on, as the wrapper's own fetch does, and never
-# longer than FETCH_SECONDS.
+# held), a transfer slower than 1 KB/s for 30 seconds given up on (versions.SLOW, as the wrapper's own fetch),
+# and never longer than FETCH_SECONDS.
 NO_PROMPT = {"GIT_TERMINAL_PROMPT": "0"}
-SLOW = ("-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=30")
 FETCH_SECONDS = 120
 
 
@@ -142,7 +141,7 @@ def _fetched(repo: Path, commit: str) -> None:
     Output.say(f"Fetching {update_back_plan.short(commit)}, which bosun.git no longer has...")
     try:
         done = versions.git(
-            *SLOW,
+            *versions.SLOW,
             "--git-dir",
             str(repo),
             "fetch",

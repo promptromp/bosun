@@ -472,6 +472,10 @@ class ConfigTest(BackWorld):
 
 
 class CommandTest(BackWorld):
+    def setUp(self) -> None:
+        super().setUp()
+        self.addCleanup(setattr, update.Output, "to_stderr", update.Output.to_stderr)  # --json sets it
+
     def main(self, *argv: str) -> tuple[int, str, str]:
         out, err = io.StringIO(), io.StringIO()
         with (

@@ -6503,6 +6503,15 @@ HAND
       ! git --git-dir="$1/bosun.git" config bosun.branch && [ "$(cat "$2/bosun.env")" = "$3" ]' _ "$R_VERSIONS" "$R_CONFIG" "$r_env" "${R_ENV[@]}" "$R_LINK/bin/bosun"
   kill "$r_holder" 2>/dev/null
   wait "$r_holder" 2>/dev/null
+  # bosun.branch that cannot be set (a config.lock left in bosun.git) once the channel was: it is put back.
+  mkdir "$R_VERSIONS/bosun.git/config.lock"
+  check "--branch whose bosun.branch cannot be set puts the channel back, and says so" bash -c '
+    out="$("${@:4}" update --branch try-x </dev/null 2>&1)"; [ $? = 1 ] &&
+      grep -q "could not set bosun.branch in .*; BOSUN_UPDATE_CHANNEL put back to releases: nothing changed" <<<"$out" &&
+      grep -q "^BOSUN_UPDATE_CHANNEL=\"\{0,1\}releases\"\{0,1\}$" "$2/bosun.env" && ! git --git-dir="$1/bosun.git" config bosun.branch' \
+    _ "$R_VERSIONS" "$R_CONFIG" "$r_env" "${R_ENV[@]}" "$R_LINK/bin/bosun"
+  rmdir "$R_VERSIONS/bosun.git/config.lock"
+  r_env="$(cat "$R_CONFIG/bosun.env")" # as bosun settings set wrote it back
   out="$(rb update --branch try-x --dry-run 2>&1)"
   check "--branch --dry-run shows the plan to the branch's head, and writes nothing" bash -c '
     grep -q "^Update $2 -> $3" <<<"$1" && ! git --git-dir="$4/bosun.git" config bosun.branch && [ "$(cat "$5/bosun.env")" = "$6" ]' \

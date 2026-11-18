@@ -43,8 +43,6 @@ SKIP_FILE = "update-skip.json"
 GIT_SECONDS = 120  # the most any one git call over the network may take
 LOCAL_SECONDS = 30
 USAGE = 2  # the exit status of a command line that makes no sense
-# A transfer slower than 1 KB/s for 30 seconds is given up on, as the update's own fetch does.
-SLOW = ("-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=30")
 # Where the release looked at is fetched to: a remote ref, one that each fetch overwrites, never
 # refs/tags. Uninstall (lib/checkout_work.py) counts what a branch or tag of the versions' repository
 # holds that no remote ref does as work of yours, and would keep the versions folder for a tag.
@@ -60,7 +58,7 @@ def _git(repo: Path, *args: str, network: str | None = None, why: bool = False) 
     network (with <why>, and git's last line of complaint, credentials taken off), else git's own words."""
     try:
         done = versions.git(
-            *(SLOW if network else ()),
+            *(versions.SLOW if network else ()),
             "--git-dir",
             str(repo),
             *args,

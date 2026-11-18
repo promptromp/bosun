@@ -360,9 +360,17 @@ follow_branch() {
     "$BOSUN_ROOT/bin/bosun" settings set BOSUN_UPDATE_CHANNEL=main >&2 ||
       die "could not set BOSUN_UPDATE_CHANNEL=main (bosun settings set); nothing changed: the install follows what it did"
   fi
-  repo_git config bosun.branch "$BRANCH" || die "could not set bosun.branch in $REPO"
+  repo_git config bosun.branch "$BRANCH" 2>/dev/null || branch_not_set
   export BOSUN_UPDATE_FOLLOWS="$BRANCH"
   say "bosun follows $BRANCH from now on (bosun update --branch main follows main again)"
+}
+# bosun.branch could not be set after the channel was: the channel put back as it was, and said exactly.
+branch_not_set() {
+  local was="$BOSUN_UPDATE_CHANNEL"
+  [ "$was" != main ] || die "could not set bosun.branch in $REPO; nothing changed: the install follows what it did"
+  "$BOSUN_ROOT/bin/bosun" settings set "BOSUN_UPDATE_CHANNEL=$was" >&2 ||
+    die "could not set bosun.branch in $REPO, and BOSUN_UPDATE_CHANNEL is main now: bosun settings set BOSUN_UPDATE_CHANNEL=$was puts it back"
+  die "could not set bosun.branch in $REPO; BOSUN_UPDATE_CHANNEL put back to $was: nothing changed"
 }
 case " ${args[*]-} " in
   *" --dry-run "*) ;;

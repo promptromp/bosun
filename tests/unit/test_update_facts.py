@@ -380,6 +380,29 @@ class EveryUpdateFactsTest(World):
             'load_config() { :; }\njob_labels() { echo "com.a com.a.watchdog"; }\n'
         )
         self.assertEqual(update_facts.job_kinds(self.old), {"com.a": "bosun", "com.a.watchdog": "bosun"})
+        # a released version: its job_labels lists the app's Open at Login job, it has app_label, no job_kinds
+        (older / "common.sh").write_text(
+            "load_config() { :; }\napp_label() { echo com.a.app; }\n"
+            'job_labels() { echo "com.a com.a.watchdog $(app_label)"; }\n'
+        )
+        self.assertEqual(
+            update_facts.job_kinds(self.old),
+            {"com.a": "bosun", "com.a.watchdog": "bosun", "com.a.app": "app"},
+        )
+
+    def test_a_released_version_s_app_job_is_never_one_it_unloads(self) -> None:
+        """Installed X, a release from before job_kinds, updating to Y, a branch from before the app's job:
+        the app's Open at Login job, which X's job_labels lists, is kept."""
+        for folder, labels in (
+            (self.old, "com.a com.a.watchdog com.a.app"),
+            (self.new, "com.a com.a.watchdog"),
+        ):
+            (folder / "lib").mkdir(exist_ok=True)
+            app = "app_label() { echo com.a.app; }\n" if folder == self.old else ""
+            (folder / "lib" / "common.sh").write_text(
+                f'load_config() {{ :; }}\n{app}job_labels() {{ echo "{labels}"; }}\n'
+            )
+        self.assertEqual(update_facts.dropped_jobs(self.old, self.new), [])
 
     def test_a_commit_in_bosun_git_reads_as_its_folder_does(self) -> None:
         """A back's dry run whose older folder is gone reads it there, never checked out."""

@@ -66,6 +66,10 @@ def commit_of(root: Path) -> str:
 
 
 LOCAL_SECONDS = 30  # the most a git call that stays on this Mac may take
+# A transfer slower than 1 KB/s for 30 seconds is given up on, never waited for without end: what every git
+# call over the network takes (bosun update's lookups, a back's fetch of the older version's commit), as the
+# wrapper's own fetch does.
+SLOW = ("-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=30")
 
 
 def has_commit(repo: Path, commit: str) -> bool:
