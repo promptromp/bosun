@@ -387,6 +387,27 @@ class Suite:
             return HARNESS, ""
         return None
 
+    def place(self, line: int) -> tuple[tuple[str, str] | None, tuple[str, str] | None]:
+        """Line <line>'s region, and for a helper's line where the helper is defined (("section", id), or
+        (HARNESS, "") for the shared setup): a section marker moved over a helper changes only that."""
+        if line not in self.helper_at:
+            return self.region(line), None
+        return self.region(line), ("section", self.section_at[line]) if line in self.section_at else (
+            HARNESS,
+            "",
+        )
+
+    def moved_from(self, line: int) -> set[str] | str:
+        """The sections a line that moved reaches: those a change to it would, and the section its helper is
+        defined in; or why that is the whole suite (a helper the shared setup defines among them)."""
+        found = self.reached_from(line)
+        home = self.place(line)[1]
+        if isinstance(found, str) or home is None:
+            return found
+        if home[0] == HARNESS:
+            return f"{SUITE}, line {line}: a helper the shared setup defines, which every run runs"
+        return found | {home[1]}
+
     def helper_callers(self) -> dict[str, set[tuple[str, str]]]:
         """Each helper -> the code that calls it: sections, other helpers, the shared setup (its own only)."""
         lines: dict[tuple[str, str], list[int]] = {}
@@ -488,8 +509,9 @@ def moved_regions(
     old: Suite | None, new: Suite, hunks: Sequence[tuple[int, int, int, int]]
 ) -> set[str] | str:
     """The sections code the change left alone moved between: for each line whose region (a section, a helper,
-    the shared setup) differs between the old file and the new, both regions; or why that is the whole suite
-    (one of them the shared setup, or a side that does not read)."""
+    the shared setup), or the region its helper is defined in, differs between the old file and the new, both
+    (a helper's: its callers and where it is defined); or why that is the whole suite (one of them the shared
+    setup)."""
     if old is None:
         return set()
     ids: set[str] = set()
@@ -497,10 +519,10 @@ def moved_regions(
         hunks, len(old.script.lines), len(new.script.lines)
     ):
         has_code = old.script.has_code(old_line) or new.script.has_code(new_line)
-        if not has_code or old.region(old_line) == new.region(new_line):
+        if not has_code or old.place(old_line) == new.place(new_line):
             continue
         for suite, line in ((old, old_line), (new, new_line)):
-            found = suite.reached_from(line)
+            found = suite.moved_from(line)
             if isinstance(found, str):
                 return found
             ids |= found

@@ -132,35 +132,42 @@ class SelectionRulesTest(unittest.TestCase):
         change = ss.SuiteChange(old, selection_tests.diff_hunks(old, new))
         return ss.plan_for([ss.SUITE], ss.parse_sections(new), self.rules, self.graph, ss.Suite(new), change)
 
-    def test_structural_edits_of_the_suite_select_where_its_lines_went(self) -> None:
-        """A marker taken out, added after an always_run, or splitting a section moves lines it left alone
-        into another region: both regions run (the shared setup's: everything)."""
-        text = (ROOT / "tests" / "smoke.sh").read_text()
-        lines = text.split("\n")
-        resolve = next(line for line in lines if line.startswith("section resolve "))
-        merged = self.suite_plan(text.replace(resolve + "\n", ""))
-        self.assertTrue(merged.full)  # resolve's lines follow an always_run: now the shared setup's
-        self.assertIn("the shared setup", merged.reason)
-        always = next(k for k, line in enumerate(lines) if line == "always_run" and k > 4000)
-        stand_ins = "\n".join(
-            [*lines[: always + 1], "section stand-ins \"x\" covers 'x'", *lines[always + 1 :]]
-        )
-        self.assertTrue(self.suite_plan(stand_ins).full)
-        refresh = next(k for k, line in enumerate(lines) if line.startswith("section refresh "))
-        split = "\n".join(
-            [*lines[: refresh + 20], "section refresh-tail \"x\" covers 'x'", *lines[refresh + 20 :]]
-        )
-        plan = self.suite_plan(split)
+    # The structural edits of tests/smoke.sh that move lines they leave alone into another region: both
+    # regions run (the shared setup's: everything). Each on the real file.
+
+    def edited(self, starts: str, put: str | None = None, *, at: int = 0, past: int = 0) -> ss.Plan:
+        """The real suite with a line <put> in <at> lines after the first line past line <past> that starts
+        (indent aside) with <starts>, or with that line taken out (put=None)."""
+        lines = (ROOT / "tests" / "smoke.sh").read_text().split("\n")
+        k = next(n for n, line in enumerate(lines) if n >= past and line.lstrip().startswith(starts))
+        changed = [*lines[:k], *lines[k + 1 :]] if put is None else [*lines[: k + at], put, *lines[k + at :]]
+        return self.suite_plan("\n".join(changed))
+
+    def test_a_marker_taken_out_after_an_always_run_part_runs_the_whole_suite(self) -> None:
+        plan = self.edited("section resolve ")  # resolve's lines join the always_run part before it
+        self.assertTrue(plan.full)
+        self.assertIn("the shared setup", plan.reason)
+
+    def test_a_marker_put_in_after_an_always_run_runs_the_whole_suite(self) -> None:
+        # (the always_run before the launchctl and pmset stand-ins every later section uses)
+        self.assertTrue(self.edited("always_run", "section stand-ins \"x\" covers 'x'", at=1, past=4000).full)
+
+    def test_a_section_split_selects_both_halves_and_what_needs_them(self) -> None:
+        plan = self.edited("section refresh ", "section refresh-tail \"x\" covers 'x'", at=20)
         self.assertLessEqual(
             {"refresh", "refresh-tail", "console-sessions", "update-restart"}, set(plan.picked)
         )
-        marker = next(k for k, line in enumerate(lines) if line.startswith("section launch-dry-run "))
-        up = "\n".join(
-            [*lines[: marker - 4], lines[marker], *lines[marker - 4 : marker], *lines[marker + 1 :]]
-        )
-        self.assertLessEqual(
-            {"resolve", "launch-dry-run"}, set(self.suite_plan(up).picked)
-        )  # resolve's checks moved
+
+    def test_a_marker_moved_up_selects_the_section_that_lost_the_lines(self) -> None:
+        lines = (ROOT / "tests" / "smoke.sh").read_text().split("\n")
+        k = next(n for n, line in enumerate(lines) if line.startswith("section launch-dry-run "))
+        plan = self.suite_plan("\n".join([*lines[: k - 4], lines[k], *lines[k - 4 : k], *lines[k + 1 :]]))
+        self.assertLessEqual({"resolve", "launch-dry-run"}, set(plan.picked))  # resolve's checks moved
+
+    def test_a_marker_put_in_before_a_helper_that_ends_a_section_selects_its_callers(self) -> None:
+        plan = self.edited("u_ended_well() {", "  section zz-split \"zz\" covers 'x'")
+        # u_ended_well is now defined only in a run that runs zz-split
+        self.assertLessEqual({"zz-split", "update-upstream", "update", "update-back"}, set(plan.picked))
 
     def test_the_weights_reach_nothing(self) -> None:
         """They only balance the shards of a split run: a section moved between shards still runs."""

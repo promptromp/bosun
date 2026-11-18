@@ -322,11 +322,32 @@ class SuiteEditTest(unittest.TestCase):
         plan = self.moved(new)
         self.assertEqual(sorted(plan.picked), ["beta", "gamma"])
 
-    def test_a_shared_helper_s_closing_brace_moved_over_shared_code_runs_the_whole_suite(self) -> None:
-        old = SUITE_TEXT.replace("finish() { :; }\nfinish\n", "finish() {\n  :\n}\nafter=1\nfinish\n")
+    def test_a_helper_s_closing_brace_moved_over_shared_code_runs_the_whole_suite(self) -> None:
+        """The `}` is a line of a helper only gamma calls, on both sides; `after=1`, left alone, leaves the
+        shared setup for the helper."""
+        old = (
+            SUITE_TEXT.replace("probe\nalways_run", "probe\nlate\nalways_run") + "late() {\n  :\n}\nafter=1\n"
+        )
         new = old.replace("  :\n}\nafter=1\n", "  :\nafter=1\n}\n")
+        self.assertEqual(old.split("\n")[17:19], ["}", "after=1"])
+        plan = self.plan(new, (18, 1, 17, 0), (19, 0, 19, 1), old=old)  # the `}` out, and in after after=1
+        self.assertTrue(plan.full)
+        self.assertIn("the shared setup", plan.reason)
+
+    def test_a_marker_put_in_before_a_helper_last_in_its_section_selects_its_callers_and_both_sections(
+        self,
+    ) -> None:
+        """probe is now defined only in a run that runs split: gamma, which calls it, must run (and fails)."""
+        old = SUITE_TEXT.replace("probe() { check true; }\nprobe\n", "probe\nprobe() { check true; }\n")
+        new = old.replace("probe\nprobe() {", "probe\nsection split \"split\" covers 'x'\nprobe() {")
+        self.assertEqual(sorted(self.moved(new, old=old).picked), ["beta", "gamma", "split"])
+
+    def test_a_marker_put_in_before_a_helper_the_shared_setup_defines_runs_the_whole_suite(self) -> None:
+        old = SUITE_TEXT.replace("probe\nalways_run", "probe\nlate\nalways_run") + "late() { :; }\n"
+        new = old.replace("late() {", "section zz \"zz\" covers 'x'\nlate() {")
         plan = self.moved(new, old=old)
         self.assertTrue(plan.full)
+        self.assertIn("a helper the shared setup defines", plan.reason)
 
     def test_a_new_section_between_two_moves_no_code_and_selects_itself(self) -> None:
         new = SUITE_TEXT.replace("section gamma", "section new \"new\" covers 'x'\ncheck true\nsection gamma")
