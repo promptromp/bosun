@@ -2956,11 +2956,12 @@ alpha_pid="$(claude_in alpha)"
 check "--start resumes the window's named session" grep -qx 11111111-0000-0000-0000-000000000002 "$WORK/live-claude.$alpha_pid.args"
 check "--start delivers the prompt" test "$(cat "$WORK/live-claude.$alpha_pid.prompt")" = "resume with this"
 started=$SECONDS
-out="$(live --start beta "x" 2>&1)"
+# a timeout far above how long the early end takes even on a slow machine, so the two cannot be mistaken
+out="$(BOSUN_LAUNCH_DRY_RUN=0 BOSUN_START_TIMEOUT=60 "$BOSUN" send --start beta "x" 2>&1)"
 check "--start fails when Claude does not start" test $? -ne 0
 check "a failed start shows the window's output" contains "$out" "already running as pid $$"
-check "... as soon as its launch has ended, saying so, not at BOSUN_START_TIMEOUT (5 s here)" bash -c '
-  grep -q "but its launch ended without starting a Claude session" <<<"$1" && [ "$2" -lt 5 ]' _ "$out" "$((SECONDS - started))"
+check "... as soon as its launch has ended, saying so, not at BOSUN_START_TIMEOUT (60 s here)" bash -c '
+  grep -q "but its launch ended without starting a Claude session" <<<"$1" && [ "$2" -lt 30 ]' _ "$out" "$((SECONDS - started))"
 out="$(live --new epsilon "$TRUST_REPO" hi 2>&1)"
 check "--new trusts a repo inside the mask before starting" contains "$out" "trusted: $TRUST_REPO"
 check "... and Claude starts there" contains "$out" "Claude is running in smoke:epsilon"
@@ -3769,14 +3770,16 @@ write_quit paused
 check "bosun status --json calls a quit record with windows still open an error, with how to finish" status_has 'd["level"] == "error" and d["sentence"] == "bosun quit did not finish" and "bosun quit --stop-now" in d["problems"][0] and "bosun start" in d["problems"][0]'
 rm -f "$BOSUN_STATE_DIR/quit.json"
 
-# alpha finishes a second into the wait; beta keeps waiting at its prompt, which does not hold the wait
+# alpha finishes once the quit says it waits for it (not at a fixed time, which a slow machine's quit could reach
+# only after alpha was done, and then never wait); beta keeps waiting at its prompt, which does not hold the wait.
 # A start still holds the windows lock when alpha is done: the quit takes it only for its stop phase, and waits.
-# (The wait polls every BOSUN_QUIT_POLL_SECONDS, 0.5 s here: alpha is seen done by about 1.5 s, the lock goes at 8 s,
-# so a quit that waited for the lock takes 7 s or more, and one that did not about 2 to 3.)
+# (The wait polls every BOSUN_QUIT_POLL_SECONDS, 0.5 s here; the lock goes at 8 s, so a quit that waited for the lock
+# takes 6 s or more.)
+rm -f "$WORK/quit.err"
 python3 "$ROOT/lib/run_locked.py" "$BOSUN_STATE_DIR/windows.lock" 10 busy -- sleep 8 &
 wait_for 30 lock_taken "$BOSUN_STATE_DIR/windows.lock"
 (
-  sleep 1
+  wait_for 30 grep -q "Waiting for 1 busy window (alpha)" "$WORK/quit.err"
   agent_status "$quit_alpha" idle
 ) &
 quit_started=$SECONDS
