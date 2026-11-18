@@ -422,9 +422,9 @@ place. Each gets `plugins_claude.headless_settings` (`plugins_claude.py --headle
 (`plugins.headless_plan`, over the same facts as a window's plan), whatever the lists say, merged into the call's one
 `--settings` (beside learning's `effortLevel`; beside the `apiKeyHelper` the watcher and the login check sign in
 with, when Claude Code uses one). The watcher and the login check read no settings file (`--setting-sources ""`), so
-a plugin my settings switch off is not off for them by that; whether an installed plugin loads with no settings file
-naming it, bosun does not rely on either way: each gets its `false`, and a `false` for one that is off anyway changes
-nothing. A settings scope that does not parse is said only by the calls that read them (learning, the alert). The
+a plugin my settings switch off is not off for them by that. With no settings sources Claude Code 2.1.308 loaded none
+of my plugins in the VM on 2026-11-18 (`mac live`'s baseline, a note), but bosun does not rely on that: each gets its
+`false`, and a `false` for one that is off anyway changes nothing. A settings scope that does not parse is said only by the calls that read them (learning, the alert). The
 watcher keeps the Slack plugin on when its server is that plugin's (not when `BOSUN_SLACK_WATCH_MCP_CONFIG` names a
 site's file), and the alert, which reads my settings for its Slack server and may send through the Slack plugin's or
 the claude.ai connector's, keeps the Slack plugin by its bare name (not said when it is not installed). `claude_state` sits below `plugins_claude`, so the login check's caller

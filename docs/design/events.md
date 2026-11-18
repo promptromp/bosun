@@ -320,9 +320,9 @@ file tools), `--strict-mcp-config` with an MCP config holding only the Slack ser
 sources ""` (none of my settings files: no allow rules or hooks), one `--settings` with the API key
 helper it signs in with, if any, and an `enabledPlugins` with a `false` for each plugin of mine it would
 load but the Slack plugin when the server is its own (`plugins_claude.headless_settings`: every plugin
-installed or named by my settings, on or off there, since the call never reads them; whether an installed
-plugin loads with no settings file naming it, bosun does not rely on either way; an `installed_plugins.json`
-that does not parse fails the run in one line), `--allowedTools` with the
+installed or named by my settings, on or off there, since the call never reads them; with no settings
+sources Claude Code 2.1.308 loaded none of them in the VM on 2026-11-18, which bosun does not rely on;
+an `installed_plugins.json` that does not parse fails the run in one line), `--allowedTools` with the
 five read tools (search public, search public and private, read thread, read channel, read user
 profile), `--disallowedTools` with the write tools (send, send draft, schedule, add reaction,
 create and update canvas, create conversation), `--permission-mode dontAsk --permission-prompts
