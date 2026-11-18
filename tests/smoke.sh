@@ -518,6 +518,9 @@ export BOSUN_LAUNCH_DRY_RUN=1
 # The journal's flushes without macOS's F_FULLFSYNC (lib/journal.py): with several checkouts' suites writing on
 # one drive, each full flush waits for the drive's whole cache, and the update section's 60-second waits ran out.
 export BOSUN_PLAIN_FSYNC=1
+# bosun's own waits between looks, which have a knob for tests: quit --let-finish's poll (5 s) and an update's wait
+# between turns at the windows it brings along (5 s), short here; their defaults are held by the unit tests.
+export BOSUN_QUIT_POLL_SECONDS=0.5 BOSUN_UPDATE_POLL_SECONDS=0.5
 export BOSUN_ORCHESTRATOR="" # orchestrator tests below enable it explicitly
 REPO_A="$WORK/repos/svc-a"
 REPO_B="$WORK/repos/svc-b"
@@ -2433,7 +2436,8 @@ BOSUN_EVENTS_ENABLED=1 BOSUN_EVENTS_INTERVAL_SECONDS=1 BOSUN_CHECKIN_EVERY_SECON
   "$BOSUN" checkin --loop --dry-run >"$WORK/deferred-loop.out" 2>&1 &
 deferred_loop=$!
 check "the loop keeps a deferred check-in due" wait_for 30 grep -q "the check-in stays due; retrying every tick" "$WORK/deferred-loop.out"
-sleep 3
+# Two more ticks while it is busy (each tick's events line), so it retried without logging the skip again.
+wait_for 30 bash -c '[ "$(sed -n "/the check-in stays due; retrying every tick/,\$p" "$1" | grep -c "\[events\] dry-run: ")" -ge 3 ]' _ "$WORK/deferred-loop.out"
 orch_status idle 3600
 check "... and sends it on a later tick, once the orchestrator is free" wait_for 30 grep -q "would send '/bosun:chores check-in'" "$WORK/deferred-loop.out"
 pkill -P "$deferred_loop" 2>/dev/null
@@ -2798,10 +2802,15 @@ chmod +x "$WORK/live-claude"
 BOSUN_CLAUDE_BIN="$WORK/live-claude" "$BOSUN" start >/dev/null 2>&1
 wait_for 30 has_windows "orch alpha beta gamma checkin "
 live() { BOSUN_LAUNCH_DRY_RUN=0 BOSUN_START_TIMEOUT=5 "$BOSUN" send "$@"; }
-claude_in() { # <window>: prints the pid of the fake Claude running in the window
+# claude_in <window>: prints the pid of the fake Claude running in the window: the first of the pane's descendants
+# with a running-session record, which the fakes write for themselves ($HOME/.claude/sessions/<pid>.json). Read by
+# the shell, with no Python started (agent_pid_under asks lib/agent_state.py), since wait_for loops call it.
+claude_in() {
   local pane_pid
   pane_pid="$(tmux -L "$SOCKET" list-windows -t "=smoke" -F '#{window_name} #{pane_pid}' | awk -v w="$1" '$1 == w { print $2 }')"
-  bash -c 'source "$1/lib/common.sh"; agent_pid_under "$2"' _ "$ROOT" "$pane_pid"
+  bash -c 'source "$1/lib/common.sh"
+    for pid in $(descendants "$2"); do [ -f "$HOME/.claude/sessions/$pid.json" ] && echo "$pid" && exit 0; done
+    exit 1' _ "$ROOT" "$pane_pid"
 }
 # Longer than the 1024-byte terminal line limit, multi-line, and full of shell metacharacters.
 long_prompt="$(
@@ -2833,7 +2842,7 @@ another_claude_in() { # <window> <old pid>: a fake Claude other than that one ru
   local pid
   pid="$(claude_in "$1")" && [ -n "$pid" ] && [ "$pid" != "$2" ]
 }
-check "... and an update's restart of it" env BOSUN_LAUNCH_DRY_RUN=0 "$BOSUN" refresh --update-restart "$WORK/update-prompt" zeta
+check "... and an update's restart of it" env BOSUN_LAUNCH_DRY_RUN=0 BOSUN_AGENT_SETTLE_SECONDS=0.5 "$BOSUN" refresh --update-restart "$WORK/update-prompt" zeta
 check "... starts it again" wait_for 15 another_claude_in zeta "$zeta_pid"
 check "... keeping its --model and --effort, with the update's prompt" bash -c '
   grep -qx haiku "$1.args" && grep -q "\"effortLevel\":\"low\"" "$1.args" && [ "$(cat "$1.prompt")" = bosun-was-updated:check-in ]' _ "$WORK/live-claude.$(claude_in zeta)"
@@ -2842,7 +2851,7 @@ kill "$zeta_pid"
 wait_for 30 bash -c '! pgrep -P "$(tmux -L "$1" display -p -t =smoke:zeta "#{pane_pid}")" >/dev/null' _ "$SOCKET"
 # A real Claude leaves its conversation to resume; this fake writes none, so zeta is given one.
 make_session "$REPO_A" 44444444-0000-0000-0000-000000000001 zeta 202601040000
-check "... and once its agent has exited, an update's restart" env BOSUN_LAUNCH_DRY_RUN=0 "$BOSUN" refresh --update-restart "$WORK/update-prompt" zeta
+check "... and once its agent has exited, an update's restart" env BOSUN_LAUNCH_DRY_RUN=0 BOSUN_AGENT_SETTLE_SECONDS=0.5 "$BOSUN" refresh --update-restart "$WORK/update-prompt" zeta
 check "... starts it again" wait_for 15 another_claude_in zeta "$zeta_pid"
 check "... keeping them too, resuming its conversation with the update's prompt" bash -c '
   grep -qx haiku "$1.args" && grep -q "\"effortLevel\":\"low\"" "$1.args" && [ "$(cat "$1.prompt")" = bosun-was-updated:check-in ]' _ "$WORK/live-claude.$(claude_in zeta)"
@@ -2850,7 +2859,7 @@ echo "BOSUN_HARNESS=codex" >"$BOSUN_CONFIG_DIR/bosun.env"
 check "a send --new window launched on Claude, the default agent now Codex, fingerprints the same" bash -c '
   [ "$(cd / && "$1" launch --fingerprint zeta | jq -cS .)" = "$(jq -cS .fingerprint "$2/launches/smoke/zeta.json")" ]' _ "$BOSUN" "$BOSUN_STATE_DIR"
 zeta_pid="$(claude_in zeta)"
-check "... and an update's restart of it" env BOSUN_LAUNCH_DRY_RUN=0 "$BOSUN" refresh --update-restart "$WORK/update-prompt" zeta
+check "... and an update's restart of it" env BOSUN_LAUNCH_DRY_RUN=0 BOSUN_AGENT_SETTLE_SECONDS=0.5 "$BOSUN" refresh --update-restart "$WORK/update-prompt" zeta
 check "... starts it again on Claude, as it was launched, with its --model" wait_for 15 another_claude_in zeta "$zeta_pid"
 check "... (its arguments are Claude's)" bash -c 'grep -qx -- --remote-control "$1.args" && grep -qx haiku "$1.args"' _ "$WORK/live-claude.$(claude_in zeta)"
 rm -f "$BOSUN_CONFIG_DIR/bosun.env"
@@ -3099,12 +3108,22 @@ check "with events on, the dispatcher runs as the loop starts, not an interval l
   [ "$ran" = 1 ]' _ "$BOSUN" "$WORK/events-start.out" "$BOSUN_STATE_DIR"
 check "one check-in refuses while check-ins are off" fails_with "check-ins are disabled" env BOSUN_CHECKIN_MINUTES=0 "$BOSUN" checkin
 check "the loop refuses with check-ins off unless events run without them" fails_with "BOSUN_EVENTS_WITHOUT_CHECKINS=1 keeps the loop" env BOSUN_CHECKIN_MINUTES=0 BOSUN_EVENTS_ENABLED=1 "$BOSUN" checkin --loop
+# It keeps running: the dispatcher ticks as it starts and again an interval later (its last_tick, to the second).
 check "with events alone the loop keeps running and sends no check-in" bash -c '
+  state="$3/events/state.json"
+  tick() { grep -o "\"last_tick\": *\"[^\"]*\"" "$state" 2>/dev/null; }
+  last="$(tick)" ticks=0
   BOSUN_CHECKIN_MINUTES=0 BOSUN_EVENTS_ENABLED=1 BOSUN_EVENTS_WITHOUT_CHECKINS=1 BOSUN_EVENTS_INTERVAL_SECONDS=1 \
     "$1" checkin --loop >"$2" 2>&1 & pid=$!
-  sleep 3; alive=0; kill -0 $pid 2>/dev/null && alive=1
+  for _ in $(seq 1 40); do
+    now="$(tick)"
+    if [ -n "$now" ] && [ "$now" != "$last" ]; then ticks=$((ticks + 1)) last="$now"; fi
+    [ "$ticks" -ge 2 ] && break
+    sleep 0.25
+  done
+  alive=0; kill -0 $pid 2>/dev/null && alive=1
   kill $pid 2>/dev/null; pkill -P $pid 2>/dev/null; wait $pid 2>/dev/null
-  [ "$alive" = 1 ] && ! grep -q "chores check-in" "$2"' _ "$BOSUN" "$WORK/events-loop.out"
+  [ "$ticks" -ge 2 ] && [ "$alive" = 1 ] && ! grep -q "chores check-in" "$2"' _ "$BOSUN" "$WORK/events-loop.out" "$BOSUN_STATE_DIR"
 
 section delegate "delegate (task types)" covers 'libexec/bosun-delegate,libexec/bosun-ledger,docs/orchestrator.md'
 L upsert 'review:acme/api#5' --kind review-request --title 'Add X' >/dev/null
@@ -3682,17 +3701,18 @@ write_quit paused
 check "bosun status --json calls a quit record with windows still open an error, with how to finish" status_has 'd["level"] == "error" and d["sentence"] == "bosun quit did not finish" and "bosun quit --stop-now" in d["problems"][0] and "bosun start" in d["problems"][0]'
 rm -f "$BOSUN_STATE_DIR/quit.json"
 
-# alpha finishes a few seconds into the wait; beta keeps waiting at its prompt, which does not hold the wait
+# alpha finishes a second into the wait; beta keeps waiting at its prompt, which does not hold the wait
 # A start still holds the windows lock when alpha is done: the quit takes it only for its stop phase, and waits.
-python3 "$ROOT/lib/run_locked.py" "$BOSUN_STATE_DIR/windows.lock" 10 busy -- sleep 12 &
+# (The wait polls every BOSUN_QUIT_POLL_SECONDS, 0.5 s here: alpha is seen done by about 1.5 s, the lock goes at 5 s.)
+python3 "$ROOT/lib/run_locked.py" "$BOSUN_STATE_DIR/windows.lock" 10 busy -- sleep 5 &
 wait_for 30 lock_taken "$BOSUN_STATE_DIR/windows.lock"
 (
-  sleep 7
+  sleep 1
   agent_status "$quit_alpha" idle
 ) &
 quit_started=$SECONDS
-check "--let-finish waits (polling every 5 s) until alpha is done, though beta waits at a prompt, and for a start holding the windows lock, then quits: morning paused, Mac kept awake" env BOSUN_WINDOWS_LOCK_WAIT_SECONDS=30 bash -c '"$1" quit --let-finish=1 --pause-morning </dev/null >"$2" 2>"$3"' _ "$BOSUN" "$WORK/quit.out" "$WORK/quit.err"
-check "... it waited for alpha, then for the lock: 10 to 45 seconds" bash -c '[ "$1" -ge 10 ] && [ "$1" -le 45 ]' _ $((SECONDS - quit_started))
+check "--let-finish waits (polling every BOSUN_QUIT_POLL_SECONDS) until alpha is done, though beta waits at a prompt, and for a start holding the windows lock, then quits: morning paused, Mac kept awake" env BOSUN_WINDOWS_LOCK_WAIT_SECONDS=30 bash -c '"$1" quit --let-finish=1 --pause-morning </dev/null >"$2" 2>"$3"' _ "$BOSUN" "$WORK/quit.out" "$WORK/quit.err"
+check "... it waited for alpha, then for the lock: 4 to 45 seconds" bash -c '[ "$1" -ge 4 ] && [ "$1" -le 45 ]' _ $((SECONDS - quit_started))
 check "... it said once, on stderr, who it waited for" bash -c '[ "$(wc -l <"$1")" -eq 1 ] && grep -q "Waiting for 1 busy window (alpha), up to 1 minute" "$1"' _ "$WORK/quit.err"
 check "... it says what it stopped and who was waiting for you" bash -c 'grep -q "^bosun is stopped\.$" "$1" && grep -q "Stopped the windows: .*alpha" "$1" && grep -q "They were waiting for you: beta" "$1" && grep -q "paused until you run: bosun start" "$1"' _ "$WORK/quit.out"
 check "... no session is left" bash -c '! tmux -L "$1" has-session -t =smoke' _ "$SOCKET"
@@ -6146,8 +6166,10 @@ while IFS= read -r line; do
 done
 FAKE
   chmod +x "$U/fake-claude"
+  # The update's restarts are real (refresh --update-restart): an agent that lasts half a second has started, as the
+  # fakes live until stopped (BOSUN_AGENT_SETTLE_SECONDS, 2 s by default, is for tests).
   U_LIVE=(BOSUN_TMUX_SOCKET="$U_TMUX" BOSUN_LAUNCH_DRY_RUN=0 BOSUN_CLAUDE_BIN="$U/fake-claude" BOSUN_ORCHESTRATOR=orch
-    BOSUN_ORCHESTRATOR_DIR="$U_REPO" BOSUN_CHECKIN_MINUTES=0)
+    BOSUN_ORCHESTRATOR_DIR="$U_REPO" BOSUN_CHECKIN_MINUTES=0 BOSUN_AGENT_SETTLE_SECONDS=0.5)
   ul() { "${U_ENV[@]}" "${U_LIVE[@]}" "$U_LINK/bin/bosun" "$@"; }
   u_claude() { # <window>: the pid of the fake Claude running in it
     local pane_pid
