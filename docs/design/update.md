@@ -520,8 +520,11 @@ Settled while building it:
   from before versions side by side exists any more). Until then, the first update of a checkout an older
   `get.sh` made converted it at a quiet moment, swapping it for the link in one call and keeping it as
   `legacy-<its commit>`. Now `get.sh` refuses such a checkout, set up or not, and says how to install again:
-  its own `bosun uninstall` (which keeps the settings, the ledger and the ontology), or move it aside, then the
-  install line. It never changes anything in the checkout. `bosun update` run in a checkout says the same
+  its own `bosun uninstall` (which keeps the settings, the ledger and the ontology), or, where that keeps the
+  checkout for what is the person's in it or there is none, its `bosun stop` and the checkout moved aside; then
+  the install line. It never changes anything in the checkout. A `legacy-*` folder an earlier conversion left is
+  no version: the prune keeps it and uninstall keeps the versions folder for it, and the guide says to delete it
+  by hand. `bosun update` run in a checkout says the same
   (`libexec/bosun-update`), and the plan blocks an install that is no link (`update_facts.install_problem`).
 - **The prune** deletes an older version unless a change or a commit of its own is in it
   (`lib/checkout_work.py`, shared with uninstall), and keeps a folder in the versions folder that is no version,
@@ -909,8 +912,8 @@ installed that day.
   input, which restarts the orchestrator. Its writes there are none: a version folder, while Claude runs
   with its plugin from it, reads clean as an update's prune (`version_work`) and `bosun uninstall`
   (`versions_work`) read it, and uninstall deleted every version once it waited for the windows' last
-  hooks (below). (`checkout_work`, for a checkout, names the shared `bosun.git` as
-  another worktree of a version, so it is not what a version is checked with.)
+  hooks (below). (`checkout_work`, the check for a plain checkout, would name the shared `bosun.git` as
+  another worktree if run on a version, so it is not what a version is checked with.)
 - **The prompts' words work with a real Claude.** The take-stock prompt (`TAKE_STOCK_PROMPT` in
   `lib/update_agents.py`: "bosun will restart this session for an update (… -> …), which ends your
   background work. List each background task still running and what you would do when it finishes, and

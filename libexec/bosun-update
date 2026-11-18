@@ -39,8 +39,9 @@
 #      reloaded, what came of each window, what fails after the switch that did not before, and where
 #      the backup is. Once the update is done, it is saved as summary.md in the backup's folder.
 # It moves an install get.sh made, with its versions side by side. A checkout is updated with git, and one
-# an older get.sh made, from before versions side by side, is installed again: its own bosun uninstall (or
-# move it aside), then the install line (docs/updating.md#an-install-from-before-versions).
+# an older get.sh made, from before versions side by side, is installed again: its own bosun uninstall (if
+# that keeps it for what is yours in it, bosun stop and move it aside), then the install line
+# (docs/updating.md#an-install-from-before-versions).
 # An update cut short (Ctrl-C, a crash, a power cut) is carried on by the next `bosun update`: put back
 # if it stopped while writes were paused (the next write to a store does that too), finished if its
 # checks had passed. With nothing newer it says bosun is up to date; an install past the newest release
@@ -242,7 +243,7 @@ esac
 [ -z "$FROM" ] || run_update --from "$FROM" ${args[@]+"${args[@]}"}
 
 if [ "$BOSUN_INSTALL" = "$BOSUN_ROOT" ]; then
-  die "bosun update moves an install made by get.sh, with its versions side by side in <install>-versions; $BOSUN_ROOT is a checkout: update it with git. One an older get.sh made, at ~/.local/share/bosun, is installed again: its own bosun uninstall (or move it aside), then the install line (docs/updating.md#an-install-from-before-versions)"
+  die "bosun update moves an install made by get.sh, with its versions side by side in <install>-versions; $BOSUN_ROOT is a checkout: update it with git. One an older get.sh made, at ~/.local/share/bosun, is installed again: its own bosun uninstall (if that keeps it for what is yours in it, bosun stop and move it aside), then the install line (docs/updating.md#an-install-from-before-versions)"
 fi
 
 # Going back is the version installed's own: nothing fetched, lib/update_back.py of this version.

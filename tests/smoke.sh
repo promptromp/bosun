@@ -5879,8 +5879,8 @@ FAKE
   g_before="$(g_tree)"
   G_REFUSED="$G_DIR is a checkout of bosun from before versions side by side, which this no longer updates: install bosun again."
   check "with a checkout from before versions, it refuses: that install is installed again, never updated" fails_with "$G_REFUSED" get_dry
-  check "... saying how: its own bosun uninstall, or moving it aside, then the line again" fails_with \
-    "Take it off with its own bosun uninstall ($G_DIR/bin/bosun uninstall, which keeps your settings, ledger and ontology), or move it aside, then run this line again." \
+  check "... saying how: its own bosun uninstall, else its bosun stop and moving it aside, then the line again" fails_with \
+    "Take it off with its own bosun uninstall ($G_DIR/bin/bosun uninstall, which keeps your settings, ledger and ontology); if that keeps the checkout for what is yours in it, or it has no uninstall, run $G_DIR/bin/bosun stop and move the checkout aside. Then run this line again." \
     env HOME="$G/home" BOSUN_DIR="$G_DIR" BOSUN_REPO="$G/upstream" sh "$ROOT/get.sh" --unattended
   check "... changing nothing, in the checkout or beside it" test "$(g_tree)" = "$g_before"
   rm "$G/home/.local/bin/bosun"

@@ -501,7 +501,8 @@ def install_problem(old_root: Path, new_root: Path) -> list[str]:
         return []
     problem = (
         f"bosun update moves an install with its versions side by side ({install} a link to one of "
-        f"them); {old_root} and {new_root} are not that"
+        f"them); {old_root} and {new_root} are not that (a checkout an older get.sh made is installed again: "
+        "docs/updating.md#an-install-from-before-versions)"
     )
     return [problem]
 

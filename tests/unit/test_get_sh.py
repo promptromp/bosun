@@ -439,7 +439,11 @@ class OlderCheckout(Upstream):
                     f"({self.install}/bin/bosun uninstall,",
                     done.stderr,
                 )
-                self.assertIn("or move it aside, then run this line again.", done.stderr)
+                self.assertIn(
+                    "if that keeps the checkout for what is yours in it, or it has no uninstall, run "
+                    f"{self.install}/bin/bosun stop and move the checkout aside. Then run this line again.",
+                    done.stderr,
+                )
         after = sorted((p.relative_to(self.tmp), p.read_bytes()) for p in self.tmp.rglob("*") if p.is_file())
         self.assertEqual(after, before)
         self.assertFalse(self.versions.exists())

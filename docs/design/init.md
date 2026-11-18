@@ -54,8 +54,8 @@ last, so a download cut short does nothing.
 What it does depends on what is at the install path, `~/.local/share/bosun`, and it refuses anything else
 rather than guess (a folder that is not bosun's, a link to anything but a version, a versions folder
 without `bosun.git`). A checkout of bosun there, one an older `get.sh` made before versions side by side, is
-refused too, saying how to install again (its own `bosun uninstall`, or moving it aside, then the install
-line), and nothing in it changes: such an install is installed again, never converted (decided 2026-11-18).
+refused too, saying how to install again (its own `bosun uninstall`, or, if that keeps it or there is none,
+its `bosun stop` and moving it aside; then the install line), and nothing in it changes: such an install is installed again, never converted (decided 2026-11-18).
 
 - **Nothing:** a first install. It clones `bosun.git` bare into `~/.local/share/bosun-versions`, one
   branch and no tags, and marks it the installer's (`bosun.managed`, which [uninstall](uninstall.md) goes by)
@@ -179,8 +179,8 @@ need Python wait until it is. `bosun init` and `bosun doctor` both start with it
 **To add an OS:** add `lib/platforms/<os>.sh` with the same functions as `macos.sh`, map its `uname -s`
 in `load_profiles`, and let `get.sh`'s `check_os` through. `tests/unit/test_preflight.py` checks that a
 profile has them all. That covers this check only. What else assumes macOS: `install.sh` and the
-launchd templates, the jobs `bosun update` reloads, stops and starts (`reload_changed_jobs`,
-`stop_own_jobs` and `start_jobs` in `lib/common.sh`), `lib/uninstall_macos.py`, `pmset` and the wake,
+launchd templates, the jobs `bosun update` reloads and unloads (`reload_changed_jobs` and `unload_jobs` in
+`lib/common.sh`), `lib/uninstall_macos.py`, `pmset` and the wake,
 `caffeinate` in the keep-awake, `osascript` for alerts, `dscl`, `date -j` and `lsof`'s flags.
 
 **To add an agent:** see [Agents](harnesses.md#adding-another). There are two so far, and a profile is

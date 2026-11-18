@@ -169,7 +169,7 @@ look() {
   if [ -L "$DIR" ]; then
     look_at_link
   elif [ -d "$DIR/.git" ] && [ -f "$DIR/bin/bosun" ]; then
-    die "$DIR is a checkout of bosun from before versions side by side, which this no longer updates: install bosun again. Take it off with its own bosun uninstall ($DIR/bin/bosun uninstall, which keeps your settings, ledger and ontology), or move it aside, then run this line again."
+    die "$DIR is a checkout of bosun from before versions side by side, which this no longer updates: install bosun again. Take it off with its own bosun uninstall ($DIR/bin/bosun uninstall, which keeps your settings, ledger and ontology); if that keeps the checkout for what is yours in it, or it has no uninstall, run $DIR/bin/bosun stop and move the checkout aside. Then run this line again."
   elif [ -e "$DIR" ]; then
     die "$DIR is not bosun's: neither a link to one of its versions nor a checkout of bosun. Move it, or set BOSUN_DIR."
   else

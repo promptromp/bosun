@@ -339,8 +339,8 @@ version_folder() { cd "$HOME/.local/share/bosun" && pwd -P; }
 # <folder> of a version reads as an update's prune reads one (version_work: its files changed, a commit
 # made in it) and bosun uninstall reads the versions folder (versions_work, with every version): nothing
 # of mine in it. lib/checkout_work.py of that version, run without writing its bytecode there. What git
-# shows there besides the caches running bosun makes is a note. (checkout_work, for a checkout from
-# before versions, would name bosun.git itself as another worktree of a version's repository.)
+# shows there besides the caches running bosun makes is a note. (checkout_work, the check for a plain
+# checkout, would name bosun.git itself as another worktree of a version's repository.)
 reads_clean() { # <folder>
   git -C "$1" status --porcelain --ignored --untracked-files=all | grep -v "__pycache__/" | sed 's/^/  note  git status there: /'
   python3 -B - "$1" <<'PY'

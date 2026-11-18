@@ -162,8 +162,12 @@ with `BOSUN_REPO` set back (the address the README's install line uses).
 
 An install that an older `get.sh` made, before versions side by side came on 2026-11-07, is a checkout in
 `~/.local/share/bosun`, and it is not updated: the install line refuses it and changes nothing in it. Install
-bosun again: take it off with its own `bosun uninstall` (which keeps your settings, ledger and ontology) or move it
-aside, then run the install line.
+bosun again: take it off with its own `bosun uninstall` (which keeps your settings, ledger and ontology), then run
+the install line. If that uninstall keeps the checkout for what is yours in it (or the checkout is older than
+`bosun uninstall`), run its `bosun stop` and move the checkout aside before the install line.
+
+A `legacy-<commit>` folder that an earlier conversion left in `~/.local/share/bosun-versions` is no version: an
+update keeps it, and uninstall keeps the versions folder for it. Delete it by hand once nothing of yours is in it.
 
 ## Going back
 
