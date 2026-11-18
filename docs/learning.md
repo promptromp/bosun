@@ -26,9 +26,10 @@ background work, nor a scheduled one while bosun is stopped by `bosun quit`.
    waited, refused and failed tool calls, guard denials, questions to you, the `bosun` commands run, and the end of
    each turn. Deterministic checks of the ledger are added, and the instructions and memory in force, and what
    earlier runs found.
-2. **An analysis:** one headless Claude with no tools and no MCP servers reads the digest and returns findings
-   (a stall, a mishap, a duplicate message, a correction you repeated, a missing rule, a setup or outreach idea, a
-   memory note), each with evidence quoted from the digest. A finding whose quote is not in the digest is dropped.
+2. **An analysis:** one headless Claude with no tools, no MCP servers and none of your plugins reads the digest
+   and returns findings (a stall, a mishap, a duplicate message, a correction you repeated, a missing rule, a setup
+   or outreach idea, a memory note), each with evidence quoted from the digest. A finding whose quote is not in the
+   digest is dropped.
 3. **Proposals:** each new finding with a change becomes a `learn:<YYYY-MM-DD>/<id>` ledger item holding the exact
    change, and the orchestrator lists it under *Needs your approval*. Findings are remembered, so a later run counts
    a known problem again instead of proposing it twice.

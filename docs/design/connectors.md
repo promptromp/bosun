@@ -354,7 +354,8 @@ claude.ai names as meaning nothing there.
 ## Plugins
 
 Status: built 2026-11-17, and run in the VM the same day (`tests/sandbox.sh mac live claude`, 109 passed, 0
-failed): the probe plugin's hook ran in a repo window's start and in none of the orchestrator's sessions.
+failed): the probe plugin's hook ran in a repo window's start and in none of the orchestrator's sessions. bosun's
+own headless calls load none either since 2026-11-18 (below); their VM check is written, not yet run.
 
 **What a plugin brings.** A Claude Code window loads every plugin I enabled (`enabledPlugins` in my
 `~/.claude/settings.json`, and in the folder's `.claude/settings.json` and `.claude/settings.local.json`): its
@@ -412,6 +413,31 @@ reads it: the launch logs it, doctor warns on the window's plugin line, and the 
 `all`): nothing could tell which plugins to switch off, so the launch says so and does not start, and doctor says
 it does not start, as for the connectors' refusals.
 
+**Every headless call bosun makes loads none.** Learning's analysis (`lib/learn.py`), the Slack watcher's call
+(`lib/slack_watch.py`), the login check request (`login.probe`, over `claude_state.probe`) and `bosun alert`'s Slack
+DM are `claude -p` runs that nobody watches and that must end in an answer, so a plugin's hook or skill that asks a
+question would fail them as it would stall the orchestrator, and a hook could even answer in the login check's
+place. Each gets `plugins_claude.headless_settings` (`plugins_claude.py --headless` for the alert, in shell): a
+`false` for every plugin installed or named by a settings scope of the folder the call runs in, on or off there
+(`plugins.headless_plan`, over the same facts as a window's plan), whatever the lists say, merged into the call's one
+`--settings` (beside learning's `effortLevel`; beside the `apiKeyHelper` the watcher and the login check sign in
+with, when Claude Code uses one). The watcher and the login check read no settings file (`--setting-sources ""`), so
+a plugin my settings switch off is not off for them by that. With no settings sources Claude Code 2.1.308 loaded none
+of my plugins in the VM on 2026-11-18 (`mac live`'s baseline, a note), but bosun does not rely on that: each gets its
+`false`, and a `false` for one that is off anyway changes nothing. A settings scope that does not parse is said only by the calls that read them (learning, the alert). The
+watcher keeps the Slack plugin on when its server is that plugin's (not when `BOSUN_SLACK_WATCH_MCP_CONFIG` names a
+site's file), and the alert, which reads my settings for its Slack server and may send through the Slack plugin's or
+the claude.ai connector's, keeps the Slack plugin by its bare name (not said when it is not installed). `claude_state` sits below `plugins_claude`, so the login check's caller
+composes its settings: `claude_state.probe` takes a function that gives them for its empty folder. A plugin managed
+settings force on stays on and is said on stderr. An `installed_plugins.json` that does not parse: learning's run
+and the watch fail in one line, before the call (learning's state records it, so the watchdog reports a failed run;
+the watcher counts a failed watch); the login check makes no request and says it could not tell, and why; the
+alert, which must still reach me, has already shown its notification and still tries the DM without the `false`s,
+logging why (its timeout bounds a plugin that holds it up). No
+list widens them: they are bosun's, not a window of mine. `bosun chores --dry-run` is not one of them: it rehearses
+the orchestrator, so it takes the orchestrator's list, as above. The other ways bosun runs `claude` start no session
+(`auth status`, `mcp list`, `--version`).
+
 **Other agents**, through the profile (`Profile.plugins` names the module with each agent's `plugins_doctor_line`),
 never an `if` on a name: Claude Code limits per plugin, as above. Codex can only switch every plugin off: a plugin
 list other than `all` adds `--disable plugins`, decided in `codex_plan` with the connectors' own reason for it, so
@@ -455,9 +481,9 @@ servers that block a window. Details: [Antigravity](antigravity.md#part-2-agy-wi
 
 | Layer | What it shows |
 |---|---|
-| Unit | Each entry's resolution, `claude mcp list`'s text parsed (placeholder servers), an unresolved name left out, a failed lookup falling back to what was kept (and the alert when nothing was), the Codex arguments and a failed listing refusing the start, the kept config value written once and only when the update adds the key, the init recommendations, its re-run and `--unattended`, the gate's new verbs (and the noun-like words left out), camel case and a digit before a capital, Chrome actions, business days in a zone east and west of UTC; another scope's allow list refusing a launch (each scope, exact equality, a missing or unreadable file, `all` unchecked), doctor's "allowed by name" and "by pattern", a kept key's unset note in the plan, the summary and doctor's reader, init's `all` on a `bosun.env` from before the key; plugin lists (bare name and id, `all`, `[]`), the scopes merged key by key, the managed files, a plugin kept for its server, not found, Codex's `--disable plugins`, agy's refusal, the kept `BOSUN_ORCHESTRATOR_PLUGINS`, the plugin doctor lines |
-| Smoke | A launch's arguments for a window with none, a few, and `all` (the fake `claude` answers `mcp list`); `--fingerprint` running no lookup; the guard hook in the orchestrator's launch and in `chores --dry-run`; `--help` with no config; doctor's lines; a repo whose own settings allow more refusing its window's launch, until the list names it; a site settings file's allow list replaced, or kept with `all`; doctor's warning while `bosun.env` does not set the orchestrator's list; a YAML list entry holding a comma refused; a `false` per plugin a fixture `~/.claude/settings.json` enables in the orchestrator's launch and none in a repo window's (but with `plugins: []`), doctor's plugin lines, the fingerprint agreeing |
-| VM, `mac live` | Real Claude Code and Codex windows with local stdio test servers (one allowed, one not, one a project's; on Codex also one named with a dot and one of a local plugin): each window starts and shows only what it may reach, new and resumed; on Codex a list that does not name the plugin's server switches every plugin off, and one that names it keeps plugins on; the Codex facts above; on Claude Code, a repo whose `.claude/settings.json` allows a server the list does not name keeps the window from starting, and naming it starts it; whether `claude mcp list` writes `~/.claude.json`. An orchestrator that had everything keeps it after an update and doctor warns: `mac work`. A tiny local plugin whose SessionStart hook notes its folder: a repo window's start runs it, the orchestrator's does not, and doctor's lines say so |
+| Unit | Each entry's resolution, `claude mcp list`'s text parsed (placeholder servers), an unresolved name left out, a failed lookup falling back to what was kept (and the alert when nothing was), the Codex arguments and a failed listing refusing the start, the kept config value written once and only when the update adds the key, the init recommendations, its re-run and `--unattended`, the gate's new verbs (and the noun-like words left out), camel case and a digit before a capital, Chrome actions, business days in a zone east and west of UTC; another scope's allow list refusing a launch (each scope, exact equality, a missing or unreadable file, `all` unchecked), doctor's "allowed by name" and "by pattern", a kept key's unset note in the plan, the summary and doctor's reader, init's `all` on a `bosun.env` from before the key; plugin lists (bare name and id, `all`, `[]`), the scopes merged key by key, the managed files, a plugin kept for its server, not found, Codex's `--disable plugins`, agy's refusal, the kept `BOSUN_ORCHESTRATOR_PLUGINS`, the plugin doctor lines; each headless call's one `--settings` with a `false` per plugin of mine, one my settings switch off too (learning's, the Slack watcher's with its Slack plugin kept when the server is its own, the login check's), a scope that does not parse said only by a call that reads it, the watcher's broken-file error before its Slack lookup, `--headless` on the command line, and what each does with an `installed_plugins.json` that does not parse |
+| Smoke | A launch's arguments for a window with none, a few, and `all` (the fake `claude` answers `mcp list`); `--fingerprint` running no lookup; the guard hook in the orchestrator's launch and in `chores --dry-run`; `--help` with no config; doctor's lines; a repo whose own settings allow more refusing its window's launch, until the list names it; a site settings file's allow list replaced, or kept with `all`; doctor's warning while `bosun.env` does not set the orchestrator's list; a YAML list entry holding a comma refused; a `false` per plugin a fixture `~/.claude/settings.json` enables in the orchestrator's launch and none in a repo window's (but with `plugins: []`), doctor's plugin lines, the fingerprint agreeing; the same fixture plugins switched off in learning's analysis, the Slack watcher's call, the login check and the alert's DM (the Slack plugin kept), and with an `installed_plugins.json` that does not parse: learning and the watcher fail in one line, the login check makes no request and says why, the alert still sends and logs why |
+| VM, `mac live` | Real Claude Code and Codex windows with local stdio test servers (one allowed, one not, one a project's; on Codex also one named with a dot and one of a local plugin): each window starts and shows only what it may reach, new and resumed; on Codex a list that does not name the plugin's server switches every plugin off, and one that names it keeps plugins on; the Codex facts above; on Claude Code, a repo whose `.claude/settings.json` allows a server the list does not name keeps the window from starting, and naming it starts it; whether `claude mcp list` writes `~/.claude.json`. An orchestrator that had everything keeps it after an update and doctor warns: `mac work`. A tiny local plugin whose SessionStart hook notes its folder: a repo window's start runs it, the orchestrator's does not, and doctor's lines say so; a plain `claude -p` runs it, a real learning analysis (a dry run on haiku), the Slack watcher's call (a dry run against a local stdio server) and a real login check request do not, the last two again with probe-hook switched off in my settings, and a `claude -p --setting-sources ""` notes whether an installed plugin loads with no settings file (the alert's DM needs a real Slack: smoke only) |
 | This Mac | One interactive Claude Code window with an allow list naming one claude.ai connector, since only a real claude.ai login has them; it shows that one and none of the others |
 
 ## Later

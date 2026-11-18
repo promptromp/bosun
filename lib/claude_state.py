@@ -69,7 +69,7 @@ import signal
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
@@ -1426,7 +1426,8 @@ def auth_status(claude_bin: str) -> AuthStatus:
 
 
 # The login check request: the smallest real request a headless Claude makes (a small model, no
-# tools, settings, MCP servers or transcript), about $0.002. It runs in an empty folder.
+# tools, settings files, MCP servers, plugins of mine or transcript), about $0.002. It runs in an empty
+# folder.
 PROBE_MODEL = "haiku"
 PROBE_BUDGET_USD = "0.05"
 PROBE_TIMEOUT_SECONDS = 120
@@ -1443,19 +1444,21 @@ class ProbeResult:
     cost_usd: float = 0.0
 
 
-def credential_settings() -> list[str]:
+def credential_setting() -> dict[str, str]:
     """The one setting of mine a headless call that loads no settings files (`--setting-sources ""`, so
     no allow rules or hooks of mine) still needs: the `apiKeyHelper` in ~/.claude/settings.json, when
-    Claude Code signs in with an API key that way. It goes as `--settings`, alone; a helper is a command
-    line, never the key itself, so nothing secret is in the arguments. Without one, nothing: a login, or
+    Claude Code signs in with an API key that way, as a settings object for its one `--settings`, beside
+    the plugins it switches off (the Slack watcher's call and the login check); a helper is a command line,
+    never the key itself, so nothing secret is in the arguments. Without one, {}: a login, or
     ANTHROPIC_API_KEY, which the call gets from its environment."""
     helper = (read_object(SETTINGS_FILE) or {}).get("apiKeyHelper")
     if not isinstance(helper, str) or not helper.strip():
-        return []
-    return ["--settings", json.dumps({"apiKeyHelper": helper})]
+        return {}
+    return {"apiKeyHelper": helper}
 
 
-def probe_command(claude_bin: str) -> list[str]:
+def probe_command(claude_bin: str, settings: Mapping[str, Any]) -> list[str]:
+    """The login check request, with <settings> as its one `--settings` (none when empty)."""
     return [
         claude_bin,
         "-p",
@@ -1472,7 +1475,7 @@ def probe_command(claude_bin: str) -> list[str]:
         "--disable-slash-commands",
         "--setting-sources",
         "",
-        *credential_settings(),
+        *(["--settings", json.dumps(settings)] if settings else []),
         "--output-format",
         "stream-json",
         "--verbose",
@@ -1520,12 +1523,16 @@ def result_error(result: dict[str, Any], status: object) -> ApiError:
     return ApiError(AUTH if looks_like_auth_error(text) else OTHER, PATTERN, "unclassified")
 
 
-def probe(claude_bin: str) -> ProbeResult:
-    """Make the login check request (it costs a fraction of a cent; see PROBE_*)."""
+def probe(claude_bin: str, settings_for: Callable[[Path], Mapping[str, Any]]) -> ProbeResult:
+    """Make the login check request (it costs a fraction of a cent; see PROBE_*) in an empty folder, with
+    the API key helper it signs in with (credential_setting) and what <settings_for> gives for that folder:
+    lib/login.py's probe passes none of my plugins, which this module, below lib/plugins_claude.py, cannot
+    work out. What <settings_for> raises is the caller's."""
     with tempfile.TemporaryDirectory(prefix="bosun-login-") as scratch:
+        command = probe_command(claude_bin, {**credential_setting(), **settings_for(Path(scratch))})
         try:
             result = subprocess.run(
-                probe_command(claude_bin),
+                command,
                 cwd=scratch,
                 stdin=subprocess.DEVNULL,  # never the terminal: see NO_TERMINAL
                 capture_output=True,

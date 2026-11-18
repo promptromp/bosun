@@ -1539,6 +1539,24 @@ class SpendLimitTest(WatchdogCase):
         self.assertEqual(self.state()["limits"], {})
         self.assertEqual(len(self.prompts), 1)
 
+    def test_a_probe_that_could_not_tell_says_why_in_the_log(self) -> None:
+        reason = "/Users/me/.claude/plugins/installed_plugins.json does not parse, so bosun cannot tell which"
+        state = watchdog.State(limits={"alpha": {"stopped": True, "since": "2026-01-05 09:00:00"}})
+        lines = []
+        for result in (
+            claude_state.ProbeResult("unknown", code=reason),
+            claude_state.ProbeResult("ok", code="x"),
+        ):
+
+            def answer(_bin: str, result: claude_state.ProbeResult = result) -> claude_state.ProbeResult:
+                return result
+
+            out = io.StringIO()
+            with redirect_stdout(out):
+                watchdog.probe_if_due(replace(self.inputs(at(MONDAY, "09:05")), probe=answer), state)
+            lines.append(out.getvalue().split("[watchdog] ", 1)[-1].strip())
+        self.assertEqual(lines, [f"usage-limit probe: unknown ({reason})", "usage-limit probe: ok"])
+
     def test_dry_run_and_status_make_no_probe_and_send_nothing(self) -> None:
         self.add(self.transcript(REPO_PID), self.limit(at(MONDAY, "09:00")))
         self.watch(at(MONDAY, "09:05"))

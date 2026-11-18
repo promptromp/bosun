@@ -698,7 +698,8 @@ status_has() { # <python condition over d, the object bosun status --json printe
 # whole day, which is only safe away from midnight, where the morning is not yet due.
 awake_outside() { BOSUN_DAYS=MTWRFSU BOSUN_START_TIME="$(date -v+3H +%H:%M)" BOSUN_AWAKE_UNTIL="$(date -v+5H +%H:%M)" "$@"; }
 awake_all_day() { BOSUN_DAYS=MTWRFSU BOSUN_START_TIME=00:00 BOSUN_AWAKE_UNTIL=23:59 "$@"; }
-# auth status says $FAKE_AUTH (in or out); the login check request gets $FAKE_PROBE (ok or auth).
+# auth status says $FAKE_AUTH (in or out); the login check request gets $FAKE_PROBE (ok or auth), and its
+# arguments go to login-probe.args.
 cat >"$WORK/login-claude" <<FAKE
 #!/bin/bash
 case "\$1" in
@@ -710,6 +711,7 @@ case "\$1" in
     ;;
   -p)
     echo probe >>"$WORK/login-probes.log"
+    printf '%s\n' "\$@" >"$WORK/login-probe.args"
     if [ "\${FAKE_PROBE:-ok}" = ok ]; then
       echo '{"type": "result", "is_error": false, "result": "OK", "total_cost_usd": 0.001}'
     else
@@ -2557,6 +2559,23 @@ check "the call gets only Slack's read tools, no built-in tools and no settings"
     grep -qF -- "$want" <<<"$args" || { echo "missing: $want"; exit 1; }
   done
   ! grep -qE "Bash|--dangerously" <<<"$args"' _ "$WORK/slack-claude.args"
+# My plugins: one my settings enable, and the Slack plugin installed with its server. The call loads none of them
+# (it reads no settings file, and bosun does not rely on that), but the Slack plugin when the server is its own.
+mkdir -p "$HOME/.claude/plugins" "$WORK/slack-plugin"
+echo '{"enabledPlugins": {"probe@local": true}}' >"$HOME/.claude/settings.json"
+printf '{"plugins": {"slack@acme-market": [{"scope": "user", "installPath": "%s"}]}}\n' "$WORK/slack-plugin" >"$HOME/.claude/plugins/installed_plugins.json"
+echo '{"mcpServers": {"slack": {"type": "http", "url": "https://mcp.example.com/mcp"}}}' >"$WORK/slack-plugin/.mcp.json"
+call_plugins() { grep -m1 -A1 -x -- --settings "$WORK/slack-claude.args" | tail -1 | jq -c .enabledPlugins; }
+SWE --dry-run >/dev/null
+check "the call switches off each plugin of mine, the Slack plugin too when a site's file holds the server" \
+  test "$(call_plugins)" = '{"probe@local":false,"slack@acme-market":false}'
+BOSUN_EVENTS_ENABLED=1 BOSUN_CLAUDE_BIN="$WORK/slack-claude" "$BOSUN" slack-watch --dry-run >/dev/null 2>&1
+check "... and keeps the Slack plugin when the server is its own" test "$(call_plugins)" = '{"probe@local":false}'
+echo '[not an object]' >"$HOME/.claude/plugins/installed_plugins.json"
+check "an installed_plugins.json that does not parse stops the call, saying which file and why" fails_with \
+  "slack-watch: the watch call was not started: $HOME/.claude/plugins/installed_plugins.json does not parse, so bosun cannot tell which plugins to switch off" \
+  env BOSUN_EVENTS_ENABLED=1 BOSUN_CLAUDE_BIN="$WORK/slack-claude" BOSUN_SLACK_WATCH_MCP_CONFIG="$WORK/slack-mcp.json" "$BOSUN" slack-watch --dry-run
+rm -rf "$HOME/.claude/settings.json" "$HOME/.claude/plugins" "$WORK/slack-plugin"
 check "a watch queues one slack event per new message" contains "$(SWE)" "1 message(s) (1 mention, 0 dm, 0 thread-reply), 1 new"
 check "... which the event list shows with its permalink" contains "$("$BOSUN" events --list)" "slack     slack-watch    https://acme.slack.com/archives/C0000000001/p"
 check "... and the dispatcher frames as untrusted, for chores step 1" contains "$(BOSUN_EVENTS_ENABLED=1 BOSUN_EVENTS_FAST_DEBOUNCE_SECONDS=0 BOSUN_SEND_DRY_RUN=1 "$BOSUN" events --dry-run 2>&1)" "untrusted excerpt: \"can you check the exporter header?\""
@@ -2607,6 +2626,43 @@ claude_record "$orch_pid" waiting 7200
 check "once the watchdog agent is installed, the loop leaves alerts to it" bash -c '! grep -q "watchdog\|would notify" <<<"$1"' _ "$("$BOSUN" checkin --dry-run 2>&1)"
 rm "$HOME/Library/LaunchAgents/com.bosun.morning.watchdog.plist"
 check "a refused DM is reported" fails_with "not delivered on Slack" env BOSUN_CLAUDE_BIN="$WORK/alert-claude" ALERT_FAKE_REPLY='{"result":"blocked","permission_denials":[{"tool_name":"x"}]}' "$BOSUN" alert hi
+# My plugins: one my settings enable, and the Slack plugin installed. The DM loads none of them but the Slack plugin,
+# whose server it may send with; with an installed_plugins.json that does not parse, it still tries, and says why.
+mkdir -p "$HOME/.claude/plugins"
+echo '{"enabledPlugins": {"probe@local": true, "slack@acme-market": true}}' >"$HOME/.claude/settings.json"
+echo '{"plugins": {"slack@acme-market": [{"scope": "user"}], "acme-helper@acme-market": [{"scope": "user"}]}}' >"$HOME/.claude/plugins/installed_plugins.json"
+BOSUN_CLAUDE_BIN="$WORK/alert-claude" "$BOSUN" alert "plugins check" >/dev/null 2>&1
+check "the DM switches off each plugin of mine but the Slack plugin, in one --settings" bash -c '
+  [ "$(grep -cx -- --settings "$1")" = 1 ] &&
+    [ "$(grep -m1 -A1 -x -- --settings "$1" | tail -1 | jq -c .)" = "{\"enabledPlugins\":{\"acme-helper@acme-market\":false,\"probe@local\":false}}" ]' \
+  _ "$WORK/alert-claude.args"
+echo '[not an object]' >"$HOME/.claude/plugins/installed_plugins.json"
+out="$(BOSUN_CLAUDE_BIN="$WORK/alert-claude" "$BOSUN" alert "plugins check" 2>&1)"
+check "with an installed_plugins.json that does not parse, the DM is still sent" contains "$out" "alert sent as a Slack DM"
+check "... logging what the plugins step said, and which step failed" bash -c '
+  grep -qF "[alert] plugins: $2 does not parse, so bosun cannot tell which plugins to switch off" <<<"$1" &&
+    grep -qF "[alert] warning: the Slack DM loads your plugins: lib/plugins_claude.py exited 2 (its lines above)" <<<"$1"' \
+  _ "$out" "$HOME/.claude/plugins/installed_plugins.json"
+check "... and without a --settings" bash -c '! grep -qx -- --settings "$1"' _ "$WORK/alert-claude.args"
+# Settings that are not what the step should print (a plugin left on): said so, every line of the step logged, sent.
+# A python3 stand-in answers for lib/plugins_claude.py only, in the fixture HOME's ~/.local/bin, which bosun puts
+# first on its PATH; it goes again right after the one run.
+real_python="$(command -v python3)"
+cat >"$HOME/.local/bin/python3" <<FAKE
+#!/bin/bash
+case "\$1" in
+  */plugins_claude.py) echo '{"enabledPlugins": {"x@y": true}}' && echo "plugins: a line of the step" >&2 ;;
+  *) exec "$real_python" "\$@" ;;
+esac
+FAKE
+chmod +x "$HOME/.local/bin/python3"
+out="$(BOSUN_CLAUDE_BIN="$WORK/alert-claude" "$BOSUN" alert "plugins check" 2>&1)"
+rm -f "$HOME/.local/bin/python3"
+check "settings that are not valid are said, with the step's lines, and the DM still sent" bash -c '
+  grep -qF "[alert] plugins: a line of the step" <<<"$1" &&
+    grep -qF "[alert] warning: the Slack DM loads your plugins: lib/plugins_claude.py printed settings that are not valid" <<<"$1" &&
+    grep -qF "alert sent as a Slack DM" <<<"$1" && ! grep -qx -- --settings "$2" || { echo "$1"; exit 1; }' _ "$out" "$WORK/alert-claude.args"
+rm -rf "$HOME/.claude/settings.json" "$HOME/.claude/plugins"
 check "a bad member id is refused" fails_with "must be a Slack member id" env BOSUN_ALERT_SLACK_USER='U1"; x' "$BOSUN" alert hi
 check "without a member id, only a notification" contains "$(BOSUN_ALERT_SLACK_USER='' "$BOSUN" alert hi 2>&1)" "notification only"
 check "send dry-run only logs" contains "$(BOSUN_SEND_DRY_RUN=1 "$BOSUN" send orch hello 2>&1)" "dry-run: would deliver to smoke:orch: hello"
@@ -2661,8 +2717,9 @@ check "status reports the watchdog" contains "$("$BOSUN" status 2>&1)" "Watchdog
 unset BOSUN_WATCHDOG_NOW BOSUN_DAYS BOSUN_ALERT_SLACK_USER BOSUN_LAUNCHD_LABEL
 
 section sessions-learn "sessions and learn (fake analysis Claude)" covers 'libexec/bosun-learn,libexec/bosun-ledger,libexec/bosun-sessions,libexec/bosun-watchdog'
-cat >"$WORK/learn-claude" <<'EOF'
+cat >"$WORK/learn-claude" <<EOF
 #!/bin/bash
+printf '%s\n' "\$@" >"$WORK/learn-claude.args"
 cat >/dev/null
 echo '{"total_cost_usd": 0.05, "structured_output": {"summary": "quiet", "findings": [{"key": "smoke-rule", "category": "prompt-gap", "severity": "low", "title": "Smoke rule", "summary": "s", "evidence": [{"source": "session", "ref": "x", "quote": "Bosun activity digest"}], "proposal": {"target": "policy", "text": "Smoke rule text.", "rationale": "r"}}]}}'
 EOF
@@ -2687,6 +2744,20 @@ check "apply appends the rule to the site policy" bash -c '"$1" learn apply "$2"
 check "... and closes the item" contains "$("$BOSUN" ledger show "$LEARNED")" '"state": "applied"'
 check "a second run does not propose it again" contains "$(LEARN --since 2h)" "new proposals: none"
 check "the watchdog checks the learning run once it is enabled" contains "$(BOSUN_LEARN_ENABLED=1 "$BOSUN" watchdog --status 2>&1)" "learn            "
+# My plugins: one my settings enable, and one installed that no scope names. The analysis loads none of them.
+mkdir -p "$HOME/.claude/plugins"
+echo '{"enabledPlugins": {"probe@local": true}}' >"$HOME/.claude/settings.json"
+echo '{"plugins": {"acme-helper@acme-market": [{"scope": "user"}]}}' >"$HOME/.claude/plugins/installed_plugins.json"
+LEARN --dry-run --since 2h --out "$WORK/learn-plugins" >/dev/null
+check "the analysis switches off each plugin of mine, in its one --settings beside its effort" bash -c '
+  [ "$(grep -cx -- --settings "$1")" = 1 ] && grep -m1 -A1 -x -- --settings "$1" | tail -1 |
+    jq -e ".enabledPlugins == {\"acme-helper@acme-market\": false, \"probe@local\": false} and (.effortLevel | type) == \"string\"" >/dev/null' \
+  _ "$WORK/learn-claude.args"
+echo '[not an object]' >"$HOME/.claude/plugins/installed_plugins.json"
+check "an installed_plugins.json that does not parse fails the run, saying which file and why" fails_with \
+  "learn: the analysis was not started: $HOME/.claude/plugins/installed_plugins.json does not parse, so bosun cannot tell which plugins to switch off" \
+  env BOSUN_CLAUDE_BIN="$WORK/learn-claude" "$BOSUN" learn --dry-run --since 2h --out "$WORK/learn-plugins"
+rm -rf "$HOME/.claude/settings.json" "$HOME/.claude/plugins" "$WORK/learn-plugins"
 rm -f "$BOSUN_CONFIG_DIR/policy.md"
 
 section folder-trust "folder trust" covers 'libexec/bosun-trust'
@@ -3289,10 +3360,26 @@ rm -f "$WORK/login-probes.log"
 check "setup --dry-run makes no request" bash -c 'grep -q "dry-run: would make one login check request" <<<"$1" && grep -q "ok: Claude Code login works" <<<"$1" && [ ! -e "$2" ]' _ "$(LS --dry-run)" "$WORK/login-probes.log"
 check "ensure_claude_login passes when the login check request works" bash -c 'grep -q "ok: Claude Code login works: logged in (claude.ai)" <<<"$1"' _ "$(LS)"
 check "... after one request" test "$(probes)" = 1
+# My plugins: one my settings enable, and one installed that no scope names. The request loads none of them, though
+# it reads no settings file; with an installed_plugins.json that does not parse it makes none, and says why.
+mkdir -p "$HOME/.claude/plugins"
+echo '{"enabledPlugins": {"probe@local": true}}' >"$HOME/.claude/settings.json"
+echo '{"plugins": {"acme-helper@acme-market": [{"scope": "user"}]}}' >"$HOME/.claude/plugins/installed_plugins.json"
+LS >/dev/null
+check "the request switches off each plugin of mine, in one --settings, with no settings files" bash -c '
+  [ "$(grep -cx -- --settings "$1")" = 1 ] && grep -qx -- --setting-sources "$1" &&
+    [ "$(grep -m1 -A1 -x -- --settings "$1" | tail -1 | jq -c .)" = "{\"enabledPlugins\":{\"acme-helper@acme-market\":false,\"probe@local\":false}}" ]' \
+  _ "$WORK/login-probe.args"
+echo '[not an object]' >"$HOME/.claude/plugins/installed_plugins.json"
+out="$(LS)"
+check "with an installed_plugins.json that does not parse, no request, and the step says why" bash -c '
+  grep -qF "warning: could not confirm the Claude Code login: the login check could not tell: unknown ($2 does not parse, so bosun cannot tell which plugins to switch off)" <<<"$1" &&
+    [ "$3" = 2 ]' _ "$out" "$HOME/.claude/plugins/installed_plugins.json" "$(probes)"
+rm -rf "$HOME/.claude/settings.json" "$HOME/.claude/plugins"
 out="$(FAKE_PROBE=auth LS)"
 check "a revoked login fails the step loudly, for the morning-failed alert" bash -c 'grep -q "FAIL: Claude Code login: the login check at .* got a login error (authentication_failed/401); run /login" <<<"$1" && grep -q "setup finished with 1 failed step" <<<"$1"' _ "$out"
 out="$(FAKE_AUTH=out LS)"
-check "logged out fails without a request" bash -c 'grep -q "FAIL: Claude Code login: claude auth status: not logged in" <<<"$1" && [ "$2" = 2 ]' _ "$out" "$(probes)"
+check "logged out fails without a request" bash -c 'grep -q "FAIL: Claude Code login: claude auth status: not logged in" <<<"$1" && [ "$2" = 3 ]' _ "$out" "$(probes)"
 
 section morning-dry-run "morning (dry run)" needs setup-steps covers 'libexec/bosun-morning'
 out="$(BOSUN_CONFIG_DIR="$SETUP_CFG" BOSUN_NETWORK_PROBE_URL=file:///dev/null "$BOSUN" morning --dry-run --awake-minutes 5 2>&1)"

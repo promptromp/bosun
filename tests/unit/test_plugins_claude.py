@@ -4,6 +4,7 @@ turned into the enabledPlugins of its launch settings, from my settings, the fol
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import sys
 import unittest
@@ -189,6 +190,106 @@ class CommandTest(PluginsCase):
         code, out, err = self.run_main(f"all, {PROBE}")
         self.assertEqual((code, out), (2, ""))
         self.assertIn("plugins: `all` means every plugin, so it stands alone", err)
+
+
+class HeadlessTest(PluginsCase):
+    """bosun's own headless calls (learning's analysis, the Slack watcher's call, the login check, the alert's
+    DM) load none of my plugins."""
+
+    def settings(self, keep: tuple[str, ...] = (), reads_settings: bool = True) -> tuple[dict[str, Any], str]:
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            settings = plugins_claude.headless_settings(self.repo, keep, "the call", reads_settings)
+        return settings, err.getvalue()
+
+    def test_none_of_mine(self) -> None:
+        """A plugin my settings enable, one installed that no scope names, and one my settings switch off: a
+        call with `--setting-sources ""` never reads that `false`, and one more changes nothing for others."""
+        self.switches(self.home_settings, {PROBE: True, "off@acme-market": False})
+        write(self.installed, {"plugins": {HELPER: [{"scope": "user"}]}})
+        expected = {"enabledPlugins": {HELPER: False, "off@acme-market": False, PROBE: False}}
+        for reads_settings in (True, False):
+            with self.subTest(reads_settings=reads_settings):
+                self.assertEqual(self.settings(reads_settings=reads_settings), (expected, ""))
+
+    def test_an_installed_plugin_my_settings_switch_off_still_gets_its_false(self) -> None:
+        """What a window's plan leaves out (it is off for a window), a headless call switches off."""
+        write(self.installed, {"plugins": {"x@m": [], "y@m": []}})
+        self.switches(self.home_settings, {"x@m": False})
+        self.assertEqual(
+            self.settings(reads_settings=False), ({"enabledPlugins": {"x@m": False, "y@m": False}}, "")
+        )
+
+    def test_a_scope_that_does_not_parse_is_said_only_by_a_call_that_reads_it(self) -> None:
+        self.home_settings.parent.mkdir(parents=True)
+        self.home_settings.write_text("{not json")
+        write(self.installed, {"plugins": {HELPER: []}})
+        unread = f"plugins: {self.home_settings} does not parse, so what it says of plugins is not read\n"
+        self.assertEqual(self.settings(), ({"enabledPlugins": {HELPER: False}}, unread))
+        self.assertEqual(self.settings(reads_settings=False), ({"enabledPlugins": {HELPER: False}}, ""))
+
+    def test_a_plugin_it_keeps_stays_on_by_its_bare_name(self) -> None:
+        self.switches(self.home_settings, {PROBE: True, SLACK: True})
+        self.assertEqual(self.settings(("acme-slack",)), ({"enabledPlugins": {PROBE: False}}, ""))
+
+    def test_nothing_installed_or_enabled_is_an_empty_table(self) -> None:
+        self.assertEqual(self.settings(), ({"enabledPlugins": {}}, ""))
+
+    def test_a_plugin_managed_settings_force_on_is_said_not_fought(self) -> None:
+        self.switches(self.home_settings, {PROBE: True})
+        self.switches(self.managed / "managed-settings.json", {HELPER: True})
+        self.assertEqual(
+            self.settings(),
+            (
+                {"enabledPlugins": {PROBE: False}},
+                f"plugins: {HELPER} is forced on by managed settings, so the call loads it anyway\n",
+            ),
+        )
+
+    def test_a_name_it_keeps_that_no_plugin_has_is_not_said(self) -> None:
+        """bosun's own rule finding nothing (the alert keeps the Slack plugin, which may not be installed)."""
+        self.switches(self.home_settings, {PROBE: True})
+        self.assertEqual(self.settings(("slack",)), ({"enabledPlugins": {PROBE: False}}, ""))
+
+    def test_the_command_line_for_the_alert(self) -> None:
+        self.switches(self.home_settings, {PROBE: True, SLACK: True})
+        code, out, err = connector_fakes.capture(
+            plugins_claude.main,
+            "--headless",
+            "the DM",
+            "--keep=acme-slack, acme-gone",
+            "--cwd",
+            str(self.repo),
+        )
+        self.assertEqual((code, json.loads(out), err), (0, {"enabledPlugins": {PROBE: False}}, ""))
+        code, out, _ = connector_fakes.capture(
+            plugins_claude.main, "--headless", "the DM", "--cwd", str(self.repo)
+        )
+        self.assertEqual(json.loads(out), {"enabledPlugins": {PROBE: False, SLACK: False}})
+
+    def test_the_command_line_refuses_all_as_a_keep_and_a_window_without_its_lists(self) -> None:
+        code, out, err = connector_fakes.capture(
+            plugins_claude.main, "--headless", "the DM", "--keep=all", "--cwd", str(self.repo)
+        )
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("`all` is no such list", err)
+        code, out, err = connector_fakes.capture(plugins_claude.main, "--plugins=", "--cwd", str(self.repo))
+        self.assertEqual(
+            (code, out, err), (2, "", "plugins: give --plugins and --connectors, or --headless\n")
+        )
+
+    def test_an_installed_plugins_file_that_does_not_parse_refuses(self) -> None:
+        self.installed.parent.mkdir(parents=True)
+        self.installed.write_text("{not json")
+        code, out, _ = connector_fakes.capture(
+            plugins_claude.main, "--headless", "the DM", "--cwd", str(self.repo)
+        )
+        self.assertEqual((code, out), (2, ""))
+        with self.assertRaises(ConnectorsError) as caught:
+            self.settings()
+        self.assertEqual(
+            str(caught.exception),
+            f"{self.installed} does not parse, so bosun cannot tell which plugins to switch off",
+        )
 
 
 class DoctorTest(PluginsCase):

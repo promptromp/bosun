@@ -4,8 +4,9 @@ sessions.yml) turned into the `enabledPlugins` of its launch settings: a `false`
 settings scopes would load that the list leaves out, unless its connectors need it or the orchestrator's own
 settings file enables it. Claude Code ranks the launch's `--settings` above my local, project and user
 settings, merging `enabledPlugins` key by key, so that `false` wins; only managed settings rank above it. The
-plan is lib/plugins.py's; what Claude Code's files say, lib/claude_state.py's. Design:
-docs/design/connectors.md, "Plugins".
+plan is lib/plugins.py's; what Claude Code's files say, lib/claude_state.py's. Every headless call bosun
+makes (learning's analysis, the Slack watcher's call, the login check, the alert's Slack DM) takes the empty
+list's settings from headless_settings, whatever the lists say. Design: docs/design/connectors.md, "Plugins".
 
 Usage: plugins_claude.py --plugins <value> --connectors <value> --cwd <dir> [--settings-file <file>]
            Claude Code's settings, always a JSON object: {} for `all`, else {"enabledPlugins": {...}} with a
@@ -15,6 +16,11 @@ Usage: plugins_claude.py --plugins <value> --connectors <value> --cwd <dir> [--s
            per plugin managed settings force on, and per settings scope that does not parse (what it says
            of plugins is not read; the installed plugins still get their `false`). Reads files only: never
            `claude`.
+       plugins_claude.py --headless <who> [--keep <value>] --cwd <dir>
+           The settings of one of bosun's own headless calls, <who> (`bosun alert`'s Slack DM): always
+           {"enabledPlugins": {...}}, with a `false` per plugin a call in <dir> would load but those <value>
+           names (comma-separated: an id, or a bare name from any marketplace). A line on stderr per plugin
+           managed settings force on and per settings scope that does not parse.
 
 Exit codes: 0 done, 2 a list or command line that cannot be read, or an installed_plugins.json that is there
 but does not parse (nothing can tell which plugins to switch off); anything else (and no output) is a failure
@@ -26,6 +32,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -74,6 +82,22 @@ def launch_settings(plan: plugins.PluginPlan) -> dict[str, Any]:
     return {claude_state.ENABLED_PLUGINS: dict.fromkeys(plan.off, False)}
 
 
+def headless_settings(
+    cwd: Path, keep: Sequence[str] = (), who: str = "this call", reads_settings: bool = True
+) -> dict[str, Any]:
+    """Claude Code's settings for one of bosun's own headless calls (learning's analysis, the Slack watcher's
+    call, the login check, the alert's Slack DM), which load none of my plugins: an `enabledPlugins` with a
+    `false` for every plugin installed or named by a settings scope of <cwd> (plugins.headless_plan: also one
+    my settings switch off, which a call that reads no settings file may load), but those <keep> names (a
+    plugin id, or a bare name from any marketplace); an empty one when there is none. A plugin managed
+    settings force on stays on, as no setting can switch it off, and is said on stderr, of <who>; so is a
+    settings scope that does not parse, but only by a call that reads them (<reads_settings>: not with
+    `--setting-sources ""`). ConnectorsError when installed_plugins.json is there but does not parse."""
+    plan = plugins.headless_plan(Allowed(tuple(keep)), facts(cwd))
+    say_plan(plan if reads_settings else replace(plan, unread=()), who)
+    return launch_settings(plan)
+
+
 def plugins_doctor_line(
     args: argparse.Namespace, plugin_list: Allowed, connector_list: Allowed
 ) -> tuple[str, str]:
@@ -84,17 +108,29 @@ def plugins_doctor_line(
     return plugins.report(args.window, plugins.plan(plugin_list, connector_list, window_facts))
 
 
-def say_plan(plan: plugins.PluginPlan) -> None:
+def say_plan(plan: plugins.PluginPlan, who: str = "this window") -> None:
     """What the launch logs of a plan: each name not found, each plugin forced on, each scope not read."""
     for name in plan.not_found:
-        say(f"{name} not found, so this window starts without it")
+        say(f"{name} not found, so {who} starts without it")
     for plugin in plan.managed:
-        say(f"{plugin} is forced on by managed settings, so this window loads it anyway")
+        say(f"{plugin} is forced on by managed settings, so {who} loads it anyway")
     for path in plan.unread:
         say(f"{path} does not parse, so what it says of plugins is not read")
 
 
+def cmd_headless(args: argparse.Namespace) -> int:
+    keep = plugins.parse(args.keep or "")
+    if keep.everything:
+        raise ConnectorsError("--keep names the plugins a headless call keeps; `all` is no such list")
+    print(json.dumps(headless_settings(args.cwd, keep.names, args.headless), separators=(",", ":")))
+    return 0
+
+
 def cmd_plugins(args: argparse.Namespace) -> int:
+    if args.headless is not None:
+        return cmd_headless(args)
+    if args.plugins is None or args.connectors is None:
+        raise ConnectorsError("give --plugins and --connectors, or --headless")
     plugin_list = plugins.parse(args.plugins)
     if plugin_list.everything:
         print("{}")
@@ -109,10 +145,12 @@ def parser() -> argparse.ArgumentParser:
     top = argparse.ArgumentParser(
         prog="plugins_claude.py", description="Claude Code's enabledPlugins settings."
     )
-    top.add_argument("--plugins", required=True)
-    top.add_argument("--connectors", required=True)
+    top.add_argument("--plugins")  # a window's list; with --connectors, unless --headless
+    top.add_argument("--connectors")
     top.add_argument("--cwd", required=True, type=Path)
     top.add_argument("--settings-file", type=Path)  # the orchestrator's (BOSUN_ORCHESTRATOR_SETTINGS)
+    top.add_argument("--headless")  # one of bosun's own headless calls: who it is, for its lines
+    top.add_argument("--keep")  # what that call keeps on
     top.set_defaults(run=cmd_plugins)
     return top
 
