@@ -135,6 +135,8 @@ the_install() {
     bash -c 'bosun update --check --json | jq -e ".channel == \"main\" and .error == null"'
 }
 
+# Three days with bosun running (launchd_for_real started it), then stopped, so that what follows (the
+# journals, a torn tail the next write must set aside) has no writer of bosun's own beside it.
 the_first_days() {
   echo "the first days: three of them, the clock a day on between them"
   day_1
@@ -142,6 +144,7 @@ the_first_days() {
   day_2
   next_day 2
   day_3
+  bosun stop >/dev/null 2>&1
 }
 
 # ---- windows, the check-in loop and launchd, as they are while an update runs ----------------------
