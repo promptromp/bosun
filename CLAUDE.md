@@ -563,16 +563,17 @@ files in place; that is fine for this repo's only long-running script (`checkin 
 loop bash has already parsed), but for hand edits to `libexec/` keep to atomic replacement.
 
 Add a unit test in `tests/unit/` for any change to `lib/*.py` or `bosun-resolve`; the commit hook
-runs the ones the change reaches, and `uv run pytest -n auto` runs them all (about a minute). Always
-run `tests/smoke.sh` (hermetic: temp HOME, own tmux socket, fake Claude): end-to-end checks,
-including that task files only use valid ledger transitions and that the task table in
-`docs/orchestrator.md` matches them; `--with-unit` runs every unit test first too, with a plain
+runs the ones the change reaches, and `uv run pytest -n auto` runs them all (about a minute). The
+end-to-end checks are `tests/smoke.sh` (hermetic: temp HOME, own tmux socket, fake Claude), including that task
+files only use valid ledger transitions and that the task table in `docs/orchestrator.md` matches them; `--with-unit` runs every unit test first too, with a plain
 `python3 -m unittest`. Then `bosun doctor`. While iterating, run only the area you changed: `tests/smoke.sh --list`
 prints the sections' ids, `tests/smoke.sh --only <id>[,<id>...]` runs the shared setup and those (and what they
 `needs`) in seconds (a few minutes for a section with prerequisites), and says in its summary that it was a
 partial run. While iterating use `--only`, `--last-failed` (`--lf`: only the sections whose last recorded
 result, in the git-ignored `tests/.smoke-cache/`, was a failure) and `-x` (stop at the first failing check);
-before committing, run the whole suite once with none of them. CI's smoke job runs the sections the change reaches
+then push. No whole run by hand before a pull request: the pre-push hook runs the sections the change reaches, and
+a change that reaches every section leaves the whole suite to the merge queue, which runs it on three runners
+(`BOSUN_SMOKE_FULL=1 git push` runs it here first). CI's smoke job runs the sections the change reaches
 in the merge queue, and all of it nightly, in three shards. `--shard K/N` runs shard K of N of what the run would run
 (the whole suite, or what `--only`, `--last-failed` or `--changed` chose), each section in exactly one shard, with what
 it `needs` run again as for `--only`, and the summary names the shard. The shards are balanced by

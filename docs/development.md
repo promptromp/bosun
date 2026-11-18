@@ -75,8 +75,10 @@ Issues and pull requests are welcome: see [CONTRIBUTING.md](../CONTRIBUTING.md) 
 
 The smoke suite is in sections, each begun by a `section <id> "<name>"` line. `--list` prints them. `--only`
 runs the shared setup and the sections you name, plus any they `needs` (the list shows those), in the order of
-the file, and its summary says it was a partial run: it is for iterating on the area you changed, and never
-instead of the whole suite before you commit; the pre-push hook and CI's merge queue run the sections the change reaches (below), and CI's nightly run the whole suite. `--with-unit` and
+the file, and its summary says it was a partial run: it is for iterating on the area you changed. Nobody runs the
+whole suite by hand before a pull request: the pre-push hook runs the sections the change reaches (below), a change
+that reaches every section leaves the whole suite to CI's merge queue, which runs it on three runners at once, and
+CI's nightly run the whole suite. `--with-unit` and
 `--only` combine.
 
 To cut the waiting while you iterate: `-x` stops at the first failing check, after its `FAIL` line, and the
@@ -87,8 +89,8 @@ section it ran as pass or fail in `tests/.smoke-cache/sections`, a git-ignored f
 partial run changes only the sections it ran, so a section you did not run keeps its earlier result, as in
 pytest's cache. With none recorded as failed, `--last-failed` says so in one line and runs nothing (exit 0).
 It combines with `-x` and `--with-unit`, not with `--only`. The record is best effort: a run never fails over
-it. The loop is `--only` or `--last-failed`, with `-x`, then one full run with none of them before you
-commit.
+it. The loop is `--only` or `--last-failed`, with `-x`, then the push, whose hook runs the sections the change
+reaches.
 
 The pre-push hook runs `tests/smoke.sh --pre-push`, which skips the suite, with a line saying so, when the tree
 of the commit you push (pre-commit's `PRE_COMMIT_TO_REF`) already passed a whole run in this checkout less than
