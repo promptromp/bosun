@@ -38,7 +38,7 @@ of truth, so don't copy rules into this file.
   only file the update's record: what each window gets turn by turn, the take-stock and update prompts,
   what came of each, and the takeover of the windows the last update still waits for: `taken_or_left`,
   `take_over`, the record's `carried` and `taken_over`), `lib/update_windows.py` (carrying them out: bosun's commands, the update's wait
-  and its Ctrl-C, which the check-in loop carries on), `lib/update_notes.py` (the windows' note
+  and its Ctrl-C, which the check-in loop carries on; its poll's test knob, as quit's, is read by `lib/wait_knobs.py`), `lib/update_notes.py` (the windows' note
   files) and `lib/update_summary.py` (pure: the summary it ends with, from what each step kept in the
   record, its text and `--json`, and what the last update left me, which `bosun doctor` lists through
   `lib/update.py after-update`); a launch's last error goes to its window's error file (`note_error`,

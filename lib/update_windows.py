@@ -183,8 +183,9 @@ class _CtrlC:
             signal.signal(signal.SIGINT, before)
 
     def wait(self, seconds: float) -> None:
-        """<seconds>, or less if Ctrl-C comes."""
-        for _ in range(round(seconds / CTRL_C_POLL_SECONDS)):
+        """<seconds>, or less if Ctrl-C comes; at least one step of CTRL_C_POLL_SECONDS, so that a wait
+        shorter than half a step (a test's knob) is never no wait at all."""
+        for _ in range(max(1, round(seconds / CTRL_C_POLL_SECONDS))):
             if self.asked:
                 return
             time.sleep(CTRL_C_POLL_SECONDS)
