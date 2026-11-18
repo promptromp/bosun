@@ -323,7 +323,7 @@ of truth, so don't copy rules into this file.
   `tests/install_e2e.sh`) a check that it loads and does what its plist says, and that uninstall removes it
   (`jobs_are_gone`).
 - **A watchdog check:** a row in `CHECKS` (`lib/watchdog.py`), a line in
-  `libexec/bosun-watchdog`'s usage (smoke checks they match), and the table in `docs/watchdog.md`.
+  `libexec/bosun-watchdog`'s usage (`tests/unit/test_watchdog_usage.py` checks they match), and the table in `docs/watchdog.md`.
 - **A ledger kind:** an entry in `KINDS` (`lib/ledger.py`) and the list of item ids in `docs/orchestrator.md`.
   A change to `KINDS`' transitions trips the rules-digest test (`TestRules` in
   `tests/unit/test_ledger_changes.py`): bump `RULES_VERSION` (`lib/ledger.py`) and record the new
@@ -566,8 +566,9 @@ loop bash has already parsed), but for hand edits to `libexec/` keep to atomic r
 
 Add a unit test in `tests/unit/` for any change to `lib/*.py` or `bosun-resolve`; the commit hook
 runs the ones the change reaches, and `uv run pytest -n auto` runs them all (about a minute). The
-end-to-end checks are `tests/smoke.sh` (hermetic: temp HOME, own tmux socket, fake Claude), including that task
-files only use valid ledger transitions and that the task table in `docs/orchestrator.md` matches them; `--with-unit` runs every unit test first too, with a plain
+end-to-end checks are `tests/smoke.sh` (hermetic: temp HOME, own tmux socket, fake Claude); that task files use
+only valid ledger transitions, and that the task table in `docs/orchestrator.md` matches them, are unit tests
+(`tests/unit/test_delegate.py`, `tests/unit/test_task_table.py`). `--with-unit` runs every unit test first too, with a plain
 `python3 -m unittest`. Then `bosun doctor`. While iterating, run only the area you changed: `tests/smoke.sh --list`
 prints the sections' ids, `tests/smoke.sh --only <id>[,<id>...]` runs the shared setup and those (and what they
 `needs`) in seconds (a few minutes for a section with prerequisites), and says in its summary that it was a
@@ -613,7 +614,11 @@ back, and a section that points bosun at another HOME puts the plain ones there 
 one. Use `fails_with "<expected error>" cmd` for refusals (a crash must not count as a pass) and
 `wait_for <seconds> cmd` instead of fixed sleeps; external tools (aws, gh, launchctl, pmset,
 osascript) are faked in the temp HOME's `~/.local/bin`, and the install test uses its own launchd
-label and refuses to run unless the fakes come first on PATH.
+label and refuses to run unless the fakes come first on PATH. A check makes no timing assumption: it never asserts a
+duration or races a fixed sleep, but waits on what the code says or writes (a log line, a file, a lock's state, an
+exit; `hold_lock`/`release_lock` for a lock the test holds), a `wait_for` timeout being only a failsafe against a
+hang; how long a poll, a deadline or an interval waits is the unit tests', with an injected clock
+(`tests/unit/test_smoke_timing.py` holds the suite to it).
 
 **Never test an install on the machine you are running on: `install.sh`, `bosun init --recommended`,
 `get.sh`, `bosun update` and `bosun uninstall` change launchd, `pmset`, the install and the config for
