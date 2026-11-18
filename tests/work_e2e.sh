@@ -135,8 +135,7 @@ the_install() {
     bash -c 'bosun update --check --json | jq -e ".channel == \"main\" and .error == null"'
 }
 
-# Three days with bosun running (launchd_for_real started it), then stopped, so that what follows (the
-# journals, a torn tail the next write must set aside) has no writer of bosun's own beside it.
+# Three days, with bosun stopped as launchd_for_real leaves it.
 the_first_days() {
   echo "the first days: three of them, the clock a day on between them"
   day_1
@@ -144,7 +143,6 @@ the_first_days() {
   day_2
   next_day 2
   day_3
-  bosun stop >/dev/null 2>&1
 }
 
 # ---- windows, the check-in loop and launchd, as they are while an update runs ----------------------
@@ -314,19 +312,6 @@ knowledge_privacy() {
   check "... but not Marco, forgotten on day 3" not_in "$KJOURNAL/local.jsonl" person/marco Marco
   check "he is not added again without --allow-forgotten" refuses "deleted on request" \
     bosun kg add-entity person/marco --name "Marco Placeholder"
-  a_torn_tail person/priya "Priya Placeholder"
-  kg_says "a power loss left half a change naming Priya: the next write sets it aside" "moved it aside" \
-    propose feature/csv-export caveat --value "CSV exports end with a newline" --source "ledger:$T_FIRST"
-  check "... in a torn file" torn_named priya
-  kg_says "Priya asked to be forgotten" "deleted the person" forget person/priya
-  check "... and the update backups, which held her, saying so ($(grep -o 'deleted [0-9]* update backups*' <<<"$KG_SAID"))" \
-    said 0 "$KG_SAID" "taken before this; going back past it is no longer possible"
-  check "... no backup or rehearsal copy holds her" no_copy_holds person/priya "Priya Placeholder"
-  check "... kept as a keyed hash" last_forgotten '.hash_kind == "hmac-sha256"'
-  check "... nothing of her in local.jsonl" not_in "$KJOURNAL/local.jsonl" priya "export questions batched"
-  check "... nor in a torn file" bash -c '! ls "$1"/*.torn-* 2>/dev/null | grep -F local.jsonl' _ "$KJOURNAL"
-  check "... nor in the knowledge history" not_in_git priya
-  check "... nor anywhere in the knowledge folder" nowhere priya
   kg_valid
 }
 
@@ -790,11 +775,36 @@ going_back() {
   check "bosun update would take it forward again" says "ledger: format 1 -> 2" bosun update --dry-run
 }
 
+# Priya, in the knowledge base since the first day, asks to be forgotten once bosun is back on the version
+# before by hand: the backup of the update it went back over holds her, and the forget must delete it. A power
+# loss has left half a change naming her at the end of local.jsonl, which the next write sets aside. bosun is
+# stopped first, so that this next write is the test's own.
+priya_forgotten() {
+  echo "Priya asks to be forgotten, on the version before: the update's backup holds her, and a torn tail names her"
+  bosun stop >/dev/null 2>&1
+  check "the update's backup holds Priya now" bash -c 'grep -rqF "$1" "$2"' _ person/priya "$STATE/backups"
+  a_torn_tail person/priya "Priya Placeholder"
+  kg_says "a power loss left half a change naming Priya: the next write sets it aside" "moved it aside" \
+    propose feature/csv-export caveat --value "CSV exports end with a newline" --source "ledger:$T_FIRST"
+  check "... in a torn file" torn_named priya
+  kg_says "Priya asked to be forgotten" "deleted the person" forget person/priya
+  check "... which deletes the update backups that held her, saying so ($(grep -o 'deleted [0-9]* update backups*' <<<"$KG_SAID"))" \
+    said 0 "$KG_SAID" "taken before this; going back past it is no longer possible"
+  check "... no backup or rehearsal copy holds her" no_copy_holds person/priya "Priya Placeholder"
+  check "... kept as a keyed hash" last_forgotten '.hash_kind == "hmac-sha256"'
+  check "... nothing of her in local.jsonl" not_in "$KJOURNAL/local.jsonl" priya "export questions batched"
+  check "... nor in a torn file" bash -c '! ls "$1"/*.torn-* 2>/dev/null | grep -F local.jsonl' _ "$KJOURNAL"
+  check "... nor in the knowledge history" not_in_git priya
+  check "... nor anywhere in the knowledge folder" nowhere priya
+  kg_valid
+}
+
 forward_again() {
   echo "forward again: bosun update, as the guide says"
   check "bosun update --yes takes it to the next version again" bash -c 'bosun update --yes >"$1" 2>&1 || { tail -20 "$1"; exit 1; }' _ "$OUT/forward.txt"
   check "... the ledger migrated to format 2 again" test "$(jq -r '"\(.version) \(.update_patch)"' "$STATE/ledger.json")" = "2 migrated"
   check "... on the next version" test "$(git -C "$DIR" rev-parse HEAD)" = "$B_COMMIT"
+  check "... its backup holds nothing of Priya, forgotten before it" no_copy_holds person/priya "Priya Placeholder"
   valid
   kg_valid
   bosun stop >/dev/null 2>&1
@@ -869,8 +879,9 @@ back_keeps_what_was_written() {
   kg_valid
 }
 
-the_ways_back() { # by hand and forward again, then the command: a restore and forward again, then none
+the_ways_back() { # by hand, a forget, forward again, then the command: a restore and forward again, then none
   going_back
+  priya_forgotten
   forward_again
   back_with_the_command
   back_keeps_what_was_written

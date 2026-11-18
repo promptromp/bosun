@@ -402,9 +402,7 @@ person deleted on request), with the clock moved a day between them.
 
 Then it looks at the journals those days wrote: ids from the first day working and new ones minted, both
 stores under this Mac's one replica id, the key of the forgotten kept out of the knowledge history, nothing
-naming a person and none of my words in the knowledge journal file that can leave the Mac. A person deleted
-on request then leaves nothing in `local.jsonl`, in a torn file (one is made as a power loss would leave
-it), in the git history or in an update's backup.
+naming a person and none of my words in the knowledge journal file that can leave the Mac.
 
 Two more days follow, then a mid-afternoon update to the next version (this checkout and
 `tests/sandbox/update_patch.sh`: the ledger's format 2 with its migration, a line of `policy.md`, the repo
@@ -424,8 +422,10 @@ the version before's `ledger validate --journal`, that each hook command of that
 runs on the next, that the Slack watcher's next run catches up, and that a temporary link a switch cut
 short is swept. It measures the freeze (`freeze_ms` in the update's record, under 10 s) and what restoring
 the backup costs on that data (a recovering approval hook has 8 s). Then it goes back by hand, exactly as
-[Going back](updating.md#going-back) says (the way back when the newer version's own update is what broke), and
-forward again with `bosun update`. Then `bosun update --back` over that update, with a ledger write and an ontology
+[Going back](updating.md#going-back) says (the way back when the newer version's own update is what broke). There a
+person in the knowledge base since the first day is deleted on request: the forget deletes the update's backup,
+which held her, and she leaves nothing in `local.jsonl`, in a torn file (one is made as a power loss would leave
+it) or in the git history. Then forward again with `bosun update`, whose backup holds nothing of her. Then `bosun update --back` over that update, with a ledger write and an ontology
 write made between the update and the back: the ledger restored in format 1 (the write made since in the back's
 own backup), the ontology kept with its write, a second `--back` refused, and forward again. Then an update to the
 version after (`tests/sandbox/update_patch.sh --again`: the same format 2, another line of `policy.md`) and
@@ -463,7 +463,11 @@ the head of the branch that `get.sh` installs from the install's origin (`~/repo
 Until 2026-11-18 it started from the last release from before versions side by side, a checkout, which the
 first update converted; that conversion is gone (an older checkout is installed again), and with it the parts
 that showed it on a real Mac: the swap of the checkout for the link on APFS, the jobs and the check-in loop
-stopped and started again around it, a conversion put back, and the journals starting from a release's files.
+stopped and started again around it, a conversion put back, and the first write of each journal over stores an
+older bosun wrote, both stores making the one replica id at once (what an install from before versions, taken off
+and installed again over its kept stores, meets). Unit tests still cover each part: the ledger's genesis over an
+old ledger (`tests/unit/test_ledger_protocol.py`), the knowledge base's over files from before its journal
+(`tests/unit/test_knowledge_changes.py`) and two creators of the replica id (`tests/unit/test_journal.py`).
 
 The scenario is `tests/work_e2e.sh`; what it shares with `tests/install_e2e.sh` is in `tests/sandbox/e2e_lib.sh`.
 It sets the clock with `sudo date` and puts it back when it ends, also on failure.
