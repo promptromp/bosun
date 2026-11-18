@@ -230,7 +230,9 @@ shows for a window it leaves running.
 - **`send --new`** opens a new window; **`send --start`** starts Claude in a window that has none, in its folder from
   the window list (the pane's own folder for a window outside the list, or without a `sessions.yml`), resuming its
   named session (with no message, it gets the drain prompt). Both run `bosun launch` as the pane's own command, with
-  the task in a prompt file, and exit 0 only once Claude is running.
+  the task in a prompt file, and exit 0 only once Claude is running. A pane still running a command (its shell's
+  helpers, right after an agent exits) is waited for, saying so once, up to 8 seconds; past that, `--start` refuses,
+  replacing nothing.
 - **`--id <ledger id>`** names the work item (checked, prefixed, noted in its history); the orchestrator must give
   `--id` or `--no-item`.
 

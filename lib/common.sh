@@ -893,8 +893,8 @@ relaunch_in_window() { # <window_id> <window> [prompt] [dir] [quiet] [kind] [mod
   fi
   read -r pane_id pane_pid <<<"$panes"
   # Right after Claude exits, the pane's shell restarts as a login shell and briefly runs helpers
-  # (prompt and git-status workers); give it a few seconds to settle before calling it busy.
-  local deadline=$((SECONDS + RELAUNCH_SETTLE_SECONDS))
+  # (prompt and git-status workers); give it a few seconds to settle before calling it busy, saying so once.
+  local deadline=$((SECONDS + RELAUNCH_SETTLE_SECONDS)) said=0
   while :; do
     children="$(descendants "$pane_pid")" || {
       log "$2: could not list the pane's processes; not replacing it"
@@ -905,6 +905,8 @@ relaunch_in_window() { # <window_id> <window> [prompt] [dir] [quiet] [kind] [mod
       log "$2: the window is running another command; not replacing it"
       return 1
     fi
+    [ "$said" = 1 ] || log "$2: the pane runs a command; waiting up to ${RELAUNCH_SETTLE_SECONDS}s for it to end"
+    said=1
     sleep 0.5
   done
   workdir="${4:-$(tmux_cmd display-message -p -t "$pane_id" '#{pane_current_path}')}"
