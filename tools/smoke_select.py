@@ -15,10 +15,19 @@ in this order:
 
 1. it matches an `all` glob, or what lib/common.sh (which every command sources) names depends on it: the
    whole suite;
-2. it, and the files that depend on it (below), are matched against the `covers` of the sections: those
+2. it is tests/smoke.sh itself: the sections its changed lines are in (see Suite);
+3. it, and the files that depend on it (below), are matched against the `covers` of the sections: those
    sections;
-3. it matches an `ignore` glob: nothing to run for it;
-4. otherwise (no section covers it, nothing says it is safe): the whole suite.
+4. it matches an `ignore` glob: nothing to run for it;
+5. otherwise (no section covers it, nothing says it is safe): the whole suite.
+
+tests/smoke.sh is read with tools/shell_library.py, line by line on both sides of the diff (what it is now,
+and what the change took out): a changed line in a section selects that section and the sections that need
+it (they read what it leaves); in a helper (a function the suite defines), the sections that call it, through
+other helpers, and those that need them; in the shared setup (before the first section, or an `always_run`
+part), or in a helper the shared setup calls, the whole suite. A line of the shared setup that holds no code
+(a comment, a blank line) on both sides runs nothing; its first line, the `#!`, is code. A suite that does
+not read as functions, or a line that cannot be placed, runs the whole suite.
 
 A file depends on another when its code refers to it. In Python that is an `import`, or a command it starts
 (`["bosun", "ledger"`). In shell it is the file's path or name (`lib/ledger.py`, `ledger.py`), or a command it
@@ -37,9 +46,13 @@ import argparse
 import re
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import shell_library
 
 
 SECTION_MARKER = re.compile(
@@ -48,6 +61,9 @@ SECTION_MARKER = re.compile(
     r"(?:\s+covers\s+'(?P<covers>[^']*)')?\s*$"
 )
 COMMON = "lib/common.sh"  # sourced by every command: what it names under lib/ runs in every section
+SUITE = "tests/smoke.sh"  # read section by section (Suite)
+ALWAYS_RUN = re.compile(r"^\s*always_run(?:\s|$)")
+HARNESS = "the shared setup"  # the suite's code outside its sections and helpers: every run runs it
 BIN = "bin/bosun"  # not read for what it refers to: it names every command
 CATCH_ALL = (
     "syntax"  # the section whose `covers` take in all of lib/ and libexec/: it never counts as coverage
@@ -104,19 +120,25 @@ class Plan:
     reason: str = ""
     picked: dict[str, list[str]] = field(default_factory=dict)
     ignored: list[str] = field(default_factory=list)
+    unchanged: list[str] = field(default_factory=list)
     needed: list[str] = field(default_factory=list)
 
 
 def parse_sections(text: str) -> list[Section]:
+    return [section for _, section in section_lines(text)]
+
+
+def section_lines(text: str) -> list[tuple[int, Section]]:
+    """Each section's marker line (from 1) and the section it begins."""
     found = []
-    for line in text.splitlines():
+    for number, line in enumerate(text.splitlines(), 1):
         match = SECTION_MARKER.match(line) if re.match(r"^\s*section\s", line) else None
         if match is None:
             # `section() {`; a section line that does not parse is caught by test_smoke_sections.py
             continue
         needs = tuple(match["needs"].split(",")) if match["needs"] else ()
         covers = tuple(g.strip() for g in (match["covers"] or "").split(",") if g.strip())
-        found.append(Section(match["id"], match["name"], needs, covers))
+        found.append((number, Section(match["id"], match["name"], needs, covers)))
     return found
 
 
@@ -181,16 +203,38 @@ def git(root: Path, *args: str) -> str:
     return done.stdout
 
 
-def changed_files(root: Path, ref: str) -> list[str]:
-    """What differs from where this branch left <ref>: committed since the merge-base, staged, unstaged, and
-    untracked (not ignored) files, since the tree on disk is what runs. A rename is its two paths."""
+def merge_base(root: Path, ref: str) -> str:
     base = git(root, "merge-base", ref, "HEAD").strip()
     if not base:
         raise SelectionError(f"no merge-base of {ref} and HEAD")
+    return base
+
+
+def changed_files(root: Path, base: str) -> list[str]:
+    """What differs from <base>, where this branch left the ref: committed since, staged, unstaged, and
+    untracked (not ignored) files, since the tree on disk is what runs. A rename is its two paths."""
     names: set[str] = set()
     names.update(git(root, "diff", "--name-only", "--no-renames", "-z", base).split("\0"))
     names.update(git(root, "ls-files", "--others", "--exclude-standard", "-z").split("\0"))
     return sorted(n for n in names if n)
+
+
+@dataclass(frozen=True)
+class SuiteChange:
+    """How tests/smoke.sh changed since the base: its text there ("" if it was not), and the hunks of
+    `git diff -U0` from there to the file on disk."""
+
+    old: str
+    hunks: tuple[tuple[int, int, int, int], ...]
+
+
+def suite_change(root: Path, base: str) -> SuiteChange:
+    """tests/smoke.sh at <base> (none when it was not there; git failing otherwise is an error: the whole
+    suite), and the hunks since."""
+    there = git(root, "ls-tree", "--name-only", base, "--", SUITE).strip()
+    old = git(root, "show", f"{base}:{SUITE}") if there else ""
+    diff = git(root, "diff", "-U0", "--no-renames", "--no-ext-diff", base, "--", SUITE)
+    return SuiteChange(old, shell_library.parse_hunks(diff))
 
 
 def tracked_files(root: Path) -> list[str]:
@@ -314,6 +358,185 @@ class Graph:
         return frozenset(self.importing(modules | callers))
 
 
+class Suite:
+    """tests/smoke.sh as the selection reads it: each line in a section (from its marker to the next marker
+    or `always_run`), in a helper (a shell function the suite defines, wherever it stands), or in the shared
+    setup (the rest). The shared setup can only call the helpers it defines: a section's are defined only in
+    a run that runs it."""
+
+    def __init__(self, text: str) -> None:
+        self.script = shell_library.read(text)
+        marked = section_lines(text)
+        self.sections = [section for _, section in marked]
+        self.section_at: dict[int, str] = {}
+        for k, (first, section) in enumerate(marked):
+            stop = marked[k + 1][0] if k + 1 < len(marked) else len(self.script.lines) + 1
+            ends = [n for n in range(first + 1, stop) if ALWAYS_RUN.match(self.script.lines[n - 1])]
+            self.section_at.update(dict.fromkeys(range(first, ends[0] if ends else stop), section.id))
+        self.helper_at = {n: f.name for f in self.script.functions for n in range(f.first, f.last + 1)}
+        self.callers = self.helper_callers()
+
+    def region(self, line: int) -> tuple[str, str] | None:
+        """("helper", name), ("section", id) or (HARNESS, "") for line <line>; None for a line of the shared
+        setup that holds no code (a comment, a blank line; not the `#!` of line 1)."""
+        if line in self.helper_at:
+            return "helper", self.helper_at[line]
+        if line in self.section_at:
+            return "section", self.section_at[line]
+        if line == 1 or self.script.code_lines[line - 1].strip():
+            return HARNESS, ""
+        return None
+
+    def place(self, line: int) -> tuple[tuple[str, str] | None, tuple[str, str] | None]:
+        """Line <line>'s region, and for a helper's line where the helper is defined (("section", id), or
+        (HARNESS, "") for the shared setup): a section marker moved over a helper changes only that."""
+        if line not in self.helper_at:
+            return self.region(line), None
+        return self.region(line), ("section", self.section_at[line]) if line in self.section_at else (
+            HARNESS,
+            "",
+        )
+
+    def moved_from(self, line: int) -> set[str] | str:
+        """The sections a line that moved reaches: those a change to it would, and the section its helper is
+        defined in; or why that is the whole suite (a helper the shared setup defines among them)."""
+        found = self.reached_from(line)
+        home = self.place(line)[1]
+        if isinstance(found, str) or home is None:
+            return found
+        if home[0] == HARNESS:
+            return f"{SUITE}, line {line}: a helper the shared setup defines, which every run runs"
+        return found | {home[1]}
+
+    def helper_callers(self) -> dict[str, set[tuple[str, str]]]:
+        """Each helper -> the code that calls it: sections, other helpers, the shared setup (its own only)."""
+        lines: dict[tuple[str, str], list[int]] = {}
+        for number in range(1, len(self.script.lines) + 1):
+            region = self.region(number)
+            if region is not None:
+                lines.setdefault(region, []).append(number)
+        helpers = set(self.helper_at.values())
+        shared = {name for n, name in self.helper_at.items() if n not in self.section_at}
+        callers: dict[str, set[tuple[str, str]]] = {}
+        for node, numbers in lines.items():
+            code = "\n".join(self.script.code_lines[n - 1] for n in numbers)
+            for name in shell_library.calls(code, helpers if node[0] != HARNESS else shared) - {node[1]}:
+                callers.setdefault(name, set()).add(node)
+        return callers
+
+    def users(self, helper: str) -> set[tuple[str, str]]:
+        """The sections, and the shared setup, that call <helper>, themselves or through other helpers."""
+        seen: set[tuple[str, str]] = set()
+        queue = [helper]
+        while queue:
+            for caller in self.callers.get(queue.pop(), set()) - seen:
+                seen.add(caller)
+                if caller[0] == "helper":
+                    queue.append(caller[1])
+        return {node for node in seen if node[0] != "helper"}
+
+    def dependents(self, ids: Iterable[str]) -> set[str]:
+        """<ids> and the sections that need any of them, themselves or through others."""
+        found = set(ids)
+        grew = True
+        while grew:
+            more = {s.id for s in self.sections if set(s.needs) & found} - found
+            found |= more
+            grew = bool(more)
+        return found
+
+    def reached(self, lines: Iterable[int]) -> set[str] | str:
+        """The sections of this text <lines> reach (not yet those that need them); or why that is the whole
+        suite."""
+        if self.script.problems:
+            return f"{SUITE} does not read as functions: {self.script.problems[0]}"
+        ids: set[str] = set()
+        for number in lines:
+            found = self.reached_from(number)
+            if isinstance(found, str):
+                return found
+            ids |= found
+        return ids
+
+    def reached_from(self, number: int) -> set[str] | str:
+        """The sections line <number> reaches: its section, or those that call its helper; or why that is the
+        whole suite."""
+        if not 1 <= number <= len(self.script.lines):
+            return f"{SUITE}: a changed line ({number}) that cannot be placed"
+        region = self.region(number)
+        if region is None:
+            return set()
+        nodes = self.users(region[1]) if region[0] == "helper" else {region}
+        if any(kind == HARNESS for kind, _ in nodes):
+            return f"{SUITE}, line {number}: the shared setup (or a helper it calls), which every run runs"
+        return {sid for _, sid in nodes}
+
+
+def suite_sections(suite: Suite | None, change: SuiteChange | None) -> set[str] | str:
+    """The sections a change to tests/smoke.sh reaches, with those that need them; or why that is the whole
+    suite (suite_reach says what it reaches)."""
+    if suite is None or change is None or not change.hunks:
+        return f"{SUITE} changed, and how cannot be read"
+    if not change.old and any(count for _, count, _, _ in change.hunks):
+        return f"{SUITE}: lines taken out of a file that was not there"
+    return reached_in_suite(suite, change)
+
+
+def reached_in_suite(suite: Suite, change: SuiteChange) -> set[str] | str:
+    ids: set[str] = set()
+    for found in suite_reach(Suite(change.old) if change.old else None, suite, change.hunks):
+        if isinstance(found, str):
+            return found
+        ids |= found
+    return suite.dependents(ids & {s.id for s in suite.sections})
+
+
+def suite_reach(
+    old: Suite | None, new: Suite, hunks: Sequence[tuple[int, int, int, int]]
+) -> list[set[str] | str]:
+    """What a change reaches: through the lines it put in (new side), through those it took out (old side;
+    the sections still there count), and through the code it left alone but moved into another region (a
+    marker added or taken out, a helper's `}` moved: both the old region and the new)."""
+    if old is not None and old.script.problems:
+        return [f"{SUITE} at the base does not read as functions: {old.script.problems[0]}"]
+    found = [new.reached(shell_library.new_lines(hunks)), moved_regions(old, new, hunks)]
+    if old is not None:
+        found.append(old.reached(shell_library.old_lines(hunks)))
+    return found
+
+
+def moved_regions(
+    old: Suite | None, new: Suite, hunks: Sequence[tuple[int, int, int, int]]
+) -> set[str] | str:
+    """The sections code the change left alone moved between: for each line whose region (a section, a helper,
+    the shared setup), or the region its helper is defined in, differs between the old file and the new, both
+    (a helper's: its callers and where it is defined); or why that is the whole suite (one of them the shared
+    setup)."""
+    if old is None:
+        return set()
+    ids: set[str] = set()
+    for old_line, new_line in shell_library.unchanged_pairs(
+        hunks, len(old.script.lines), len(new.script.lines)
+    ):
+        has_code = old.script.has_code(old_line) or new.script.has_code(new_line)
+        if not has_code or old.place(old_line) == new.place(new_line):
+            continue
+        for suite, line in ((old, old_line), (new, new_line)):
+            found = suite.moved_from(line)
+            if isinstance(found, str):
+                return found
+            ids |= found
+    return ids
+
+
+def pick_suite(plan: Plan, sections: Sequence[Section], found: set[str]) -> None:
+    """The sections tests/smoke.sh's change reaches, in file order, in <plan>; none: it changed no code."""
+    for section in (s.id for s in sections if s.id in found):
+        plan.picked.setdefault(section, []).append(SUITE)
+    if not found:
+        plan.unchanged.append(SUITE)
+
+
 def whole_suite(path: str, graph: Graph, rules: Rules) -> Plan | None:
     """A full-run plan if <path> alone settles it: on the `all` list, or shared through lib/common.sh."""
     glob = first_match(path, rules.everything)
@@ -336,22 +559,44 @@ def reached_by(path: str, sections: Sequence[Section], graph: Graph) -> list[str
     return [s.id for s in sections if any(matches(a, g) for a in affected for g in s.covers)]
 
 
-def plan_for(changed: Sequence[str], sections: Sequence[Section], rules: Rules, graph: Graph) -> Plan:
+def plan_for(
+    changed: Sequence[str],
+    sections: Sequence[Section],
+    rules: Rules,
+    graph: Graph,
+    suite: Suite | None = None,
+    change: SuiteChange | None = None,
+) -> Plan:
+    """The plan for <changed>; <suite> (as it is) and <change> say how tests/smoke.sh changed, when it did."""
     plan = Plan()
+    in_suite = suite_sections(suite, change) if SUITE in changed else set()
     for path in changed:
-        settled = whole_suite(path, graph, rules)
-        if settled is not None:
-            return settled
-        hit = reached_by(path, sections, graph)
-        for section in hit:  # (the catch-all too: its check of the file is cheap)
-            plan.picked.setdefault(section, []).append(path)
-        if any(section != CATCH_ALL for section in hit):
-            continue
-        if first_match(path, rules.ignore) is None:
-            return Plan(full=True, unknown=True, reason=f"no section covers {path}: {WHOLE_SUITE_HINT}")
-        plan.ignored.append(path)
+        whole = whole_suite(path, graph, rules) or place(path, plan, sections, rules, graph, in_suite)
+        if whole is not None:
+            return whole
     plan.needed = needed_sections(sections, plan.picked)
     return plan
+
+
+def place(
+    path: str, plan: Plan, sections: Sequence[Section], rules: Rules, graph: Graph, in_suite: set[str] | str
+) -> Plan | None:
+    """<path>'s part in <plan>: the sections it picks, or ignored; or the whole suite's plan. <in_suite>: what
+    tests/smoke.sh's change reaches, when it is <path> (suite_sections)."""
+    if path == SUITE:
+        if isinstance(in_suite, str):
+            return Plan(full=True, reason=in_suite)
+        pick_suite(plan, sections, in_suite)
+        return None
+    hit = reached_by(path, sections, graph)
+    for section in hit:  # (the catch-all too: its check of the file is cheap)
+        plan.picked.setdefault(section, []).append(path)
+    if any(section != CATCH_ALL for section in hit):
+        return None
+    if first_match(path, rules.ignore) is None:
+        return Plan(full=True, unknown=True, reason=f"no section covers {path}: {WHOLE_SUITE_HINT}")
+    plan.ignored.append(path)
+    return None
 
 
 def needed_sections(sections: Sequence[Section], picked: dict[str, list[str]]) -> list[str]:
@@ -373,6 +618,11 @@ def report(plan: Plan, changed: Sequence[str]) -> list[str]:
         return [*lines, f"smoke selection: the whole suite: {plan.reason}", "=> full"]
     lines += [f"  {section}: {', '.join(files)}" for section, files in plan.picked.items()]
     lines += [f"  (no section): {path} is ignored" for path in plan.ignored]
+    lines += [
+        f"  (no section): {path}: no section it still has changed (only comments or blank lines outside "
+        "them, or sections it took out)"
+        for path in plan.unchanged
+    ]
     if not plan.picked:
         return [*lines, "smoke selection: no change reaches a section, nothing to run", "=> none"]
     needed = f" (and, as they need them: {' '.join(plan.needed)})" if plan.needed else ""
@@ -386,13 +636,16 @@ def report(plan: Plan, changed: Sequence[str]) -> list[str]:
 def select(root: Path, script: Path, selection: Path, base: str) -> list[str]:
     """The report for the change from <base>, ending in the answer. Whatever goes wrong is the whole suite."""
     try:
-        sections = parse_sections(script.read_text(encoding="utf-8"))
+        text = script.read_text(encoding="utf-8")
+        sections = parse_sections(text)
         rules = parse_rules(selection.read_text(encoding="utf-8"))
         if not sections:
             raise SelectionError(f"no sections found in {script}")
-        changed = changed_files(root, base)
+        since = merge_base(root, base)
+        changed = changed_files(root, since)
+        change = suite_change(root, since) if SUITE in changed else None
         graph = Graph(root, [*tracked_files(root), *changed])
-        return report(plan_for(changed, sections, rules, graph), changed)
+        return report(plan_for(changed, sections, rules, graph, Suite(text), change), changed)
     except Exception as error:  # noqa: BLE001 - failing closed is the point: any trouble is the whole suite
         return [f"smoke selection: the whole suite: {error}", "=> full"]
 

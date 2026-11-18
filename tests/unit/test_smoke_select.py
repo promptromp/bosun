@@ -13,6 +13,7 @@ that cannot be made runs every selected section in the shard; one that can puts 
 
 from __future__ import annotations
 
+import difflib
 import itertools
 import random
 import re
@@ -28,6 +29,7 @@ from test_smoke_cache import ROOT, SMOKE, Scratch, clean_env, git
 
 
 sys.path.insert(0, str(ROOT / "tools"))
+import shell_library
 import smoke_select as ss
 import smoke_shard as sh
 
@@ -202,6 +204,186 @@ class DependenciesTest(Scratch):
             }
         )
         self.assertEqual(g.common_refers, {"lib/shared.py"})  # not the command in its text
+
+
+SUITE_TEXT = """\
+#!/bin/bash
+check() { "$@"; }
+setup_done=1
+section alpha "alpha" covers 'libexec/bosun-alpha'
+check true
+section beta "beta" needs alpha covers 'libexec/bosun-beta'
+probe() { check true; }
+probe
+section gamma "gamma" covers 'libexec/bosun-gamma'
+probe
+always_run
+# the end
+finish() { :; }
+finish
+"""
+
+
+def diff_hunks(old: str, new: str) -> tuple[tuple[int, int, int, int], ...]:
+    """The hunks `git diff -U0` gives from <old> to <new>, numbered as git numbers them."""
+    found = []
+    matcher = difflib.SequenceMatcher(a=old.split("\n"), b=new.split("\n"), autojunk=False)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag != "equal":
+            found.append((i1 + (i2 > i1), i2 - i1, j1 + (j2 > j1), j2 - j1))
+    return tuple(found)
+
+
+class SuiteEditTest(unittest.TestCase):
+    """A change to tests/smoke.sh, line by line: a section's own lines select it (and those that need it), a
+    helper's the sections that call it, the shared setup's (or a helper it calls) the whole suite; code the
+    change left alone but moved into another region, both regions."""
+
+    def plan(self, new: str, *hunks: tuple[int, int, int, int], old: str = SUITE_TEXT) -> ss.Plan:
+        suite = ss.Suite(new)
+        graph = ss.Graph(Path("/nonexistent"), [])
+        return ss.plan_for(
+            [ss.SUITE], suite.sections, ss.Rules((), ()), graph, suite, ss.SuiteChange(old, hunks)
+        )
+
+    def test_a_line_in_a_section_selects_it_and_what_needs_it(self) -> None:
+        plan = self.plan(
+            SUITE_TEXT.replace("check true\nsection beta", "check false\nsection beta"), (5, 1, 5, 1)
+        )
+        self.assertEqual(sorted(plan.picked), ["alpha", "beta"])  # beta needs alpha
+        self.assertEqual(plan.picked["alpha"], ["tests/smoke.sh"])
+
+    def test_a_helper_selects_the_sections_that_call_it_and_what_needs_them(self) -> None:
+        plan = self.plan(
+            SUITE_TEXT.replace("probe() { check true; }", "probe() { check false; }"), (7, 1, 7, 1)
+        )
+        self.assertEqual(sorted(plan.picked), ["beta", "gamma"])
+
+    def test_the_shared_setup_runs_the_whole_suite_and_its_comments_nothing(self) -> None:
+        plan = self.plan(SUITE_TEXT.replace("setup_done=1", "setup_done=2"), (3, 1, 3, 1))
+        self.assertTrue(plan.full)
+        self.assertIn("tests/smoke.sh, line 3: the shared setup", plan.reason)
+        plan = self.plan(SUITE_TEXT.replace("# the end", "# the very end"), (12, 1, 12, 1))
+        self.assertEqual((plan.full, plan.picked, plan.unchanged), (False, {}, ["tests/smoke.sh"]))
+        plan = self.plan(SUITE_TEXT.replace("finish\n", "finish now\n"), (14, 1, 14, 1))  # after always_run
+        self.assertTrue(plan.full)
+        plan = self.plan(SUITE_TEXT.replace("#!/bin/bash", "#!/bin/sh"), (1, 1, 1, 1))  # (the #! is code)
+        self.assertTrue(plan.full)
+
+    def test_a_helper_the_shared_setup_calls_runs_the_whole_suite_and_one_sections_call_those(self) -> None:
+        plan = self.plan(SUITE_TEXT.replace("finish() { :; }", "finish() { true; }"), (13, 1, 13, 1))
+        self.assertTrue(plan.full)
+        self.assertIn("tests/smoke.sh, line 13: the shared setup (or a helper it calls)", plan.reason)
+        plan = self.plan(SUITE_TEXT.replace('check() { "$@"; }', 'check() { "$@" || exit 1; }'), (2, 1, 2, 1))
+        self.assertEqual(sorted(plan.picked), ["alpha", "beta", "gamma"])
+
+    def test_lines_taken_out_count_where_they_were(self) -> None:
+        plan = self.plan(SUITE_TEXT.replace("probe\nsection gamma", "section gamma"), (8, 1, 7, 0))
+        self.assertEqual(sorted(plan.picked), ["beta"])  # beta's own line, though next to a helper now
+        plan = self.plan(SUITE_TEXT.replace("setup_done=1\n", ""), (3, 1, 2, 0))
+        self.assertTrue(plan.full)
+
+    def test_code_of_the_shared_setup_made_a_comment_runs_the_whole_suite(self) -> None:
+        plan = self.plan(SUITE_TEXT.replace("setup_done=1", "# setup_done=1"), (3, 1, 3, 1))
+        self.assertTrue(plan.full)
+        self.assertIn("tests/smoke.sh, line 3: the shared setup", plan.reason)
+
+    def test_a_section_taken_out_selects_none_of_its_own(self) -> None:
+        new = SUITE_TEXT.replace("section gamma \"gamma\" covers 'libexec/bosun-gamma'\nprobe\n", "")
+        plan = self.plan(new, (9, 2, 8, 0))
+        self.assertEqual((plan.full, plan.picked), (False, {}))  # (what is gone runs nowhere)
+
+    def moved(self, new: str, old: str = SUITE_TEXT) -> ss.Plan:
+        return self.plan(new, *diff_hunks(old, new), old=old)
+
+    def test_a_marker_taken_out_selects_the_section_its_lines_join(self) -> None:
+        plan = self.moved(SUITE_TEXT.replace("section gamma \"gamma\" covers 'libexec/bosun-gamma'\n", ""))
+        self.assertEqual(sorted(plan.picked), ["beta"])  # gamma's `probe` now runs in beta
+
+    def test_a_marker_after_always_run_turns_shared_setup_into_a_section_s_code(self) -> None:
+        plan = self.moved(
+            SUITE_TEXT.replace("always_run\n", "always_run\nsection delta \"delta\" covers 'x'\n")
+        )
+        self.assertTrue(plan.full)
+        self.assertIn("the shared setup", plan.reason)
+
+    def test_a_section_split_selects_both_halves_and_what_needs_them(self) -> None:
+        plan = self.moved(
+            SUITE_TEXT.replace(
+                "probe\nsection gamma", "section beta-tail \"tail\" covers 'x'\nprobe\nsection gamma"
+            )
+        )
+        self.assertEqual(sorted(plan.picked), ["beta", "beta-tail"])
+
+    def test_a_marker_moved_up_selects_the_section_that_lost_the_lines_too(self) -> None:
+        new = SUITE_TEXT.replace(
+            "probe\nsection gamma \"gamma\" covers 'libexec/bosun-gamma'\n",
+            "section gamma \"gamma\" covers 'libexec/bosun-gamma'\nprobe\n",
+        )
+        plan = self.moved(new)
+        self.assertEqual(sorted(plan.picked), ["beta", "gamma"])
+
+    def test_a_helper_s_closing_brace_moved_over_shared_code_runs_the_whole_suite(self) -> None:
+        """The `}` is a line of a helper only gamma calls, on both sides; `after=1`, left alone, leaves the
+        shared setup for the helper."""
+        old = (
+            SUITE_TEXT.replace("probe\nalways_run", "probe\nlate\nalways_run") + "late() {\n  :\n}\nafter=1\n"
+        )
+        new = old.replace("  :\n}\nafter=1\n", "  :\nafter=1\n}\n")
+        self.assertEqual(old.split("\n")[17:19], ["}", "after=1"])
+        plan = self.plan(new, (18, 1, 17, 0), (19, 0, 19, 1), old=old)  # the `}` out, and in after after=1
+        self.assertTrue(plan.full)
+        self.assertIn("the shared setup", plan.reason)
+
+    def test_a_marker_put_in_before_a_helper_last_in_its_section_selects_its_callers_and_both_sections(
+        self,
+    ) -> None:
+        """probe is now defined only in a run that runs split: gamma, which calls it, must run (and fails)."""
+        old = SUITE_TEXT.replace("probe() { check true; }\nprobe\n", "probe\nprobe() { check true; }\n")
+        new = old.replace("probe\nprobe() {", "probe\nsection split \"split\" covers 'x'\nprobe() {")
+        self.assertEqual(sorted(self.moved(new, old=old).picked), ["beta", "gamma", "split"])
+
+    def test_a_marker_put_in_before_a_helper_the_shared_setup_defines_runs_the_whole_suite(self) -> None:
+        old = SUITE_TEXT.replace("probe\nalways_run", "probe\nlate\nalways_run") + "late() { :; }\n"
+        new = old.replace("late() {", "section zz \"zz\" covers 'x'\nlate() {")
+        plan = self.moved(new, old=old)
+        self.assertTrue(plan.full)
+        self.assertIn("a helper the shared setup defines", plan.reason)
+
+    def test_a_new_section_between_two_moves_no_code_and_selects_itself(self) -> None:
+        new = SUITE_TEXT.replace("section gamma", "section new \"new\" covers 'x'\ncheck true\nsection gamma")
+        self.assertEqual(sorted(self.moved(new).picked), ["new"])
+
+    def test_what_cannot_be_read_or_placed_runs_the_whole_suite(self) -> None:
+        for text, hunks, old, reason in (
+            (SUITE_TEXT, ((40, 1, 40, 1),), SUITE_TEXT, "a changed line (40) that cannot be placed"),
+            (SUITE_TEXT + "echo 'open\n", ((3, 1, 3, 1),), SUITE_TEXT, "does not read as functions"),
+            (SUITE_TEXT, (), SUITE_TEXT, "changed, and how cannot be read"),
+            (SUITE_TEXT, ((3, 1, 3, 1),), "", "a file that was not there"),
+            (SUITE_TEXT, ((5, 1, 5, 1),), "echo 'open\n", "at the base does not read as functions"),
+        ):
+            with self.subTest(reason=reason):
+                plan = self.plan(text, *hunks, old=old)
+                self.assertTrue(plan.full)
+                self.assertIn(reason, plan.reason)
+
+
+class SuiteChangeTest(Scratch):
+    """tests/smoke.sh's text at the base and the hunks since, read from git."""
+
+    def test_a_suite_not_there_at_the_base_has_no_old_text_and_git_failing_is_an_error(self) -> None:
+        root = self.dir / "repo"
+        (root / "tests").mkdir(parents=True)
+        (root / "README").write_text("x\n")
+        git(root, "init", "-q", "-b", "main")
+        git(root, "add", "-A")
+        git(root, "commit", "-q", "-m", "base")
+        (root / "tests" / "smoke.sh").write_text("#!/bin/bash\necho\n")
+        git(root, "add", "-A")
+        change = ss.suite_change(root, "HEAD")
+        self.assertEqual((change.old, change.hunks), ("", ((0, 0, 1, 2),)))
+        with self.assertRaisesRegex(ss.SelectionError, "failed"):
+            ss.suite_change(root, "no-such-ref")
 
 
 class ScratchSuite(Scratch):
@@ -518,6 +700,43 @@ class PrePushTest(ScratchSuite):
         self.assertEqual(result.returncode, 1)
         self.assertIn("FAIL  beta one", result.stdout)
 
+    def test_sections_the_hook_would_take_too_long_on_are_left_to_the_merge_queue(self) -> None:
+        """The time the hook would take: the longest of the shards it runs them as (--jobs), by weight."""
+        self.write("tests/smoke_weights.txt", "beta 300\nalpha 100\ngamma 200\n")
+        self.commit("weights")
+        self.write("extra/deep/er/file.txt", "changed\n")  # beta covers it
+        self.write("templates/job.plist", "<plist>changed</plist>\n")  # gamma, which needs alpha
+        result = self.run_suite("--pre-push", BOSUN_SMOKE_BASE="HEAD")
+        self.assertEqual((result.returncode, self.ran(result)), (0, []), result.stdout)
+        self.assertIn(
+            "those sections would take this hook about 600 s by smoke_weights.txt (as one run), more than "
+            "BOSUN_SMOKE_DEFER_SECONDS (180), so the merge queue runs them; tests/smoke.sh --changed HEAD "
+            "runs them",
+            result.stdout,
+        )
+        as_three = self.run_suite("--pre-push", "--jobs", "3", BOSUN_SMOKE_BASE="HEAD")
+        self.assertEqual(self.ran(as_three), [], as_three.stdout)
+        self.assertIn(
+            "about 300 s by smoke_weights.txt (the longest of 3 shards side by side)", as_three.stdout
+        )
+        self.assertIn("tests/smoke.sh --changed HEAD --jobs 3 runs them here", as_three.stdout)
+        raised = {"BOSUN_SMOKE_BASE": "HEAD", "BOSUN_SMOKE_DEFER_SECONDS": "350"}
+        self.assertEqual(
+            self.ran(self.run_suite("--pre-push", "--jobs", "3", **raised)), ["alpha", "beta", "gamma"]
+        )
+        self.assertEqual(self.ran(self.run_suite("--pre-push", **raised)), [])  # 600 s as one run: over it
+        by_hand = self.run_suite("--changed", "HEAD")  # only the hook leaves it to the queue
+        self.assertEqual(self.ran(by_hand), ["alpha", "beta", "gamma"])
+
+    def test_sections_it_cannot_weigh_run(self) -> None:
+        self.write("tests/smoke_weights.txt", "beta lots\n")
+        self.commit("weights")
+        self.write("extra/deep/er/file.txt", "changed\n")
+        for env in ({}, {"BOSUN_SMOKE_DEFER_SECONDS": "soon"}):
+            with self.subTest(env=env):
+                result = self.run_suite("--pre-push", BOSUN_SMOKE_BASE="HEAD", **env)
+                self.assertEqual(self.ran(result), ["beta"], result.stdout)
+
 
 def sections(*specs: str) -> list[ss.Section]:
     """Sections from `id` or `id:need,need` specs, in that order."""
@@ -703,6 +922,193 @@ check "uninstall-files one" true
 OWN = re.compile(
     r"^partial run, not the whole suite: (?P<own>.*?)(?: \(and, as they need them: (?P<needs>.*)\))?$"
 )
+
+
+class JobsOptionTest(ScratchSuite):
+    """`tests/smoke.sh --jobs N`: what the run would run as N shards side by side, around the fake sections
+    (the split of ShardOptionTest: beta alone in one of two shards, the rest in the other)."""
+
+    fake_sections = SHARD_SECTIONS
+    TOTAL = re.compile(r"^(\d+) passed, (\d+) failed(?: \((.*)\))?$", re.MULTILINE)
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.write(
+            "tests/smoke_weights.txt", "syntax 1\nalpha 10\nbeta 30\ngamma 5\ndelta 5\nuninstall-files 1\n"
+        )
+        self.commit("weights")
+
+    def run_jobs(self, *args: str, **env: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["/bin/bash", str(self.script), *args],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=clean_env(SMOKE_ROOT=str(self.root), SMOKE_CACHE_DIR=str(self.cache), **env),
+            stdin=subprocess.DEVNULL,
+            timeout=300,  # a failsafe against a shard that is never stopped, no measurement
+        )
+
+    def totals(self, result: subprocess.CompletedProcess[str]) -> list[tuple[int, int, str]]:
+        return [(int(m[1]), int(m[2]), m[3] or "") for m in self.TOTAL.finditer(result.stdout)]
+
+    def change_check(self, name: str, command: str) -> None:
+        self.script.write_text(
+            self.script.read_text().replace(f'check "{name}" true', f'check "{name}" {command}')
+        )
+
+    def test_the_shards_run_side_by_side_and_one_summary_counts_them_all(self) -> None:
+        result = self.run_jobs("--jobs", "2")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(
+            "2 shards side by side (--jobs 2), each a run of its own: tests/smoke.sh --shard K/2",
+            result.stdout,
+        )
+        self.assertIn("=== shard 1 of 2 (exit 0) ===", result.stdout)
+        self.assertIn("=== shard 2 of 2 (exit 0) ===", result.stdout)
+        self.assertEqual(self.ran(result), ["alpha", "beta", "gamma"])
+        *shards, whole = self.totals(result)
+        self.assertEqual(len(shards), 2)
+        self.assertEqual(whole, (sum(s[0] for s in shards), 0, "2 shards side by side"))
+
+    def test_with_only_the_shards_split_those_sections(self) -> None:
+        result = self.run_jobs("--jobs", "2", "--only", "beta")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.ran(result), ["beta"])
+        self.assertIn("smoke shard 2 of 2: no section falls in this shard, nothing to run", result.stdout)
+        self.assertEqual(
+            self.totals(result)[-1][2], "2 shards side by side, a partial run, not the whole suite: beta"
+        )
+
+    def test_a_failure_in_any_shard_fails_the_run_and_is_recorded(self) -> None:
+        self.change_check("beta one", "false")
+        result = self.run_jobs("--jobs", "2")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertEqual(self.totals(result)[-1][1], 1)
+        self.assertIn("=== shard 1 of 2 (exit 1) ===", result.stdout)
+        self.assertIn("beta fail", (self.cache / "sections").read_text())
+        self.assertIn("alpha pass", (self.cache / "sections").read_text())
+
+    def test_with_x_the_first_shard_that_fails_stops_the_others(self) -> None:
+        self.change_check(
+            "beta one", "false"
+        )  # alone in shard 1; delta, in shard 2, waits for what never comes
+        self.change_check("delta one", 'bash -c \'until [ -e "$1" ]; do sleep 0.1; done\' _ "$WORK/never"')
+        result = self.run_jobs("-x", "--jobs", "2")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("stopped at the first failure (-x): section beta, check: beta one", result.stdout)
+        self.assertIn("shard 2 of 2: stopped (-x), when another shard failed", result.stdout)
+        self.assertEqual(self.totals(result)[-1][1], 1)  # the failure that stopped it, not one more for it
+
+    def test_the_shards_results_are_merged_not_their_times_and_a_whole_run_records_its_tree(self) -> None:
+        """Durations under the other shards' load would skew the weights a serial run measures."""
+        result = self.run_jobs("--jobs", "2")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        results = (self.cache / "sections").read_text().split("\n")
+        for section in ("syntax", "alpha", "beta", "gamma", "delta", "uninstall-files"):
+            self.assertIn(f"{section} pass", results)
+        self.assertFalse((self.cache / "durations").exists())
+        self.assertRegex((self.cache / "passes").read_text(), r"^[0-9a-f]{40} \d+ \d+\n$")
+
+    def test_a_shard_does_not_start_with_sigint_ignored(self) -> None:
+        """A script's background job starts with SIGINT ignored, which its children could not undo; a check
+        that interrupts a command would pass serially and fail under --jobs."""
+        python = "import signal, sys; sys.exit(signal.getsignal(signal.SIGINT) is signal.SIG_IGN)"
+        self.change_check("beta one", f"python3 -c '{python}'")
+        self.change_check("alpha one", f"python3 -c '{python}'")
+        result = self.run_jobs("--jobs", "2")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("pass  beta one", result.stdout)
+
+    def test_with_unit_and_x_a_failing_unit_run_starts_no_shard(self) -> None:
+        self.script.write_text(
+            self.script.read_text().replace(
+                "always_run\n", 'always_run\n[ "$WITH_UNIT" = 0 ] || check "units" false\n', 1
+            )
+        )
+        result = self.run_jobs("-x", "--jobs", "2", "--with-unit")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("=== the unit tests (exit 1) ===", result.stdout)
+        self.assertNotIn("=== shard", result.stdout)
+
+    def test_a_partial_run_records_no_tree(self) -> None:
+        self.assertEqual(self.run_jobs("--jobs", "2", "--only", "gamma").returncode, 0)
+        self.assertFalse((self.cache / "passes").exists())
+
+    def test_with_unit_the_unit_tests_run_once_before_the_shards(self) -> None:
+        """The shared setup and its always_run parts once, with --with-unit, before the shards, which run
+        without it (the fake suite here has no unit tests of its own: the run is what shows)."""
+        result = self.run_jobs("--jobs", "2", "--with-unit")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.count("=== the unit tests (exit 0) ==="), 1, result.stdout)
+        self.assertLess(result.stdout.index("=== the unit tests"), result.stdout.index("=== shard"))
+        self.assertIn("(a partial run, not the whole suite: the unit tests (--with-unit))", result.stdout)
+
+    def test_jobs_does_not_combine_with_shard_or_list_and_wants_a_count(self) -> None:
+        for args in (("--jobs", "2", "--shard", "1/2"), ("--jobs", "2", "--list"), ("--jobs",)):
+            with self.subTest(args=args):
+                result = self.run_jobs(*args)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("usage:", result.stderr)
+        for value in ("0", "x", "100", "-1"):
+            with self.subTest(value=value):
+                result = self.run_jobs("--jobs", value)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn(
+                    f"--jobs wants how many shards to run side by side, 1 to 99, not '{value}'", result.stderr
+                )
+
+
+class StoppedShardTest(Scratch):
+    """count_shard and shards_waited of tests/smoke.sh, run alone: what -x's stop races with."""
+
+    def bash(self, body: str) -> subprocess.CompletedProcess[str]:
+        script = shell_library.read(SMOKE.read_text())
+        wanted = [f for f in script.functions if f.name in ("count_shard", "shards_waited")]
+        self.assertEqual(len(wanted), 2)
+        functions = "\n".join("\n".join(script.lines[f.first - 1 : f.last]) for f in wanted)
+        return subprocess.run(
+            ["/bin/bash", "-c", f"{functions}\n{body}"],
+            capture_output=True,
+            text=True,
+            check=False,
+            stdin=subprocess.DEVNULL,
+        )
+
+    def count(self, status: str, summary: str | None, stopped: bool) -> str:
+        shard = self.dir / "jobs" / "1"
+        shutil.rmtree(shard.parent, ignore_errors=True)
+        shard.mkdir(parents=True)
+        (shard / "status").write_text(status + "\n")
+        (shard / "log").write_text("checks\n" + (f"{summary} (shard 1 of 2)\n" if summary else ""))
+        if stopped:
+            (shard / "stopped").touch()
+        jobs = f'JOBS=2 JOBS_DIR="{shard.parent}" passed=0 failed=0'
+        body = f'{jobs}; count_shard 1; echo "counts $passed $failed"'
+        return self.bash(body).stdout
+
+    def test_a_shard_that_ended_on_its_own_as_it_was_stopped_counts_what_it_says(self) -> None:
+        self.assertEqual(self.count("1", "5 passed, 1 failed", stopped=True), "counts 5 1\n")
+        self.assertEqual(self.count("143", "4 passed, 0 failed", stopped=True), "counts 4 0\n")
+        self.assertEqual(
+            self.count("143", None, stopped=True),
+            "shard 1 of 2: stopped (-x), when another shard failed\ncounts 0 0\n",
+        )
+        self.assertEqual(
+            self.count("1", "3 passed, 0 failed", stopped=False), "counts 3 1\n"
+        )  # stopped short
+        self.assertIn("ended (exit 2) without its summary\ncounts 0 1", self.count("2", None, stopped=False))
+
+    def test_the_wait_after_a_stop_ends_after_30_seconds_saying_so(self) -> None:
+        body = """sleep() { :; }
+SHARDS_STOP_WAIT=0
+shards_waited 0 && echo "not stopping: waits on"
+for _ in $(seq 1 29); do shards_waited 1 || echo early; done
+shards_waited 1 || echo "ends at 30"
+"""
+        result = self.bash(body)
+        self.assertEqual(result.stdout, "not stopping: waits on\nends at 30\n")
+        self.assertIn("a shard -x stopped had not ended 30 s later; not waiting for it", result.stderr)
 
 
 class ShardOptionTest(ScratchSuite):

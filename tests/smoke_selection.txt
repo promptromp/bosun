@@ -12,14 +12,14 @@
 # lib/launch_record.py, is `all` too: the tool reads that from the file.)
 all lib/common.sh
 all bin/bosun
-# The suite itself: its shared setup, its stand-ins, the cache, this selection and the split into shards (a change to
-# the weights moves sections between shards, which the whole suite then shows still run apart).
-all tests/smoke.sh
+# The suite's machinery beside tests/smoke.sh (which is read section by section: see the tool's docstring): the
+# cache it keeps, this selection, the tools that read it, and the split into shards (whose weights only balance the
+# shards: they reach nothing, below).
 all tests/smoke_cache.sh
 all tests/smoke_selection.txt
 all tools/smoke_select.py
+all tools/shell_library.py
 all tools/smoke_shard.py
-all tests/smoke_weights.txt
 all tests/sandbox/macos/**
 # What every window's launch loads: the agents' shell sides (some are named in a variable, which no reader of the
 # files could follow), the orchestrator's policy, settings, plugin and task files (every section that starts or
@@ -37,6 +37,8 @@ all .github/workflows/ci.yml
 all .github/actions/**
 
 # --- ignore: no section runs or reads these ----------------------------------------------------------------------
+# How long each section takes, which only balances the shards of a split run (a section moved between shards still runs).
+ignore tests/smoke_weights.txt
 # Prose, and the site made from it. The docs hooks check them (links, anchors, the build); the smoke suite reads
 # only the two pages some sections name, which their `covers` say.
 ignore docs/**

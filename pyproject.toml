@@ -182,6 +182,11 @@ impacted_map = [
     "tests/smoke_selection.txt=tests/unit/test_smoke_selection.py",
     "tools/*.py=tests/unit/test_smoke_select.py",
     "tools/*.py=tests/unit/test_smoke_selection.py",
+    "tools/*.py=tests/unit/test_shell_library.py",
+    # ... and the guard that each section covers the commands it runs.
+    "tests/smoke.sh=tests/unit/test_smoke_covers.py",
+    "tools/*.py=tests/unit/test_smoke_covers.py",
+    "libexec/*=tests/unit/test_smoke_covers.py",
     # ... and what --shard splits them by.
     "tests/smoke_weights.txt=tests/unit/test_smoke_select.py",
     # The commit hook's unit-test run and its pass record, and the hooks' order around it (CI's lint

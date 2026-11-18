@@ -22,6 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 import smoke_select as ss  # noqa: E402
+import test_smoke_select as selection_tests  # noqa: E402
 
 
 def repository_files() -> list[str]:
@@ -120,11 +121,58 @@ class SelectionRulesTest(unittest.TestCase):
         self.assertIn("add it to a section's `covers", plan.reason)
         self.assertIn("tests/smoke_selection.txt", plan.reason)
 
-    def test_the_shell_libraries_and_the_dispatcher_run_everything(self) -> None:
-        for path in ("lib/common.sh", "bin/bosun", "tests/smoke.sh"):
+    def test_the_shell_libraries_the_dispatcher_and_the_suite_with_no_diff_run_everything(self) -> None:
+        for path in ("lib/common.sh", "lib/agents.sh", "lib/launch/claude.sh", "bin/bosun", "tests/smoke.sh"):
             with self.subTest(path=path):
                 plan = ss.plan_for([path], self.sections, self.rules, self.graph)
                 self.assertTrue(plan.full and not plan.unknown, plan.reason)
+
+    def suite_plan(self, new: str) -> ss.Plan:
+        old = (ROOT / "tests" / "smoke.sh").read_text()
+        change = ss.SuiteChange(old, selection_tests.diff_hunks(old, new))
+        return ss.plan_for([ss.SUITE], ss.parse_sections(new), self.rules, self.graph, ss.Suite(new), change)
+
+    # The structural edits of tests/smoke.sh that move lines they leave alone into another region: both
+    # regions run (the shared setup's: everything). Each on the real file.
+
+    def edited(self, starts: str, put: str | None = None, *, at: int = 0, past: int = 0) -> ss.Plan:
+        """The real suite with a line <put> in <at> lines after the first line past line <past> that starts
+        (indent aside) with <starts>, or with that line taken out (put=None)."""
+        lines = (ROOT / "tests" / "smoke.sh").read_text().split("\n")
+        k = next(n for n, line in enumerate(lines) if n >= past and line.lstrip().startswith(starts))
+        changed = [*lines[:k], *lines[k + 1 :]] if put is None else [*lines[: k + at], put, *lines[k + at :]]
+        return self.suite_plan("\n".join(changed))
+
+    def test_a_marker_taken_out_after_an_always_run_part_runs_the_whole_suite(self) -> None:
+        plan = self.edited("section resolve ")  # resolve's lines join the always_run part before it
+        self.assertTrue(plan.full)
+        self.assertIn("the shared setup", plan.reason)
+
+    def test_a_marker_put_in_after_an_always_run_runs_the_whole_suite(self) -> None:
+        # (the always_run before the launchctl and pmset stand-ins every later section uses)
+        self.assertTrue(self.edited("always_run", "section stand-ins \"x\" covers 'x'", at=1, past=4000).full)
+
+    def test_a_section_split_selects_both_halves_and_what_needs_them(self) -> None:
+        plan = self.edited("section refresh ", "section refresh-tail \"x\" covers 'x'", at=20)
+        self.assertLessEqual(
+            {"refresh", "refresh-tail", "console-sessions", "update-restart"}, set(plan.picked)
+        )
+
+    def test_a_marker_moved_up_selects_the_section_that_lost_the_lines(self) -> None:
+        lines = (ROOT / "tests" / "smoke.sh").read_text().split("\n")
+        k = next(n for n, line in enumerate(lines) if line.startswith("section launch-dry-run "))
+        plan = self.suite_plan("\n".join([*lines[: k - 4], lines[k], *lines[k - 4 : k], *lines[k + 1 :]]))
+        self.assertLessEqual({"resolve", "launch-dry-run"}, set(plan.picked))  # resolve's checks moved
+
+    def test_a_marker_put_in_before_a_helper_that_ends_a_section_selects_its_callers(self) -> None:
+        plan = self.edited("u_ended_well() {", "  section zz-split \"zz\" covers 'x'")
+        # u_ended_well is now defined only in a run that runs zz-split
+        self.assertLessEqual({"zz-split", "update-upstream", "update", "update-back"}, set(plan.picked))
+
+    def test_the_weights_reach_nothing(self) -> None:
+        """They only balance the shards of a split run: a section moved between shards still runs."""
+        plan = ss.plan_for(["tests/smoke_weights.txt"], self.sections, self.rules, self.graph)
+        self.assertEqual((plan.full, plan.picked, plan.ignored), (False, {}, ["tests/smoke_weights.txt"]))
 
     def test_docs_alone_run_nothing_and_a_command_alone_runs_something_smaller_than_everything(self) -> None:
         docs = ss.plan_for(["docs/design/menu-bar.md", "README.md"], self.sections, self.rules, self.graph)

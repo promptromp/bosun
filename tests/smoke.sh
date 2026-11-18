@@ -1,7 +1,7 @@
 #!/bin/bash
 # Hermetic smoke tests: temp HOME, fixture sessions, isolated tmux socket, no Claude calls,
 # no launchd or pmset changes.
-# Run: tests/smoke.sh [-x] [--with-unit] [--only <id>[,<id>...] | --last-failed | --changed <git ref>] [--shard K/N]
+# Run: tests/smoke.sh [-x] [--with-unit] [--only <id>[,<id>...] | --last-failed | --changed <git ref>] [--shard K/N | --jobs N]
 #   or: tests/smoke.sh --list           (the sections' ids and names)
 #   or: tests/smoke.sh --changed <git ref> --list   (which sections that change would run, and why; runs nothing)
 # The pre-push hook runs tests/smoke.sh --pre-push: see below.
@@ -22,7 +22,8 @@
 # committing, one full run with none of them (CI and the pre-push hook run the full suite).
 # --changed <git ref> runs only the sections the change since the merge-base of <ref> and HEAD can reach (committed,
 # staged, unstaged and untracked files), each section's `covers` and tests/smoke_selection.txt being what that goes by
-# (tools/smoke_select.py: its docstring has the rules), and prints which file selected which section. It fails closed:
+# (tools/smoke_select.py: its docstring has the rules; this file is read section by section), and prints which file
+# selected which section. It fails closed:
 # a changed file on the select-everything list, one no section covers and nothing ignores, a ref that does not resolve,
 # a selection that fails, all run the whole suite; only ignored files (the docs) run nothing, exit 0. It does not
 # combine with --only or --last-failed; it combines with -x and --with-unit. --changed <ref> --list prints that report
@@ -32,14 +33,23 @@
 # they take (tests/smoke_weights.txt; tools/smoke_shard.py has the rules), and the shard runs its own as --only does,
 # with what they need and the shared setup. uninstall-files, which checks what the run left behind, runs in every
 # shard that runs anything. Its summary says which shard of how many it was; a shard with no section exits 0. It
-# combines with all of them but --pre-push; K/N that is not 1 <= K <= N is a usage error. Every run records how long
-# each section took when it passed in tests/.smoke-cache/durations, which --record of the tool turns into the weights.
+# combines with all of them but --pre-push; K/N that is not 1 <= K <= N is a usage error. Every run but a --jobs one
+# records how long each section took when it passed in tests/.smoke-cache/durations, which --record of the tool turns
+# into the weights.
+# --jobs N runs what the run would run as N shards side by side on this machine, each `--shard K/N` in its own process
+# (folders, tmux servers, cache files, process group), and prints each shard's output as it ends, then one summary; it
+# exits 1 if any shard failed. It combines with --only, --last-failed, --changed, --pre-push, -x (the first shard to
+# stop stops the others) and --with-unit (the unit tests once, before the shards), not with --shard or --list. The
+# shards' results are merged into the checkout's cache (a failure in any shard wins; not their durations, times under
+# load: the weights come from a serial run), and a whole run records its tree as one does.
 # --pre-push (what the pre-push hook runs) skips the suite, saying so in one line, if the tree of the commit being
 # pushed (pre-commit's PRE_COMMIT_TO_REF) passed a whole run in this checkout less than 24 hours ago, and
 # otherwise runs what --changed origin/main selects (BOSUN_SMOKE_BASE=<ref> names another base; this is the
 # build-out setting, to go back to the whole suite once the project is past its release: drop the selection from
-# the `--pre-push` branch below). When that is the whole suite, the hook leaves it to the merge queue, whose smoke
-# job runs it (defer_whole_run). BOSUN_SMOKE_FULL=1 runs the whole suite. A whole run (none of --only,
+# the `--pre-push` branch below). When that is the whole suite, or sections the hook would take more than
+# BOSUN_SMOKE_DEFER_SECONDS to run (180 by default: the longest of its --jobs shards by tests/smoke_weights.txt; a
+# build-out setting too), the hook leaves it to the merge queue, whose smoke job runs it (defer_whole_run,
+# defer_long_selection). The hook runs what it runs as --jobs 3. BOSUN_SMOKE_FULL=1 runs the whole suite. A whole run (none of --only,
 # --last-failed, -x) that ends with no failure records its tree in tests/.smoke-cache/passes, but only if the tree is the same at its end as at
 # its start: the tree is the files on disk before the first section runs (what `git add -A` stages in a copy of
 # the index: tracked files, and untracked ones that are not git-ignored, which a commit lacking them will not match,
@@ -101,7 +111,7 @@ always_run() {
 }
 
 smoke_usage() {
-  echo "usage: tests/smoke.sh [-x] [--with-unit] [--only <id>[,<id>...] | --last-failed | --changed <git ref> | --pre-push] [--shard K/N]  |  tests/smoke.sh [--changed <git ref>] --list" >&2
+  echo "usage: tests/smoke.sh [-x] [--with-unit] [--only <id>[,<id>...] | --last-failed | --changed <git ref> | --pre-push] [--shard K/N | --jobs N]  |  tests/smoke.sh [--changed <git ref>] --list" >&2
   exit 2
 }
 
@@ -264,6 +274,185 @@ defer_whole_run() {
   exit 0
 }
 
+# defer_long_selection <ids>: the same for a selection the hook would take more than BOSUN_SMOKE_DEFER_SECONDS (180 s by
+# default; the build-out setting, as the selection is) to run: the longest of the shards it runs them as (--jobs), by
+# tests/smoke_weights.txt, each with what its sections need. Whatever cannot weigh them (no python3, an unknown id, a
+# setting that is not a number) runs them here.
+defer_long_selection() {
+  local seconds limit="${BOSUN_SMOKE_DEFER_SECONDS:-180}" shards="${JOBS:-1}" how
+  seconds="$(python3 "$ROOT/tools/smoke_shard.py" --script "$SCRIPT" --weights "$ROOT/tests/smoke_weights.txt" \
+    --seconds --shards "$shards" --sections "$1" 2>/dev/null)" || return 0
+  case "$seconds,$limit" in *[!0-9,]* | ,* | *,) return 0 ;; esac
+  [ "$seconds" -gt "$limit" ] || return 0
+  how="as one run"
+  [ "$shards" = 1 ] || how="the longest of $shards shards side by side"
+  echo "smoke selection: those sections would take this hook about $seconds s by smoke_weights.txt ($how), more than BOSUN_SMOKE_DEFER_SECONDS ($limit), so the merge queue runs them; tests/smoke.sh --changed $CHANGED${JOBS:+ --jobs $JOBS} runs them here, BOSUN_SMOKE_FULL=1 the whole suite"
+  exit 0
+}
+
+# run_jobs <ids>: what this run would run (those sections, or every one) as $JOBS shards side by side on this machine,
+# each a run of this script with --shard K/$JOBS in its own process, folders and cache files (start_shard), each
+# shard's output printed as it ends (wait_shards), then one summary over all and the shards' results merged into this
+# checkout's cache (merge_shard_caches; not their durations, which are times under each other's load). --with-unit
+# runs the unit tests once first (unit_tests_alone); with -x a failure there, or the first shard's, stops the rest. On
+# exit (Ctrl-C too) the shards still running are stopped and waited for (settle_shards). A whole run records its tree
+# as one does (full_run_end). Never returns.
+JOBS_DIR=""
+run_jobs() {
+  local k
+  JOBS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/smoke-jobs.XXXXXX")"
+  trap 'settle_shards; cleanup; rm -rf "${JOBS_DIR:?}"' EXIT
+  echo "$JOBS shards side by side (--jobs $JOBS), each a run of its own: tests/smoke.sh --shard K/$JOBS${1:+ --only ${1//,/ }}"
+  [ "$WITH_UNIT" = 0 ] || unit_tests_alone
+  if [ "$EXITFIRST" = 0 ] || [ "$WITH_UNIT" = 0 ] || [ "$(cat "$JOBS_DIR/unit/status")" = 0 ]; then
+    for k in $(seq 1 "$JOBS"); do start_shard "$k" "$1"; done
+    wait_shards
+  fi
+  merge_shard_caches
+  for k in $([ "$WITH_UNIT" = 0 ] || echo unit) $(seq 1 "$JOBS"); do [ ! -d "$JOBS_DIR/$k" ] || count_shard "$k"; done
+  PARTIAL="${1:+${1//,/ }}"
+  full_run_end
+  summary
+  [ "$failed" -eq 0 ] && exit 0
+  exit 1
+}
+
+# unit_tests_alone: --with-unit's unit tests, once, before the shards: the shared setup and the always_run parts alone.
+unit_tests_alone() {
+  local script="$JOBS_DIR/unit.sh"
+  mkdir -p "$JOBS_DIR/unit/cache"
+  filtered_script "$SCRIPT" ",," >"$script"
+  SMOKE_PARTIAL="the unit tests (--with-unit)" SMOKE_FILTERED="$script" SMOKE_ROOT="$ROOT" \
+    SMOKE_CACHE_DIR="$JOBS_DIR/unit/cache" "$BASH" "$script" --with-unit >"$JOBS_DIR/unit/log" 2>&1
+  echo "$?" >"$JOBS_DIR/unit/status"
+  print_shard unit "the unit tests"
+}
+
+# start_shard <k> <ids>: shard k, in the background, in a process group of its own (python3 starts it so; bash has no
+# job control without a terminal), which stop_shards can stop whole, and with no terminal to read. A background job
+# of a script starts with SIGINT ignored, which its children could not undo: python3 gives it back its default first,
+# so a check that interrupts a command works as in a serial run (the process group keeps the terminal's Ctrl-C away).
+# Its log, its exit status once it ends, and its pid (the group's, beside its wrapper's) are in $JOBS_DIR/<k>.
+SHARD_START='import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.setpgid(0, 0); os.execv(sys.argv[1], sys.argv[1:])'
+start_shard() {
+  local out="$JOBS_DIR/$1" exit_flag=""
+  mkdir -p "$out/cache"
+  [ "$EXITFIRST" = 0 ] || exit_flag=-x
+  (
+    SMOKE_ROOT="$ROOT" SMOKE_CACHE_DIR="$out/cache" python3 -c "$SHARD_START" \
+      "$BASH" "$SCRIPT" --shard "$1/$JOBS" ${2:+--only "$2"} ${exit_flag:+"$exit_flag"} </dev/null >"$out/log" 2>&1 &
+    echo "$!" >"$out/pid"
+    wait "$!"
+    echo "$?" >"$out/status"
+  ) &
+  echo "$!" >"$out/wrapper"
+}
+
+# wait_shards: until every shard has ended, printing each as it does; with -x, the first that failed stops the others.
+wait_shards() {
+  local k running still stopping=0
+  running="$(seq 1 "$JOBS" | tr '\n' ' ')"
+  while [ -n "${running// /}" ]; do
+    still=""
+    for k in $running; do
+      if [ ! -s "$JOBS_DIR/$k/status" ]; then
+        still="$still $k"
+        continue
+      fi
+      print_shard "$k" "shard $k of $JOBS"
+      [ "$EXITFIRST" = 0 ] || [ "$(cat "$JOBS_DIR/$k/status")" = 0 ] || { stop_shards && stopping=1; }
+    done
+    running="$still"
+    [ -z "${running// /}" ] || shards_waited "$stopping" || return 0
+  done
+}
+
+# shards_waited <stopping>: a second of the wait; once -x stopped the shards, at most 30 of them (a failsafe: a stopped
+# shard may be waiting on a child that ignores TERM), then it says so and the wait ends (the exit settles them again).
+SHARDS_STOP_WAIT=0
+shards_waited() {
+  sleep 1
+  [ "$1" = 1 ] || return 0
+  SHARDS_STOP_WAIT=$((SHARDS_STOP_WAIT + 1))
+  [ "$SHARDS_STOP_WAIT" -lt 30 ] && return 0
+  echo "tests/smoke.sh: a shard -x stopped had not ended 30 s later; not waiting for it" >&2
+  return 1
+}
+
+# stop_shards: each shard still running gets TERM once, its whole process group (what it waits on too; its EXIT trap
+# cleans up after it), and never a pid that has come to be another process's: the shard is its wrapper's child still.
+# A shard stopped so is marked, and not counted as a failure of its own.
+stop_shards() {
+  local out pid
+  [ -n "$JOBS_DIR" ] || return 0
+  for out in "$JOBS_DIR"/[0-9]*; do
+    [ -d "$out" ] && [ ! -s "$out/status" ] && [ -s "$out/pid" ] && [ ! -e "$out/stopped" ] || continue
+    pid="$(cat "$out/pid")"
+    [ "$(command -p ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')" = "$(cat "$out/wrapper")" ] || continue
+    touch "$out/stopped"
+    kill -TERM -- "-$pid" 2>/dev/null
+  done
+  return 0
+}
+
+# settle_shards: on the way out (the end, Ctrl-C, -x), stop the shards still running, one whose pid is not written yet
+# too, and wait until each has cleaned up after itself and its wrapper has written its status (30 s at most, a
+# failsafe), before their folder goes.
+settle_shards() {
+  local tries
+  [ -n "$JOBS_DIR" ] || return 0
+  for tries in $(seq 1 150); do
+    stop_shards
+    shards_settled && return 0
+    sleep 0.2
+  done
+  echo "tests/smoke.sh: a shard had not ended after it was stopped ($tries tries)" >&2
+}
+shards_settled() {
+  local out
+  for out in "$JOBS_DIR"/[0-9]*; do
+    [ ! -d "$out" ] || [ -s "$out/status" ] || return 1
+  done
+}
+
+print_shard() { # <k> <heading>
+  echo
+  echo "=== $2 (exit $(cat "$JOBS_DIR/$1/status")) ==="
+  cat "$JOBS_DIR/$1/log"
+}
+
+# count_shard <k>: shard k's checks (or the unit tests', k=unit) in this run's counts, from its summary line; one that
+# ended without one (it crashed) and not with 0 counts as a failure, as does one that failed with none. One that -x
+# stopped is said, not counted: the failure that stopped it is (and one that ended on its own as the stop came counts
+# what its summary says).
+count_shard() {
+  local line status stopped=0
+  status="$(cat "$JOBS_DIR/$1/status" 2>/dev/null || echo "no status")"
+  [ ! -e "$JOBS_DIR/$1/stopped" ] || stopped=1
+  line="$(grep -E '^[0-9]+ passed, [0-9]+ failed' "$JOBS_DIR/$1/log" 2>/dev/null | tail -1)"
+  if [ -n "$line" ]; then # (it ended on its own, before the stop or without one: what it says counts)
+    passed=$((passed + ${line%% passed*}))
+    line="${line#* passed, }"
+    failed=$((failed + ${line%% failed*}))
+    [ "$status" = 0 ] || [ "$stopped" = 1 ] || [ "${line%% failed*}" != 0 ] || failed=$((failed + 1)) # stopped short
+  elif [ "$stopped" = 1 ]; then
+    echo "shard $1 of $JOBS: stopped (-x), when another shard failed"
+  elif [ "$status" != 0 ]; then
+    failed=$((failed + 1))
+    echo "shard $1 of $JOBS ended (exit $status) without its summary"
+  fi
+}
+
+# merge_shard_caches: the shards' (and the unit tests') results into this checkout's cache, by one writer: a section's
+# result is a failure if any shard that ran it failed it. Not their durations: the weights are measured by a serial
+# run (tools/smoke_shard.py --record), and these are times under the other shards' load.
+merge_shard_caches() {
+  local id result
+  while read -r id result; do
+    cache_update "$CACHE_FILE" "$id" "$id $result"
+  done < <(cat "$JOBS_DIR"/*/cache/sections 2>/dev/null | awk '{ if ($2 == "fail" || !($1 in r)) r[$1] = $2 } END { for (i in r) print i, r[i] }')
+}
+
 WITH_UNIT=0
 ONLY=""
 CHANGED=""
@@ -272,6 +461,7 @@ EXITFIRST=0
 LAST_FAILED=0
 PRE_PUSH=0
 SHARD=""
+JOBS=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --with-unit) WITH_UNIT=1 ;;
@@ -294,6 +484,11 @@ while [ $# -gt 0 ]; do
       SHARD="$2"
       shift
       ;;
+    --jobs)
+      [ $# -ge 2 ] && [ -n "$2" ] || smoke_usage
+      JOBS="$2"
+      shift
+      ;;
     *) smoke_usage ;;
   esac
   shift
@@ -302,6 +497,11 @@ done
 [ "$PRE_PUSH" = 0 ] || { [ -z "$ONLY" ] && [ "$LAST_FAILED" = 0 ] && [ -z "$CHANGED" ]; } || smoke_usage # a hook chooses by itself
 [ -z "$CHANGED" ] || { [ -z "$ONLY" ] && [ "$LAST_FAILED" = 0 ]; } || smoke_usage                        # three ways to choose sections
 [ "$PRE_PUSH" = 0 ] || [ -z "$SHARD" ] || smoke_usage                                                    # nor does it split
+[ -z "$JOBS" ] || { [ -z "$SHARD" ] && [ "$LIST" = 0 ]; } || smoke_usage                                 # --jobs runs the shards itself
+if [ -n "$JOBS" ] && ! [[ $JOBS =~ ^[1-9][0-9]?$ ]]; then
+  echo "tests/smoke.sh: --jobs wants how many shards to run side by side, 1 to 99, not '$JOBS'" >&2
+  exit 2
+fi
 if [ -n "$SHARD" ] && ! { [[ $SHARD =~ ^([1-9][0-9]{0,2})/([1-9][0-9]{0,2})$ ]] && [ "${BASH_REMATCH[1]}" -le "${BASH_REMATCH[2]}" ]; }; then
   echo "tests/smoke.sh: --shard wants K/N with 1 <= K <= N (2/3: the second of three), not '$SHARD'" >&2
   exit 2
@@ -357,7 +557,10 @@ if [ -n "$CHANGED" ]; then
   select_changed "$CHANGED"
   case "$SELECTED" in
     none) exit 0 ;;
-    only) ONLY="$SELECTED_IDS" ;;
+    only)
+      ONLY="$SELECTED_IDS"
+      [ "$PRE_PUSH" = 0 ] || defer_long_selection "$ONLY"
+      ;;
     full) [ "$PRE_PUSH" = 1 ] && defer_whole_run ;;
   esac
 fi
@@ -370,7 +573,7 @@ if [ "$LAST_FAILED" = 1 ]; then
   echo "--last-failed: rerunning the sections that failed: ${ONLY//,/ }"
 fi
 [ -z "$SHARD" ] || shard_of "$SCRIPT" "$ONLY"
-[ -z "$ONLY" ] || run_chosen "$SCRIPT" "$ONLY"
+[ -z "$ONLY" ] || [ "${JOBS:-1}" -gt 1 ] || run_chosen "$SCRIPT" "$ONLY" # (--jobs runs its shards below)
 # What must not change during the run, in this checkout: its HEAD, what it has staged and core.bare (checked
 # at the end). Not the shared repository's HEAD: with git worktrees that is the main checkout's, and it moves
 # when a session in another worktree commits (tests/unit/repo_guard.py is the twin of this, and tests it).
@@ -386,7 +589,7 @@ REPO_STATE_BEFORE="$(repo_state)"
 # reproducible.
 START_TREE=""
 START_STATUS=""
-if [ -z "$PARTIAL" ]; then
+if [ -z "$PARTIAL" ] && { [ "${JOBS:-1}" -le 1 ] || [ -z "$ONLY" ]; }; then # (--jobs --only: a partial run too)
   START_TREE="$(tree_of_checkout "$ROOT")"
   START_STATUS="$(status_of_checkout "$ROOT")"
 fi
@@ -477,11 +680,14 @@ full_run_end() {
 summary() {
   local note="${PARTIAL:+a partial run, not the whole suite: $PARTIAL}"
   [ -z "$SHARD_OF" ] || note="shard $SHARD_OF${note:+, $note}"
+  [ "${JOBS:-1}" -le 1 ] || note="$JOBS shards side by side${note:+, $note}"
   section_done
   echo
   echo "$passed passed, $failed failed${note:+ ($note)}"
   [ -z "$STOPPED_AT" ] || echo "stopped at the first failure (-x): $STOPPED_AT"
 }
+
+[ "${JOBS:-1}" -le 1 ] || run_jobs "$ONLY" # (what it needs of the harness is defined above)
 
 not_contains() { ! grep -qF -- "$2" <<<"$1"; }
 contains() { grep -qF -- "$2" <<<"$1" || {
@@ -1416,7 +1622,7 @@ L ws set-state widgets active --note reopened >/dev/null
 check "ws list counts by how items were assigned" contains "$(L ws list)" "ws:widget-gen  [active] Automated widget generation | 4 item(s) (explicit 3, inherited 1), 4 open"
 rm "$BOSUN_CONFIG_DIR/workstreams.json"
 
-section repo-window-prompts "what I say in a repo window, and what a window works on" needs tasks-links-tickets covers 'libexec/bosun-launch,libexec/bosun-ledger'
+section repo-window-prompts "what I say in a repo window, and what a window works on" needs tasks-links-tickets covers 'libexec/bosun-launch,libexec/bosun-ledger,libexec/bosun-hook'
 said_payload='{"hook_event_name":"UserPromptSubmit","session_id":"s-1","prompt":"go with option b for the suites"}'
 check "the prompt hook does nothing while events are off" bash -c '"$1" hook user-prompt --window exporter <<<"$2" && [ "$("$1" ledger said)" = "(nothing I said in a repo window matches)" ]' _ "$BOSUN" "$said_payload"
 check "the prompt hook records what I type on the item the window holds" bash -c '
@@ -2083,7 +2289,7 @@ printf '#!/bin/sh\necho "2.0.0 (Claude Code)"\n' >"$WORK/fake-claude"
 chmod +x "$WORK/fake-claude"
 export BOSUN_CLAUDE_BIN="$WORK/fake-claude"
 
-section tmux-session "tmux session (isolated socket, dry-run windows)" covers 'libexec/bosun-attach,libexec/bosun-launch,libexec/bosun-start,libexec/bosun-stop,libexec/bosun-send,libexec/bosun-refresh,libexec/bosun-ledger,lib/run_locked.py'
+section tmux-session "tmux session (isolated socket, dry-run windows)" covers 'libexec/bosun-attach,libexec/bosun-launch,libexec/bosun-start,libexec/bosun-stop,libexec/bosun-send,libexec/bosun-refresh,libexec/bosun-ledger,lib/run_locked.py,libexec/bosun-watchdog,libexec/bosun-sessions,libexec/bosun-setup'
 no_session
 "$BOSUN" start >/dev/null 2>&1
 wait_for 30 has_windows "alpha beta gamma "
@@ -2921,7 +3127,7 @@ check "--check passes once trusted" "$BOSUN" trust --check "$TRUST_REPO"
 check "--revoke removes it" bash -c '"$1" trust --revoke "$2" && ! "$1" trust --check "$2"' _ "$BOSUN" "$TRUST_REPO"
 check "--any trusts any folder" "$BOSUN" trust --any "$REPO_B"
 
-section send-new-start "send --new and --start (fake Claude that registers itself)" needs folder-trust covers 'lib/plugins_claude.py,libexec/bosun-delegate,libexec/bosun-ledger,libexec/bosun-refresh,libexec/bosun-send,libexec/bosun-start,libexec/bosun-stop,libexec/bosun-trust'
+section send-new-start "send --new and --start (fake Claude that registers itself)" needs folder-trust covers 'lib/plugins_claude.py,libexec/bosun-delegate,libexec/bosun-ledger,libexec/bosun-refresh,libexec/bosun-send,libexec/bosun-start,libexec/bosun-stop,libexec/bosun-trust,libexec/bosun-launch'
 no_session
 cat >"$WORK/live-claude" <<FAKE
 #!/bin/bash
@@ -3270,7 +3476,7 @@ check "with events alone the loop keeps running and sends no check-in" bash -c '
   [ "$1" = "2 1" ] && ! grep -q "chores check-in" "$2" || { echo "ticks, running: $1"; cat "$2"; exit 1; }' \
   _ "$(loop_ticks 2 "$WORK/events-loop.out" BOSUN_CHECKIN_MINUTES=0 BOSUN_EVENTS_ENABLED=1 BOSUN_EVENTS_WITHOUT_CHECKINS=1 BOSUN_EVENTS_INTERVAL_SECONDS=1)" "$WORK/events-loop.out"
 
-section delegate "delegate (task types)" covers 'libexec/bosun-delegate,libexec/bosun-ledger'
+section delegate "delegate (task types)" covers 'libexec/bosun-delegate,libexec/bosun-ledger,libexec/bosun-kg'
 L upsert 'review:acme/api#5' --kind review-request --title 'Add X' >/dev/null
 L upsert 'slack:C7/1' --kind mention >/dev/null
 check "--list shows every task type" bash -c 'for t in review fix-my-pr new-work investigate; do grep -q "^$t: " <<<"$1" || exit 1; done' _ "$("$BOSUN" delegate --list)"
@@ -3683,7 +3889,7 @@ check "with BOSUN_CONSOLE_ALWAYS=1 bosun start makes console/wanted, which the c
 check "a start with it off again takes the marker away" test ! -e "$BOSUN_STATE_DIR/console/wanted"
 "$BOSUN" stop >/dev/null 2>&1
 
-section status-json "status --json (the menu bar app's one source of how bosun is)" needs stopped-until-started covers 'libexec/bosun-status,libexec/bosun-start,libexec/bosun-stop,lib/menu_status*.py'
+section status-json "status --json (the menu bar app's one source of how bosun is)" needs stopped-until-started covers 'libexec/bosun-status,libexec/bosun-start,libexec/bosun-stop,lib/menu_status*.py,libexec/bosun-watchdog'
 "$BOSUN" stop >/dev/null 2>&1 # what a stop made today leaves (the section before ends with it too)
 # said_has <JSON> <python condition over d, that object>: for an object one run printed, read by several checks.
 said_has() { python3 -I -c 'import json, sys; d = json.loads(sys.argv[1]); sys.exit(not eval(sys.argv[2]))' "$1" "$2"; }
@@ -4064,7 +4270,7 @@ stop_keep_awake_leaves_it() { # bosun stop --keep-awake keeps the caffeinate and
 check "bosun stop --keep-awake leaves the caffeinate and its files alone; a plain stop releases them" stop_keep_awake_leaves_it
 plain_fake launchctl 113 # the fake above; this section's alone
 
-section settings "settings (bosun settings get|set: bosun.env through init's writer, the jobs and the wake)" covers 'libexec/bosun-settings,lib/settings.py,lib/run_locked.py'
+section settings "settings (bosun settings get|set: bosun.env through init's writer, the jobs and the wake)" covers 'libexec/bosun-settings,lib/settings.py,lib/run_locked.py,libexec/bosun-init,templates/launchd*.plist'
 # Its own config, state and launchd label, so what it writes and reloads is its alone; launchd has a job while it
 # has its plist, pmset's repeating event is what $SET_SCHED holds, pmset repeat fails while
 # $WORK/settings-pmset-fails is there, launchctl bootstrap while $WORK/settings-bootstrap-fails is. sudo is sudoers
@@ -4287,7 +4493,7 @@ plain_fake pmset 0
 plain_fake sudo 1
 plain_fake caffeinate 0
 
-section console "console (local server on a free port, fixture ledger)" covers 'libexec/bosun-console,libexec/bosun-kg,console/**,tests/fixtures/console/**,tests/fixtures/knowledge/**,lib/console_*.py'
+section console "console (local server on a free port, fixture ledger)" covers 'libexec/bosun-console,libexec/bosun-kg,console/**,tests/fixtures/console/**,tests/fixtures/knowledge/**,lib/console_*.py,libexec/bosun-ledger'
 CONSOLE_STATE="$WORK/console-state"
 mkdir -p "$CONSOLE_STATE"
 cp "$ROOT/tests/fixtures/console/acme-ledger.json" "$CONSOLE_STATE/ledger.json"
@@ -5200,7 +5406,7 @@ assert job.get("AbandonProcessGroup") is True, job.get("AbandonProcessGroup")
     fail_check "the fake curl and the stand-ins for ditto, codesign, spctl, osascript, open, swift and iconutil are not first on PATH; skipped the app tests"
   fi
 
-  section uninstall "uninstall (fake launchctl, pmset and sudo, test label)" needs install,app covers 'uninstall.sh,install.sh,lib/claude_state.py,lib/hook.py,libexec/bosun-uninstall,libexec/bosun-trust'
+  section uninstall "uninstall (fake launchctl, pmset and sudo, test label)" needs install,app covers 'uninstall.sh,install.sh,lib/claude_state.py,lib/hook.py,libexec/bosun-uninstall,libexec/bosun-trust,templates/launchd*.plist'
   # Its own session and state: it would otherwise stop and delete what the rest of this run uses.
   un() {
     BOSUN_CONFIG_DIR="$INSTALL_CFG" BOSUN_STATE_DIR="$WORK/un-state" BOSUN_LOG_DIR="$WORK/un-state/logs" \
@@ -5306,7 +5512,7 @@ for line in sys.stdin:
   rm -f "$HOME/.local/bin/curl" "$HOME/.local/bin/swift" "$HOME/.local/bin/iconutil"
   for tool in ditto codesign spctl open osascript; do plain_fake "$tool"; done
 
-  section init "init (fake launchctl and pmset, test label)" needs install covers 'install.sh,uninstall.sh,lib/init*.py,lib/claude_state.py,lib/run_locked.py,libexec/bosun-init'
+  section init "init (fake launchctl and pmset, test label)" needs install covers 'install.sh,uninstall.sh,lib/init*.py,lib/claude_state.py,lib/run_locked.py,libexec/bosun-init,templates/launchd*.plist'
   export BOSUN_SKIP_PREFLIGHT=1 # what bosun needs has its own tests, on a made-up machine
   INIT_CFG="$WORK/init-config"
   INIT_REPO="$HOME/Development/init-api"
@@ -5486,7 +5692,7 @@ for line in sys.stdin:
   check "a Codex window with plugins: [] switches every plugin off, and nothing else, for connectors: all" bash -c '
     grep -qF -- " --disable plugins" <<<"$1" && ! grep -qF mcp_servers <<<"$1" && ! grep -qF -- "--disable apps" <<<"$1"' _ "$out"
 
-  section agy-launch "a window on agy (launch, with a stand-in that records what it was started with)" needs codex-launch,setup-steps covers 'libexec/bosun-launch,libexec/bosun-morning,libexec/bosun-preflight,libexec/bosun-sessions,tests/sandbox/agy-stand-in,tests/fixtures/agy/**,agents/agy-plugin/**,lib/agy_*.py,lib/connectors_agy.py'
+  section agy-launch "a window on agy (launch, with a stand-in that records what it was started with)" needs codex-launch,setup-steps covers 'libexec/bosun-launch,libexec/bosun-morning,libexec/bosun-preflight,libexec/bosun-sessions,tests/sandbox/agy-stand-in,tests/fixtures/agy/**,agents/agy-plugin/**,lib/agy_*.py,lib/connectors_agy.py,libexec/bosun-doctor'
   AGY_REPO="$WORK/agy-repo"
   mkdir -p "$AGY_REPO"
   git -C "$AGY_REPO" init -q
@@ -5974,7 +6180,7 @@ PY
   chmod +x "$U/quiet-claude"
   u_ended_well() { [ "$1" = 0 ] || { tail -15 "$2" && return 1; }; }
 
-  section update "bosun update (the origin's next versions, fake launchctl)" needs update-upstream covers 'install.sh,templates/launchd.plist,docs/updating.md,tests/sandbox/update_patch.sh,tests/sandbox/acme_year.py,lib/update*.py,lib/versions.py,lib/migrations.py,lib/launch_record.py,libexec/bosun-update,libexec/bosun-checkin,libexec/bosun-doctor,libexec/bosun-guard,libexec/bosun-hook,libexec/bosun-kg,libexec/bosun-launch,libexec/bosun-ledger,libexec/bosun-refresh,libexec/bosun-start,libexec/bosun-status,lib/menu_status*.py'
+  section update "bosun update (the origin's next versions, fake launchctl)" needs update-upstream covers 'install.sh,templates/launchd*.plist,docs/updating.md,tests/sandbox/update_patch.sh,tests/sandbox/acme_year.py,lib/update*.py,lib/versions.py,lib/migrations.py,lib/launch_record.py,libexec/bosun-update,libexec/bosun-checkin,libexec/bosun-doctor,libexec/bosun-guard,libexec/bosun-hook,libexec/bosun-kg,libexec/bosun-launch,libexec/bosun-ledger,libexec/bosun-refresh,libexec/bosun-start,libexec/bosun-status,lib/menu_status*.py'
   # An install of its own, with its own state and config, from the origin above: its bosun.git a clone of it at
   # v1, with v1's folder and the link to it; main moved along (failing v2, v2, v3, v4) as the update goes.
   U_LINK="$U/share/bosun"
@@ -6492,7 +6698,7 @@ HAND
     [ "$1" = 1 ] && cmp -s "$2.plist" "$3/morning.plist" && cmp -s "$2.watchdog.plist" "$3/watchdog.plist" && [ "$4" = "$5" ]' \
     _ "$rc" "$u_jobs" "$U" "$bootouts" "$(u_bootouts)"
 
-  section update-back "bosun update --back: one step back, what it restores and what it keeps (fake launchctl)" needs update-upstream covers 'tests/sandbox/update_patch.sh,lib/update_back*.py,lib/update.py,lib/update_state.py,lib/update_backups.py,lib/update_summary.py,lib/update_lookup.py,lib/migrations.py,libexec/bosun-update'
+  section update-back "bosun update --back: one step back, what it restores and what it keeps (fake launchctl)" needs update-upstream covers 'tests/sandbox/update_patch.sh,lib/update_back*.py,lib/update.py,lib/update_state.py,lib/update_backups.py,lib/update_summary.py,lib/update_lookup.py,lib/migrations.py,libexec/bosun-update,libexec/bosun-ledger,libexec/bosun-kg'
   # An install of its own at the origin's v1 (its ledger at format 1, its common.sh without the
   # connector keys), following upstream's branch b-main: at v2 first (the ledger's format 2, and the kept keys
   # the update writes to bosun.env), then at v3 (a line of the readme: nothing a version reads the data by).
@@ -6597,7 +6803,7 @@ HAND
   check "... and its summary is saved beside the backup of the update it went back over" grep -q "^bosun went back: ${U_V3_COMMIT:0:7} -> ${U_V2_COMMIT:0:7}" "$b_over_backup/back-summary.md"
   check "the data passes its checks on v2 after it" test "$(bb ledger validate --journal 2>&1)" = "ledger is valid"
 
-  section update-branch "bosun update --branch: following a branch of the origin, and main again (fake launchctl)" needs update-upstream covers 'tests/sandbox/update_patch.sh,libexec/bosun-update,libexec/bosun-settings,lib/update_back*.py,lib/update_facts.py,lib/update_lookup.py,lib/update_check.py,lib/settings.py'
+  section update-branch "bosun update --branch: following a branch of the origin, and main again (fake launchctl)" needs update-upstream covers 'tests/sandbox/update_patch.sh,libexec/bosun-update,libexec/bosun-settings,lib/update_back*.py,lib/update_facts.py,lib/update_lookup.py,lib/update_check.py,lib/settings.py,libexec/bosun-ledger'
   # An install of its own at v2, on the releases channel (bosun.env says so), its data v2's (the ledger at
   # format 2, rules 1). Upstream's branches: try-x at v3, old-x at v1 (the ledger at format 1, older than the
   # data). (A branch older than the data in a store's rules goes through the same target-check as old-x does:

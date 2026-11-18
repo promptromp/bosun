@@ -203,8 +203,8 @@ repos:
         always_run: true
         stages: [pre-commit, manual]
       - id: smoke-tests
-        name: smoke tests (end to end, the sections the push reaches)
-        entry: tests/smoke.sh --pre-push
+        name: smoke tests (end to end, the sections the push reaches, three shards side by side)
+        entry: tests/smoke.sh --pre-push --jobs 3
         language: system
         pass_filenames: false
         always_run: true
