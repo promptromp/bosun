@@ -484,10 +484,17 @@ refused_quietly() {
 }
 
 # copy_tree <dest>: a copy of the working tree (tracked files and untracked ones that are not ignored)
-# in <dest>.
+# in <dest>. The first is taken from git's list with tar; each one after is a copy of that one, as clones on
+# macOS's APFS (cp -c: no data copied until a file is changed), else a plain copy (another file system, Linux).
 copy_tree() {
+  local first="$WORK/tree-copy"
+  if [ ! -d "$first" ]; then
+    mkdir -p "$first.part"
+    git -C "$ROOT" ls-files -co --exclude-standard -z | tar -C "$ROOT" --null -T - -cf - | tar -C "$first.part" -xf -
+    mv "$first.part" "$first"
+  fi
   mkdir -p "$1"
-  git -C "$ROOT" ls-files -co --exclude-standard -z | tar -C "$ROOT" --null -T - -cf - | tar -C "$1" -xf -
+  cp -cRp "$first/." "$1" 2>/dev/null || cp -Rp "$first/." "$1"
 }
 
 # version_folder <name>: a copy of the working tree in $WORK/share/bosun-versions/<name>, shaped like
@@ -972,7 +979,10 @@ rm -f "$CFG/bosun.env"
 
 section common-functions "lib/common.sh functions" covers 'libexec/bosun-launch'
 fn() { bash -c 'source "$1/lib/common.sh"; shift; "$@"' _ "$ROOT" "$@"; }
-check "shift_time adds minutes" test "$(fn shift_time 08:00 1)" = 08:01
+# shift_time's cases from one shell, each its own check.
+read -r shifted_on shifted_past shifted_back shifted_zeros <<<"$(bash -c 'source "$1/lib/common.sh"
+  echo "$(shift_time 08:00 1) $(shift_time 23:59 2) $(shift_time 00:00 -1) $(shift_time 08:09 1)"' _ "$ROOT")"
+check "shift_time adds minutes" test "$shifted_on" = 08:01
 log_dir="$WORK/log-checks"
 mkdir -p "$log_dir"
 log_day="$(date +%F)"
@@ -1008,9 +1018,9 @@ done
 check "a day's file stops at its cap, with one line that says so" bash -c '
   [ "$(grep -c "of five" "$1")" -lt 5 ] && [ "$(grep -c "this log is capped" "$1")" = 1 ]' _ "$log_dir/capped-$log_day.log"
 check "a log line still reaches the screen without a log folder" test "$(BOSUN_LOG_DIR="$WORK/no-such-folder" fn log "on screen" | grep -c "on screen")" = 1
-check "shift_time wraps past midnight" test "$(fn shift_time 23:59 2)" = 00:01
-check "shift_time goes back past midnight" test "$(fn shift_time 00:00 -1)" = 23:59
-check "shift_time reads leading zeros as decimal" test "$(fn shift_time 08:09 1)" = 08:10
+check "shift_time wraps past midnight" test "$shifted_past" = 00:01
+check "shift_time goes back past midnight" test "$shifted_back" = 23:59
+check "shift_time reads leading zeros as decimal" test "$shifted_zeros" = 08:10
 check "seconds_until a time already past today is 0" test "$(fn seconds_until 00:00)" = 0
 check "the awake window's end at or before the start is the next day" bash -c '[ "$1" -gt 0 ] && [ "$1" -le 86400 ]' _ "$(BOSUN_START_TIME="$(date +%H:%M)" BOSUN_AWAKE_UNTIL="$(date -v-1M +%H:%M)" fn seconds_until_awake_end)"
 soon_end="$(date -v+2M +%H:%M)"
@@ -1025,10 +1035,11 @@ fi
 check "launchd: every day is one entry without a weekday" bash -c '[ "$(grep -c "<dict>" <<<"$1")" = 1 ] && ! grep -q Weekday <<<"$1"' _ "$(fn launchd_calendar_xml 08:00 MTWRFSU)"
 check "launchd: weekdays are Monday 1 to Friday 5" test "$(fn launchd_calendar_xml 08:05 MTWRF | grep -oE 'Weekday</key><integer>[0-9]' | grep -oE '[0-9]$' | tr -d '\n')" = 12345
 check "launchd: Sunday is 0 and Saturday 6" test "$(fn launchd_calendar_xml 08:00 SU | grep -oE 'Weekday</key><integer>[0-9]' | grep -oE '[0-9]$' | tr -d '\n')" = 60
+slug_dir="$WORK/slug-repo" # one repository, its origin set to each form in turn
+git init -q "$slug_dir" && git -C "$slug_dir" remote add origin placeholder
 for url in git@github.com:acme/api.git https://github.com/acme/api.git https://github.com/acme/api ssh://git@github.com/acme/api.git; do
-  dir="$WORK/slug-$RANDOM"
-  git init -q "$dir" && git -C "$dir" remote add origin "$url"
-  check "repo_slug_of_dir reads $url" test "$(fn repo_slug_of_dir "$dir")" = acme/api
+  git -C "$slug_dir" remote set-url origin "$url"
+  check "repo_slug_of_dir reads $url" test "$(fn repo_slug_of_dir "$slug_dir")" = acme/api
 done
 check "minutes since the latest client keystroke" test "$(bash -c 'source "$1/lib/common.sh"; tmux_cmd() { echo $(( $(date +%s) - 600 )); echo $(( $(date +%s) - 125 )); }; minutes_since_client_input' _ "$ROOT")" = 2
 check "no attached client means no answer" bash -c 'source "$1/lib/common.sh"; tmux_cmd() { :; }; ! minutes_since_client_input' _ "$ROOT"
@@ -1314,7 +1325,10 @@ check "a prompt bosun passes at launch is not taken for mine" bash -c '
   BOSUN_EVENTS_ENABLED=1 "$1" hook user-prompt --window exporter <<<"$payload" || exit 1
   BOSUN_EVENTS_ENABLED=1 "$1" hook user-prompt --window exporter <<<"${payload/Bosun started this fresh conversation/control typed by me}" || exit 1
   for _ in $(seq 1 50); do "$1" ledger said | grep -q "control typed by me" && break; sleep 0.1; done
-  sleep 0.5; "$1" ledger said | grep -q "control typed by me" && ! "$1" ledger said | grep -q "fresh conversation"' _ "$BOSUN" "" "$REPO_A"
+  # the first hook done too: it says in its log that it skipped the prompt bosun passed (no fixed wait for nothing)
+  for _ in $(seq 1 50); do grep -q "skipped in exporter: not typed by me (.Bosun started this fresh" "$2"/hook-*.log 2>/dev/null && break; sleep 0.1; done
+  grep -q "skipped in exporter: not typed by me (.Bosun started this fresh" "$2"/hook-*.log &&
+    "$1" ledger said | grep -q "control typed by me" && ! "$1" ledger said | grep -q "fresh conversation"' _ "$BOSUN" "$BOSUN_LOG_DIR" "$REPO_A"
 rm -f "$BOSUN_LOG_DIR"/hook-*.log # the ERROR line above is expected, not one for the watchdog
 check "reports --since shows what I said with the reports" contains "$(L reports --since 2000-01-01T00:00:00Z)" "$TASK  [task: delegated] user said"
 check "working marks the window's active item" contains "$(L working "$TASK")" "ok: exporter is working on $TASK"
@@ -5749,23 +5763,21 @@ FAKE
   check "... and a versions folder that is someone else's" fails_with "$G_VERSIONS is there, without bosun.git" get_dry
   check "everything in it is in functions, so a download cut short does nothing" bash -c '[ "$(tail -1 "$1/get.sh")" = "main \"\$@\"" ]' _ "$ROOT"
 
-  section update "bosun update (two local commits, fake launchctl)" covers 'install.sh,templates/launchd.plist,docs/updating.md,tests/sandbox/update_patch.sh,tests/sandbox/acme_year.py,lib/update*.py,lib/versions.py,lib/migrations.py,lib/launch_record.py,libexec/bosun-update,libexec/bosun-checkin,libexec/bosun-doctor,libexec/bosun-guard,libexec/bosun-hook,libexec/bosun-kg,libexec/bosun-launch,libexec/bosun-ledger,libexec/bosun-refresh,libexec/bosun-start,libexec/bosun-status,lib/menu_status*.py'
-  # An install of its own, with its own state and config. Upstream holds v1 (this working tree) and
-  # v2 (tests/sandbox/update_patch.sh: the ledger's format 2, with a migration that sleeps
-  # UPDATE_PATCH_SLEEP seconds while writes are paused, and a changed line of policy.md); the
-  # install's bosun.git is a clone of it at v1, with v1's folder and the link to it.
+  # The update's origin: a repository of bosun's next versions, built here once for the update sections (update,
+  # update-back and update-branch each need this alone). v1 is this working tree, standing for an install from
+  # before the connector keys and the update channel: its lib/common.sh has no default line for them (what the plan
+  # reads a version's keys from), though it still sets them, to every connector and to main as such an install
+  # had, so that v1 runs. Then, from v1: a v2 whose migration fails while writes are paused, off main; v2
+  # (tests/sandbox/update_patch.sh: the ledger's format 2, with a migration that sleeps UPDATE_PATCH_SLEEP seconds
+  # while writes are paused, a changed line of policy.md, and the connector keys' defaults back, so the update adds
+  # them and writes the kept values to bosun.env: migrations.CONFIG_ADDED); v3, a line of the readme (nothing a
+  # version reads the data by, nor anything a window was launched with); v4, its launchd templates broken. main is
+  # left at v4; a section that follows main moves it (`ug update-ref refs/heads/main <commit>`).
+  section update-upstream "the update's origin (v1 to v4, built once for the update sections)" covers 'tests/sandbox/update_patch.sh'
   U="$WORK/u"
-  U_LINK="$U/share/bosun"
-  U_VERSIONS="$U/share/bosun-versions"
   U_UP="$U/upstream"
-  U_STATE="$U/state"
-  U_CONFIG="$U/config"
-  mkdir -p "$U_VERSIONS" "$U_STATE" "$U_CONFIG"
+  mkdir -p "$U"
   copy_tree "$U_UP"
-  # v1 stands for an install from before the connector keys and the update channel: its lib/common.sh has
-  # no default line for them (what the plan reads a version's keys from), though it still sets them, to
-  # every connector and to main as such an install had, so that v1 runs. Each v2 gets them back (u_next), so
-  # the update adds them and writes the kept values to bosun.env (migrations.CONFIG_ADDED).
   cp "$U_UP/lib/common.sh" "$U/common.sh.with-connectors"
   python3 - "$U_UP/lib/common.sh" <<'PY'
 import sys
@@ -5788,7 +5800,6 @@ PY
     cp "$U/common.sh.with-connectors" "$U_UP/lib/common.sh"
     "$ROOT/tests/sandbox/update_patch.sh" "$@" "$U_UP"
   }
-  printf '# acme: an install from before connectors\n' >"$U_CONFIG/bosun.env"
   ug() { git -C "$U_UP" -c core.hooksPath=/dev/null -c commit.gpgsign=false -c user.name=acme -c user.email=dev@example.com "$@"; }
   ug init -q -b main
   # No housekeeping after upstream's commits: git (2.54 at least) starts a detached repack after a commit of
@@ -5799,18 +5810,45 @@ PY
   ug add -A
   ug commit -qm v1
   U_V1_COMMIT="$(ug rev-parse HEAD)"
-  git clone -q --bare "$U_UP" "$U_VERSIONS/bosun.git"
-  git --git-dir="$U_VERSIONS/bosun.git" worktree add -q --detach "$U_VERSIONS/${U_V1_COMMIT:0:12}" "$U_V1_COMMIT"
-  ln -s "bosun-versions/${U_V1_COMMIT:0:12}" "$U_LINK"
-  U_V1="$(cd "$U_VERSIONS/${U_V1_COMMIT:0:12}" && pwd -P)"
   u_next --failing
   ug commit -qam "v2, whose migration fails while writes are paused"
   U_FAILING_COMMIT="$(ug rev-parse HEAD)"
+  ug reset -q --hard "$U_V1_COMMIT"
+  u_next
+  ug commit -qam v2
+  U_V2_COMMIT="$(ug rev-parse HEAD)"
+  printf '\nv3: a line of the readme.\n' >>"$U_UP/README.md"
+  ug commit -qam "v3, a line of the readme"
+  U_V3_COMMIT="$(ug rev-parse HEAD)"
+  ug rm -q templates/launchd.plist
+  printf '<plist><dict><string>__LABEL__</string>\n' >"$U_UP/templates/launchd-watchdog.plist"
+  ug commit -qam "v4, its launchd templates broken"
+  U_V4_COMMIT="$(ug rev-parse HEAD)"
+  check "the origin holds v1, v2, v3 and v4 on main, and the v2 whose migration fails beside it" bash -c '
+    [ "$(git -C "$1" rev-list main | tr "\n" " ")" = "$5 $4 $3 $2 " ] && [ "$(git -C "$1" rev-parse "$6^")" = "$2" ]' \
+    _ "$U_UP" "$U_V1_COMMIT" "$U_V2_COMMIT" "$U_V3_COMMIT" "$U_V4_COMMIT" "$U_FAILING_COMMIT"
   # A Claude of its own that answers and writes nothing: the suite's $WORK/fake-claude (the chores dry
   # run's) writes a ledger item wherever it runs, and bosun doctor, which the update runs while it plans,
   # asks Claude for its login.
   printf '#!/bin/sh\n[ "$1" = --version ] && echo "2.0.0 (Claude Code)"\nexit 0\n' >"$U/quiet-claude"
   chmod +x "$U/quiet-claude"
+  u_ended_well() { [ "$1" = 0 ] || { tail -15 "$2" && return 1; }; }
+
+  section update "bosun update (the origin's next versions, fake launchctl)" needs update-upstream covers 'install.sh,templates/launchd.plist,docs/updating.md,tests/sandbox/update_patch.sh,tests/sandbox/acme_year.py,lib/update*.py,lib/versions.py,lib/migrations.py,lib/launch_record.py,libexec/bosun-update,libexec/bosun-checkin,libexec/bosun-doctor,libexec/bosun-guard,libexec/bosun-hook,libexec/bosun-kg,libexec/bosun-launch,libexec/bosun-ledger,libexec/bosun-refresh,libexec/bosun-start,libexec/bosun-status,lib/menu_status*.py'
+  # An install of its own, with its own state and config, from the origin above: its bosun.git a clone of it at
+  # v1, with v1's folder and the link to it; main moved along (failing v2, v2, v3, v4) as the update goes.
+  U_LINK="$U/share/bosun"
+  U_VERSIONS="$U/share/bosun-versions"
+  U_STATE="$U/state"
+  U_CONFIG="$U/config"
+  mkdir -p "$U_VERSIONS" "$U_STATE" "$U_CONFIG"
+  printf '# acme: an install from before connectors\n' >"$U_CONFIG/bosun.env"
+  ug update-ref refs/heads/main "$U_V1_COMMIT"
+  git clone -q --bare "$U_UP" "$U_VERSIONS/bosun.git"
+  git --git-dir="$U_VERSIONS/bosun.git" worktree add -q --detach "$U_VERSIONS/${U_V1_COMMIT:0:12}" "$U_V1_COMMIT"
+  ln -s "bosun-versions/${U_V1_COMMIT:0:12}" "$U_LINK"
+  U_V1="$(cd "$U_VERSIONS/${U_V1_COMMIT:0:12}" && pwd -P)"
+  ug update-ref refs/heads/main "$U_FAILING_COMMIT"
   U_ENV=(env BOSUN_STATE_DIR="$U_STATE" BOSUN_LOG_DIR="$U_STATE/logs" BOSUN_CONFIG_DIR="$U_CONFIG"
     BOSUN_SESSION_NAME=update-test BOSUN_LAUNCHD_LABEL=com.bosun.update-test BOSUN_SKIP_PREFLIGHT=1 BOSUN_KNOWLEDGE_GIT=0
     BOSUN_CLAUDE_BIN="$U/quiet-claude" BOSUN_UPDATE_CHANNEL=main)
@@ -5837,7 +5875,6 @@ PY
   }
   u_at() { [ "$(cd "$U_LINK" && pwd -P)" = "$1" ]; }
   u_step_is() { [ "$(jq -r .step "$U_STATE/update.json" 2>/dev/null)" = "$1" ]; }
-  u_ended_well() { [ "$1" = 0 ] || { tail -15 "$2" && return 1; }; }
 
   before="$(u_files)"
   out="$(ub update --dry-run 2>&1)"
@@ -5866,17 +5903,13 @@ PY
     .ahead == false and .skipped == false and .error == null' <<<"$json"
   check "... in one line without --json" contains "$(uc releases update --check)" "bosun is up to date (v2026.01.01)"
   ug tag -a v2026.02.01 -m "- The next version" "$U_FAILING_COMMIT"
-  json="$(uc releases update --check --json)"
-  check "... a newer release is available, with its notes from the tag's message" jq -e --arg c "$U_FAILING_COMMIT" '
-    .available == true and .latest.version == "v2026.02.01" and .latest.commit == $c and
-    .latest.notes == "- The next version" and .installed.version == "v2026.01.01"' <<<"$json"
-  check "... said in one line" contains "$(uc releases update --check)" "bosun v2026.02.01 is available (you have v2026.01.01)"
-  check "... changing nothing in the state or the config" test "$(u_files)" = "$before"
+  # (What --check answers of a newer release, a skipped one and the main channel, in words and in JSON, is
+  # tests/unit/test_update_lookup.py's, on real git; here, one of each path through the wrapper.)
+  uc releases update --check --json >/dev/null
+  check "... a check with a newer release changes nothing in the state or the config" test "$(u_files)" = "$before"
   check "... and making no version folder" test "$(find "$U_VERSIONS" -maxdepth 1 | LC_ALL=C sort)" = "$u_folders"
   check "--skip records the release it is given" contains "$(uc releases update --skip v2026.02.01)" "will not offer v2026.02.01"
   check "... in update-skip.json" jq -e '.version == "v2026.02.01" and (.at | length > 0)' "$U_STATE/update-skip.json"
-  check "... which --check then reports as skipped, the update still available" jq -e '.skipped == true and .available == true' <<<"$(uc releases update --check --json)"
-  check "--skip refuses what is not a release" fails_with "--skip takes a release version" uc releases update --skip main
   rm "$U_STATE/update-skip.json"
   check "--check takes no --yes: it changes nothing" fails_with "take no --dry-run or --yes" uc releases update --check --yes
   git --git-dir="$U_VERSIONS/bosun.git" remote set-url origin "https://0000placeholder-token@127.0.0.1:9/acme/bosun.git" # gitleaks:allow
@@ -5898,7 +5931,6 @@ PY
   check "on the main channel the latest is the head of the branch, its notes the subjects since this install" jq -e --arg c "$U_FAILING_COMMIT" '
     .channel == "main" and .available == true and .latest.commit == $c and
     .latest.notes == "- v2, whose migration fails while writes are paused"' <<<"$json"
-  check "... said as the commits it is behind by" contains "$(uc main update --check)" "1 commit on main since yours"
   check "a channel that is neither is refused, naming the key" fails_with 'BOSUN_UPDATE_CHANNEL is "nightly": it is releases or main' uc nightly update --dry-run
   out="$(uc releases update --dry-run 2>&1)"
   check "update --dry-run on the releases channel plans the newest release: the ledger's migration" contains "$out" "ledger: format 1 -> 2"
@@ -5929,10 +5961,7 @@ PY
   check "... and the record says failed, with the error" jq -e '.step == "failed" and (.error | contains("failed on purpose"))' "$U_STATE/update.json"
 
   # Upstream's v2 now migrates well.
-  ug reset -q --hard "$U_V1_COMMIT"
-  u_next
-  ug commit -qam v2
-  U_V2_COMMIT="$(ug rev-parse HEAD)"
+  ug update-ref refs/heads/main "$U_V2_COMMIT"
   U_V2="$(cd "$U_VERSIONS" && pwd -P)/${U_V2_COMMIT:0:12}"
   cp -Rp "$U_STATE" "$U/state-v1" # as it was before the update, for laying out below where one was cut short
   cp -Rp "$U_CONFIG" "$U/config-v1"
@@ -5991,9 +6020,11 @@ PY
   check "... once" test "$(cat "$U_STATE"/journal/ledger/*.jsonl | grep -c 'Written while paused')" = 1
   check "a PreToolUse approval hook while writes are paused decides as without them" bash -c '[ -n "$1" ] && [ "$(cat "$2")" = "$1" ]' _ "$guard_before" "$U/guard.out"
 
-  # An update cut short at each step of the freeze, laid out by hand: the record at the step, the
-  # backup from backed-up on, the migrated ledger from migrated on, the link at v2 at switched, and
-  # no update running. The next ledger write puts it back.
+  # An update cut short in its freeze, laid out by hand: the record at the step, the backup from backed-up on,
+  # the migrated ledger from migrated on, the link at v2 at switched, and no update running. The next ledger
+  # write puts it back. Two steps: marked (no backup yet: it only points back) and switched (the backup, the
+  # migrated ledger and the link); recover takes one way for every step with a backup, which
+  # tests/unit/test_update_gate.py runs for each (and the kill -9 below cuts one at migrated).
   u_reset() {
     rm -rf "$U_STATE" "$U_CONFIG"
     cp -Rp "$U/state-v1" "$U_STATE"
@@ -6030,7 +6061,7 @@ migrations.run(migrations.Context(pathlib.Path(sys.argv[2]), pathlib.Path(sys.ar
       [ "$(jq .version "$U_STATE/ledger.json")" = 1 ] && jq -e --arg id "$1" '.items[$id]' "$U_STATE/ledger.json" >/dev/null
   }
   n=10
-  for step in marked backed-up migrated switched; do
+  for step in marked switched; do
     n=$((n + 1))
     u_cut_at "$step"
     out="$(ub ledger upsert "review:acme/api#$n" --kind review-request --title "after a cut at $step" 2>&1)"
@@ -6074,15 +6105,7 @@ migrations.run(migrations.Context(pathlib.Path(sys.argv[2]), pathlib.Path(sys.ar
     _ "$out" "$json" "$U_V2_COMMIT" "$U_STATE"
   check "... then says bosun is up to date" contains "$out" "bosun is up to date (${U_V2_COMMIT:0:7})"
   check "... the record says done, the link at v2" bash -c 'jq -e ".step == \"done\"" "$1/update.json" >/dev/null && [ "$(cd "$2" && pwd -P)" = "$3" ]' _ "$U_STATE" "$U_LINK" "$U_V2"
-  u_up_to_date() {
-    local out
-    out="$(ub update --yes 2>&1)" && [ "$out" = "bosun is up to date (${U_V2_COMMIT:0:7})." ] || {
-      echo "$out"
-      return 1
-    }
-  }
-  check "with nothing new on the branch and nothing to carry on, bosun is up to date" u_up_to_date
-  check "... and with --json, stdout is the same object: no plan, the record as it stands, no summary" jq -e '.plan == null and .update.step == "done" and .summary == null' <<<"$(ub update --yes --json 2>/dev/null)"
+  # (With nothing new and nothing to carry on, it is up to date, in words and with --json: test_update.py.)
   check "a checkout is updated with git, not bosun update" fails_with "is a checkout: update it with git" "${U_ENV[@]}" "$BOSUN" update --dry-run
   json="$("${U_ENV[@]}" "$BOSUN" update --dry-run --json 2>/dev/null)"
   u_rc=$?
@@ -6188,12 +6211,7 @@ HAND
   mine_pane="$(u_pane u-mine)"
   hand_pane="$(u_pane u-hand)"
   hand_pid="$(u_claude u-hand)"
-  out="$(ul update --dry-run 2>&1)"
-  check "... the plan: the orchestrator re-reads; v2 changed what the repo windows were launched with, so the idle one restarts, the shell one takes stock first, the busy one is waited for, and the one at a prompt waits for you" bash -c '
-    grep -q "orch: re-read" <<<"$1" && grep -q "u-idle: restart$" <<<"$1" && grep -q "u-shell: take stock, then restart" <<<"$1" &&
-      grep -q "u-busy: wait until idle" <<<"$1" && grep -q "u-waiting: ask first" <<<"$1"' _ "$out"
-  check "... and the two windows bosun did not start are left as they are" bash -c '
-    grep -q "u-mine: not started by bosun: left as it is$" <<<"$1" && grep -q "u-hand: not started by bosun: left as it is$" <<<"$1"' _ "$out"
+  # (Its plan is read from what the update below prints before it goes ahead: the same plan a dry run shows.)
   # Run so that Ctrl-C reaches it (a job a script starts in the background ignores SIGINT).
   python3 -c 'import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execvp(sys.argv[1], sys.argv[1:])' \
     "${U_ENV[@]}" "${U_LIVE[@]}" "$U_LINK/bin/bosun" update --yes >"$U/agents.out" 2>&1 &
@@ -6207,6 +6225,11 @@ HAND
     }
   }
   check "... the update brings the orchestrator, the idle and the shell window along, and waits for the busy one (and the one at a prompt)" u_waits_for_busy
+  check "... its plan: the orchestrator re-reads; v2 changed what the repo windows were launched with, so the idle one restarts, the shell one takes stock first, the busy one is waited for, and the one at a prompt waits for you" bash -c '
+    grep -q "orch: re-read" "$1" && grep -q "u-idle: restart$" "$1" && grep -q "u-shell: take stock, then restart" "$1" &&
+      grep -q "u-busy: wait until idle" "$1" && grep -q "u-waiting: ask first" "$1"' _ "$U/agents.out"
+  check "... and the two windows bosun did not start are left as they are" bash -c '
+    grep -q "u-mine: not started by bosun: left as it is$" "$1" && grep -q "u-hand: not started by bosun: left as it is$" "$1"' _ "$U/agents.out"
   check "... the orchestrator kept running, got the update prompt pasted in, naming policy.md, and its answer ended its wait" bash -c '
     jq -e ".windows.orch == [\"orchestrator\", \"re-read\", \"asked to re-read\", \"answered\"]" "$1/update.json" >/dev/null && kill -0 "$2" &&
       grep -q "this session was kept running. Re-read .*/orchestrator/policy.md" "$3/pasted.orch"' _ "$U_STATE" "$orch_pid" "$U"
@@ -6250,7 +6273,7 @@ HAND
   out="$out$(uc)" # the restart's tick may take the answer itself: refresh waits for the agent to start
   check "... and a tick takes its answer; the one at a prompt is still waited for" bash -c '
     grep -q "u-busy: answered: resumed after the update" <<<"$1" && jq -e ".step == \"agents\" and .pending == [\"u-waiting\"]" "$2/update.json" >/dev/null' _ "$out" "$U_STATE"
-  check "... and a tick leaves it alone while it waits for you" bash -c 'kill -0 "$1" && ! grep -q "bosun update" <<<"$2"' _ "$waiting_pid" "$(uc)"
+  check "... and those ticks left it alone while it waits for you" bash -c 'kill -0 "$1" && ! grep -q "u-waiting" <<<"$2"' _ "$waiting_pid" "$out"
   u_status() { "${U_ENV[@]}" "${U_LIVE[@]}" "$U_LINK/bin/bosun" status --json 2>/dev/null; }
   check "the status, its update handed to the check-in loop: no update running, and a line for the window at a prompt" bash -c '
     jq -e ".update.state == \"none\" and (.detail | index(\"u-waiting restarts for the update once you answer it\"))" <<<"$1" >/dev/null' _ "$(u_status)"
@@ -6258,9 +6281,7 @@ HAND
   # The next version while the last update still waits for a window: it is not blocked, and takes the window
   # over. v3 changes nothing the windows were launched with, so the windows v2 restarted are left alone; the one
   # at a prompt was launched on v1, so it is still owed its restart.
-  printf '\nv3: a line of the readme.\n' >>"$U_UP/README.md"
-  ug commit -qam "v3, a line of the readme"
-  U_V3_COMMIT="$(ug rev-parse HEAD)"
+  ug update-ref refs/heads/main "$U_V3_COMMIT"
   u_last_backup="$(jq -r .backup "$U_STATE/update.json")"
   u_last_id="$(jq -r .id "$U_STATE/update.json")"
   # And the orchestrator's plugins (its default list: none of mine) cannot be resolved on v3: an
@@ -6270,14 +6291,14 @@ HAND
   [ ! -e "$u_installed" ] || mv "$u_installed" "$U/installed_plugins.kept"
   echo '[not an object]' >"$u_installed"
   u_refused="plugins: $u_installed does not parse, so bosun cannot tell which plugins to switch off; fix that, then bosun refresh orch"
-  out="$(ul update --dry-run 2>&1)"
-  check "a next update while a window is still owed: the plan is not blocked, and lists it as owed from the last update" bash -c '
-    ! grep -q "The update is blocked" <<<"$1" && grep -q "^Still owed from the last update, which this one takes over:" <<<"$1" &&
-      grep -qx "  u-waiting: a restart" <<<"$1" && grep -qx "  u-waiting: ask first" <<<"$1" && grep -qx "  u-busy: leave" <<<"$1"' _ "$out"
-  check "... and the orchestrator, whose launch on v3 would refuse, is left running: the plan says why and what to do" \
-    grep -qxF "  orch: left running, as it would not start on the new version: $u_refused" <<<"$out"
   ul update --yes >"$U/takeover.out" 2>&1
   rc=$?
+  # Its plan, as the update printed it before it went ahead.
+  check "a next update while a window is still owed: the plan is not blocked, and lists it as owed from the last update" bash -c '
+    ! grep -q "The update is blocked" "$1" && grep -q "^Still owed from the last update, which this one takes over:" "$1" &&
+      grep -qx "  u-waiting: a restart" "$1" && grep -qx "  u-waiting: ask first" "$1" && grep -qx "  u-busy: leave" "$1"' _ "$U/takeover.out"
+  check "... and the orchestrator, whose launch on v3 would refuse, is left running: the plan says why and what to do" \
+    grep -qxF "  orch: left running, as it would not start on the new version: $u_refused" "$U/takeover.out"
   rm -f "$u_installed"
   [ ! -e "$U/installed_plugins.kept" ] || mv "$U/installed_plugins.kept" "$u_installed"
   check "... and so does the summary, the orchestrator still running" bash -c '
@@ -6315,10 +6336,7 @@ HAND
   # A next version whose launchd templates are broken: the morning job's fails to render, the
   # watchdog's renders XML that is not valid. Neither of those is unloaded or removed (the job that runs
   # `morning --now` renders fine, and goes on being reloaded: a job that fails does not stop the others).
-  ug rm -q templates/launchd.plist
-  printf '<plist><dict><string>__LABEL__</string>\n' >"$U_UP/templates/launchd-watchdog.plist"
-  ug commit -qam "v4, its launchd templates broken"
-  U_V4_COMMIT="$(ug rev-parse HEAD)"
+  ug update-ref refs/heads/main "$U_V4_COMMIT"
   ub update --dry-run >"$U/broken-plan.out" 2>&1
   check "a next version whose launchd templates are broken: its plan is blocked, naming each job" bash -c '
     grep -q "The update is blocked." "$1" && grep -q "could not render the plist of com.bosun.update-test;" "$1" &&
@@ -6383,8 +6401,8 @@ HAND
       [ "$(tail -1 "$1")" = "Going back: bosun update --back (docs/updating.md#going-back)" ]' _ "$C/convert.out" "$C_LEGACY" "$U_V1_COMMIT" "$U_V2_COMMIT"
   check "an update after it is one between versions: from v2, up to date" contains "$("${C_ENV[@]}" "$C_V2/bin/bosun" update --from "$C_V2" --dry-run 2>&1)" "bosun is up to date (${U_V2_COMMIT:0:7})"
 
-  section update-back "bosun update --back: one step back, what it restores and what it keeps (fake launchctl)" needs update covers 'lib/update_back*.py,lib/update.py,lib/update_state.py,lib/update_backups.py,lib/update_summary.py,lib/update_lookup.py,lib/migrations.py,libexec/bosun-update'
-  # An install of its own at the update section's v1 (its ledger at format 1, its common.sh without the
+  section update-back "bosun update --back: one step back, what it restores and what it keeps (fake launchctl)" needs update-upstream covers 'lib/update_back*.py,lib/update.py,lib/update_state.py,lib/update_backups.py,lib/update_summary.py,lib/update_lookup.py,lib/migrations.py,libexec/bosun-update'
+  # An install of its own at the origin's v1 (its ledger at format 1, its common.sh without the
   # connector keys), following upstream's branch b-main: at v2 first (the ledger's format 2, and the kept keys
   # the update writes to bosun.env), then at v3 (a line of the readme: nothing a version reads the data by).
   mkdir -p "$WORK/b/share" "$WORK/b/state" "$WORK/b/config"
@@ -6488,10 +6506,11 @@ HAND
   check "... and its summary is saved beside the backup of the update it went back over" grep -q "^bosun went back: ${U_V3_COMMIT:0:7} -> ${U_V2_COMMIT:0:7}" "$b_over_backup/back-summary.md"
   check "the data passes its checks on v2 after it" test "$(bb ledger validate --journal 2>&1)" = "ledger is valid"
 
-  section update-branch "bosun update --branch: following a branch of the origin, and main again (fake launchctl)" needs update covers 'libexec/bosun-update,libexec/bosun-settings,lib/update_back*.py,lib/update_facts.py,lib/update_lookup.py,lib/update_check.py,lib/settings.py'
+  section update-branch "bosun update --branch: following a branch of the origin, and main again (fake launchctl)" needs update-upstream covers 'libexec/bosun-update,libexec/bosun-settings,lib/update_back*.py,lib/update_facts.py,lib/update_lookup.py,lib/update_check.py,lib/settings.py'
   # An install of its own at v2, on the releases channel (bosun.env says so), its data v2's (the ledger at
   # format 2, rules 1). Upstream's branches: try-x at v3, old-x at v1 (the ledger at format 1, older than the
-  # data), and rules-up: v3 with the ledger's rules at 2.
+  # data). (A branch older than the data in a store's rules goes through the same target-check as old-x does:
+  # tests/unit/test_update_back.py reads the rules from a version's source, test_update_back_plan.py judges them.)
   mkdir -p "$WORK/r/share" "$WORK/r/state" "$WORK/r/config"
   R="$(cd "$WORK/r" && pwd -P)"
   R_LINK="$R/share/bosun"
@@ -6500,11 +6519,7 @@ HAND
   R_CONFIG="$R/config"
   ug branch -f try-x "$U_V3_COMMIT"
   ug branch -f old-x "$U_V1_COMMIT"
-  git -C "$U_UP" -c core.hooksPath=/dev/null worktree add -q --detach "$WORK/r-up" "$U_V3_COMMIT"
-  sed -i.bak 's/^RULES_VERSION = 1$/RULES_VERSION = 2/' "$WORK/r-up/lib/ledger.py" && rm "$WORK/r-up/lib/ledger.py.bak"
-  git -C "$WORK/r-up" -c core.hooksPath=/dev/null -c commit.gpgsign=false -c user.name=acme -c user.email=dev@example.com commit -qam "the ledger's rules at 2"
-  ug branch -f rules-up "$(git -C "$WORK/r-up" rev-parse HEAD)"
-  git -C "$U_UP" worktree remove --force "$WORK/r-up"
+  ug update-ref refs/heads/main "$U_V4_COMMIT" # main's head: v4, its launchd templates broken (the last check)
   git -c core.hooksPath=/dev/null clone -q --bare "$U_UP" "$R_VERSIONS/bosun.git"
   git --git-dir="$R_VERSIONS/bosun.git" config bosun.managed true
   git --git-dir="$R_VERSIONS/bosun.git" -c core.hooksPath=/dev/null worktree add -q --detach "$R_VERSIONS/${U_V2_COMMIT:0:12}" "$U_V2_COMMIT"
@@ -6569,16 +6584,9 @@ HAND
     _ "$R_VERSIONS" "$R_CONFIG" "$(cat "$R_CONFIG/bosun.env")" "$R_LINK" "$(cd "$R_VERSIONS/${U_V3_COMMIT:0:12}" && pwd -P)"
   rb update --branch main </dev/null >"$R/main.out" 2>&1
   rc=$?
-  check "--branch main follows main again, and says so; main's head (the update section's v4, its launchd templates broken) is blocked at its plan (exit 1)" bash -c '
+  check "--branch main follows main again, and says so; main's head (the origin's v4, its launchd templates broken) is blocked at its plan (exit 1)" bash -c '
     [ "$1" = 1 ] && [ "$(git --git-dir="$2/bosun.git" config bosun.branch)" = main ] &&
       grep -qx "bosun follows main from now on (bosun update --branch main follows main again)" "$3" && grep -q "The update is blocked." "$3"' _ "$rc" "$R_VERSIONS" "$R/main.out"
-  rb update --branch rules-up --yes >"$R/rules.out" 2>&1
-  rc=$?
-  check "--branch rules-up --yes follows it and moves to its head (exit 0), the ledger's rules at 2 from then on" bash -c '
-    [ "$1" = 0 ] && [ "$(git --git-dir="$2/bosun.git" config bosun.branch)" = rules-up ] || { tail -15 "$3"; exit 1; }' _ "$rc" "$R_VERSIONS" "$R/rules.out"
-  check "--branch to a branch whose code is older in a store's rules than the data is refused, pointing at --back" bash -c '
-    out="$("$@" update --branch try-x --dry-run 2>&1)"; [ $? = 1 ] && grep -q "reads the ledger under rules 1, and the data is under rules 2" <<<"$out" &&
-      grep -q "bosun update --back" <<<"$out"' _ "${R_ENV[@]}" "$R_LINK/bin/bosun"
   always_run
 else
   fail_check "fake launchctl/pmset are not first on PATH; skipped install tests"
