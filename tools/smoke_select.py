@@ -229,10 +229,10 @@ class SuiteChange:
 
 
 def suite_change(root: Path, base: str) -> SuiteChange:
-    try:
-        old = git(root, "show", f"{base}:{SUITE}")
-    except SelectionError:
-        old = ""
+    """tests/smoke.sh at <base> (none when it was not there; git failing otherwise is an error: the whole
+    suite), and the hunks since."""
+    there = git(root, "ls-tree", "--name-only", base, "--", SUITE).strip()
+    old = git(root, "show", f"{base}:{SUITE}") if there else ""
     diff = git(root, "diff", "-U0", "--no-renames", "--no-ext-diff", base, "--", SUITE)
     return SuiteChange(old, shell_library.parse_hunks(diff))
 
@@ -452,17 +452,59 @@ class Suite:
 
 
 def suite_sections(suite: Suite | None, change: SuiteChange | None) -> set[str] | str:
-    """The sections a change to tests/smoke.sh reaches, on both sides of the diff (the old side's that are
-    still there), with those that need them; or why that is the whole suite."""
+    """The sections a change to tests/smoke.sh reaches, with those that need them; or why that is the whole
+    suite (suite_reach says what it reaches)."""
     if suite is None or change is None or not change.hunks:
         return f"{SUITE} changed, and how cannot be read"
-    found = suite.reached(shell_library.new_lines(change.hunks))
-    if isinstance(found, str):
-        return found
-    gone = Suite(change.old).reached(shell_library.old_lines(change.hunks)) if change.old else set()
-    if isinstance(gone, str):
-        return gone
-    return suite.dependents((found | gone) & {s.id for s in suite.sections})
+    if not change.old and any(count for _, count, _, _ in change.hunks):
+        return f"{SUITE}: lines taken out of a file that was not there"
+    return reached_in_suite(suite, change)
+
+
+def reached_in_suite(suite: Suite, change: SuiteChange) -> set[str] | str:
+    ids: set[str] = set()
+    for found in suite_reach(Suite(change.old) if change.old else None, suite, change.hunks):
+        if isinstance(found, str):
+            return found
+        ids |= found
+    return suite.dependents(ids & {s.id for s in suite.sections})
+
+
+def suite_reach(
+    old: Suite | None, new: Suite, hunks: Sequence[tuple[int, int, int, int]]
+) -> list[set[str] | str]:
+    """What a change reaches: through the lines it put in (new side), through those it took out (old side;
+    the sections still there count), and through the code it left alone but moved into another region (a
+    marker added or taken out, a helper's `}` moved: both the old region and the new)."""
+    if old is not None and old.script.problems:
+        return [f"{SUITE} at the base does not read as functions: {old.script.problems[0]}"]
+    found = [new.reached(shell_library.new_lines(hunks)), moved_regions(old, new, hunks)]
+    if old is not None:
+        found.append(old.reached(shell_library.old_lines(hunks)))
+    return found
+
+
+def moved_regions(
+    old: Suite | None, new: Suite, hunks: Sequence[tuple[int, int, int, int]]
+) -> set[str] | str:
+    """The sections code the change left alone moved between: for each line whose region (a section, a helper,
+    the shared setup) differs between the old file and the new, both regions; or why that is the whole suite
+    (one of them the shared setup, or a side that does not read)."""
+    if old is None:
+        return set()
+    ids: set[str] = set()
+    for old_line, new_line in shell_library.unchanged_pairs(
+        hunks, len(old.script.lines), len(new.script.lines)
+    ):
+        has_code = old.script.has_code(old_line) or new.script.has_code(new_line)
+        if not has_code or old.region(old_line) == new.region(new_line):
+            continue
+        for suite, line in ((old, old_line), (new, new_line)):
+            found = suite.reached_from(line)
+            if isinstance(found, str):
+                return found
+            ids |= found
+    return ids
 
 
 def pick_suite(plan: Plan, sections: Sequence[Section], found: set[str]) -> None:

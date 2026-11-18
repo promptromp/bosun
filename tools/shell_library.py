@@ -1,23 +1,22 @@
-"""A shell script read as its functions and top-level statements: pure, text in, structure out.
+"""A shell script read as its functions: pure, text in, structure out.
 
 `read(text)` gives a `Script`:
 
 - its functions: each `name() {` (or `function name {`), at any indentation, that is not inside another
   function, with the lines it spans. A function ends on its first line when its braces close there, or at the
   first line after it that begins, outside any quote or here-document, with `}` at the indentation of its
-  first line (shfmt's layout);
-- its statements: the code outside the functions, each a command with the lines it runs on over (a quote, an
-  array, a `case`, a here-document, a `\\` at the end of a line, or a line that ends in `|`, `&&` or `||`);
+  first line (shfmt's layout); every other line is top-level code (or a comment, a blank line);
 - its code: the text with its comments blanked out, line for line;
 - its problems: what keeps it from reading as that (a quote, a `$(`, a `case` or a here-document that does
   not close, a function with no end or whose braces do not balance). Whoever reads a script with a problem
   fails closed.
 
-`changed_functions(new, hunks, old)` maps a diff's hunks (`parse_hunks` of a `git diff -U0`) to the functions
-they changed, on both sides when the old file is given, failing closed: None (the whole file) when a changed
-line is outside every function, cannot be placed, or a side has a problem. Without the old file, lines a hunk
-only took out count as a function's when the lines on either side of where they were are both in it. A
-changed line is a change: nothing is compared.
+`changed_functions(new, hunks, old)` maps a diff's hunks (`parse_hunks` of a `git diff -U0` from <old> to
+<new>) to the functions they changed, failing closed: None (the whole file) when a line a hunk put in or took
+out is outside every function, cannot be placed, or a side has a problem, and when a line the diff left alone
+is code that a change moved between functions or into or out of one (a `}` moved over top-level code: that
+code no longer runs when the file is sourced). `unchanged_pairs(hunks, old_length, new_length)` is that walk:
+each line the diff left alone, as (old line, new line). A changed line is a change: nothing is compared.
 
 `calls(code, names)` is every word of the code that is one of the names, in strings too (`bash -c '...; f'`):
 loose, so it can only find more calls than there are.
@@ -72,18 +71,11 @@ class Function:
     last: int  # the line that closes it
 
 
-@dataclass(frozen=True)
-class Statement:
-    first: int
-    last: int
-
-
 @dataclass
 class Script:
     lines: tuple[str, ...]
     code: str  # the text with its comments blanked out, line for line
     functions: tuple[Function, ...] = ()
-    statements: tuple[Statement, ...] = ()
     problems: tuple[str, ...] = ()
 
     @cached_property
@@ -91,20 +83,19 @@ class Script:
         return self.code.split("\n")
 
     @cached_property
-    def by_line(self) -> dict[int, Function | Statement]:
-        found: dict[int, Function | Statement] = {}
-        blocks: list[Function | Statement] = [*self.functions, *self.statements]
-        for block in blocks:
-            found.update(dict.fromkeys(range(block.first, block.last + 1), block))
+    def by_line(self) -> dict[int, Function]:
+        found: dict[int, Function] = {}
+        for function in self.functions:
+            found.update(dict.fromkeys(range(function.first, function.last + 1), function))
         return found
 
-    def at(self, line: int) -> Function | Statement | None:
-        """The function or statement line <line> is in; None for a blank or comment line outside them."""
+    def function_at(self, line: int) -> Function | None:
+        """The function line <line> is in; None outside every function."""
         return self.by_line.get(line)
 
-    def function_at(self, line: int) -> Function | None:
-        block = self.at(line)
-        return block if isinstance(block, Function) else None
+    def has_code(self, line: int) -> bool:
+        """Whether line <line> holds code: not blank, not only a comment."""
+        return 1 <= line <= len(self.lines) and bool(self.code_lines[line - 1].strip())
 
 
 def parse_hunks(diff: str) -> tuple[tuple[int, int, int, int], ...]:
@@ -126,40 +117,59 @@ def old_lines(hunks: Iterable[tuple[int, int, int, int]]) -> list[int]:
     return [n for start, count, _, _ in hunks for n in range(start, start + count)]
 
 
+def unchanged_pairs(
+    hunks: Iterable[tuple[int, int, int, int]], old_length: int, new_length: int
+) -> list[tuple[int, int]]:
+    """Each line a diff left alone, as (its line in the old file, in the new): the lines between its hunks.
+    A hunk that only puts lines in comes after its old line (`-4,0`); one that only takes lines out, after its
+    new line."""
+    pairs: list[tuple[int, int]] = []
+    old = new = 1
+    for old_start, old_count, new_start, new_count in sorted(hunks):
+        while old <= (old_start if old_count == 0 else old_start - 1):
+            pairs.append((old, new))
+            old, new = old + 1, new + 1
+        old = old_start + (old_count or 1)
+        new = new_start + (new_count or 1)
+    while old <= old_length and new <= new_length:
+        pairs.append((old, new))
+        old, new = old + 1, new + 1
+    return pairs
+
+
 def changed_functions(
-    new: Script, hunks: Iterable[tuple[int, int, int, int]], old: Script | None = None
+    new: Script, hunks: Iterable[tuple[int, int, int, int]], old: Script
 ) -> frozenset[str] | None:
-    """The names of the functions <hunks> changed, in <new> and (given) <old>; None, the whole file, when a
-    changed line is outside every function (top-level code, a comment, a blank line), past the file's end, or
-    a side does not read as functions (see the docstring for lines taken out with no old file)."""
-    if new.problems or (old is not None and old.problems):
+    """The names of the functions <hunks> (from <old> to <new>) changed; None, the whole file, when a line
+    they put in or took out is outside every function (top-level code, a comment, a blank line) or past a
+    file's end, when a line they left alone is code that moved between functions or into or out of one, or
+    when a side does not read as functions."""
+    if new.problems or old.problems:
         return None
+    hunks = list(hunks)
+    names = functions_at(new, new_lines(hunks))
+    gone = functions_at(old, old_lines(hunks))
+    moved = moved_functions(new, hunks, old)
+    if names is None or gone is None or moved is None:
+        return None
+    return frozenset(names | gone | moved)
+
+
+def moved_functions(new: Script, hunks: list[tuple[int, int, int, int]], old: Script) -> set[str] | None:
+    """The functions that code the diff left alone moved between; None when it moved into or out of one."""
     names: set[str] = set()
-    for hunk in hunks:
-        found = hunk_functions(new, hunk, old)
-        if found is None:
+    for old_line, new_line in unchanged_pairs(hunks, len(old.lines), len(new.lines)):
+        before, after = old.function_at(old_line), new.function_at(new_line)
+        if not (old.has_code(old_line) or new.has_code(new_line)) or name_of(before) == name_of(after):
+            continue
+        if before is None or after is None:
             return None
-        names |= found
-    return frozenset(names)
+        names |= {before.name, after.name}
+    return names
 
 
-def hunk_functions(new: Script, hunk: tuple[int, int, int, int], old: Script | None) -> set[str] | None:
-    old_start, old_count, new_start, new_count = hunk
-    found = functions_at(new, range(new_start, new_start + new_count))
-    if found is None:
-        return None
-    if old is not None:
-        gone = functions_at(old, range(old_start, old_start + old_count))
-        return None if gone is None else found | gone
-    if new_count == 0:  # only taken out, and no old file to say what: inside one function, or the whole file
-        return functions_at(new, (new_start, new_start + 1)) if one_function(new, new_start) else None
-    return found
-
-
-def one_function(script: Script, line: int) -> bool:
-    """Whether line <line> and the next are in the same function."""
-    function = script.function_at(line)
-    return function is not None and script.function_at(line + 1) == function
+def name_of(function: Function | None) -> str | None:
+    return function.name if function else None
 
 
 def functions_at(script: Script, lines: Iterable[int]) -> set[str] | None:
@@ -608,16 +618,14 @@ QUOTED = {
 
 
 def read(text: str) -> Script:
-    """<text> as functions and statements, with what keeps it from reading as them (see the docstring)."""
+    """<text> as its functions, with what keeps it from reading as them (see the docstring)."""
     scan = _Scan(text)
     scan.run()
     lines = tuple(text.split("\n"))
     starts = scan.starts + [True] * (len(lines) + 1 - len(scan.starts))
     problems = list(scan.problems)
-    script = Script(lines, "".join(scan.code), functions=tuple(find_functions(lines, starts, scan, problems)))
-    script.statements = tuple(find_statements(script, starts))
-    script.problems = tuple(problems)
-    return script
+    functions = tuple(find_functions(lines, starts, scan, problems))
+    return Script(lines, "".join(scan.code), functions=functions, problems=tuple(problems))
 
 
 def find_functions(
@@ -669,29 +677,3 @@ def closes_on_its_line(line: str, closer: str, scan: _Scan, number: int) -> bool
     if closer == ")":
         return line.rstrip().endswith(")")
     return bool(scan.opened[number - 1]) and scan.braces[number - 1] == 0
-
-
-def find_statements(script: Script, starts: list[bool]) -> list[Statement]:
-    inside = {n for f in script.functions for n in range(f.first, f.last + 1)}
-    code_lines = script.code_lines
-    found: list[Statement] = []
-    number = 1
-    while number <= len(code_lines):
-        if number in inside or not starts[number - 1] or not code_lines[number - 1].strip():
-            number += 1
-            continue
-        last = statement_end(code_lines, starts, inside, number)
-        found.append(Statement(number, last))
-        number = last + 1
-    return found
-
-
-def statement_end(code_lines: list[str], starts: list[bool], inside: set[int], first: int) -> int:
-    """The last line of the statement begun on line <first> (see the docstring for what it runs on over)."""
-    last = first
-    while last < len(code_lines) and last + 1 not in inside:
-        runs_on = not starts[last] or code_lines[last - 1].rstrip().endswith(("|", "&&"))
-        if not runs_on:
-            break
-        last += 1
-    return last

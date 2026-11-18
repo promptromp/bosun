@@ -13,6 +13,7 @@ that cannot be made runs every selected section in the shard; one that can puts 
 
 from __future__ import annotations
 
+import difflib
 import itertools
 import random
 import re
@@ -222,10 +223,20 @@ finish
 """
 
 
+def diff_hunks(old: str, new: str) -> tuple[tuple[int, int, int, int], ...]:
+    """The hunks `git diff -U0` gives from <old> to <new>, numbered as git numbers them."""
+    found = []
+    matcher = difflib.SequenceMatcher(a=old.split("\n"), b=new.split("\n"), autojunk=False)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag != "equal":
+            found.append((i1 + (i2 > i1), i2 - i1, j1 + (j2 > j1), j2 - j1))
+    return tuple(found)
+
+
 class SuiteEditTest(unittest.TestCase):
-    """A change to tests/smoke.sh, line by line on the new side: a section's own lines select it (and those
-    that need it), a helper's the sections that call it, the shared setup's (or a helper it calls) the whole
-    suite."""
+    """A change to tests/smoke.sh, line by line: a section's own lines select it (and those that need it), a
+    helper's the sections that call it, the shared setup's (or a helper it calls) the whole suite; code the
+    change left alone but moved into another region, both regions."""
 
     def plan(self, new: str, *hunks: tuple[int, int, int, int], old: str = SUITE_TEXT) -> ss.Plan:
         suite = ss.Suite(new)
@@ -281,16 +292,76 @@ class SuiteEditTest(unittest.TestCase):
         plan = self.plan(new, (9, 2, 8, 0))
         self.assertEqual((plan.full, plan.picked), (False, {}))  # (what is gone runs nowhere)
 
+    def moved(self, new: str, old: str = SUITE_TEXT) -> ss.Plan:
+        return self.plan(new, *diff_hunks(old, new), old=old)
+
+    def test_a_marker_taken_out_selects_the_section_its_lines_join(self) -> None:
+        plan = self.moved(SUITE_TEXT.replace("section gamma \"gamma\" covers 'libexec/bosun-gamma'\n", ""))
+        self.assertEqual(sorted(plan.picked), ["beta"])  # gamma's `probe` now runs in beta
+
+    def test_a_marker_after_always_run_turns_shared_setup_into_a_section_s_code(self) -> None:
+        plan = self.moved(
+            SUITE_TEXT.replace("always_run\n", "always_run\nsection delta \"delta\" covers 'x'\n")
+        )
+        self.assertTrue(plan.full)
+        self.assertIn("the shared setup", plan.reason)
+
+    def test_a_section_split_selects_both_halves_and_what_needs_them(self) -> None:
+        plan = self.moved(
+            SUITE_TEXT.replace(
+                "probe\nsection gamma", "section beta-tail \"tail\" covers 'x'\nprobe\nsection gamma"
+            )
+        )
+        self.assertEqual(sorted(plan.picked), ["beta", "beta-tail"])
+
+    def test_a_marker_moved_up_selects_the_section_that_lost_the_lines_too(self) -> None:
+        new = SUITE_TEXT.replace(
+            "probe\nsection gamma \"gamma\" covers 'libexec/bosun-gamma'\n",
+            "section gamma \"gamma\" covers 'libexec/bosun-gamma'\nprobe\n",
+        )
+        plan = self.moved(new)
+        self.assertEqual(sorted(plan.picked), ["beta", "gamma"])
+
+    def test_a_shared_helper_s_closing_brace_moved_over_shared_code_runs_the_whole_suite(self) -> None:
+        old = SUITE_TEXT.replace("finish() { :; }\nfinish\n", "finish() {\n  :\n}\nafter=1\nfinish\n")
+        new = old.replace("  :\n}\nafter=1\n", "  :\nafter=1\n}\n")
+        plan = self.moved(new, old=old)
+        self.assertTrue(plan.full)
+
+    def test_a_new_section_between_two_moves_no_code_and_selects_itself(self) -> None:
+        new = SUITE_TEXT.replace("section gamma", "section new \"new\" covers 'x'\ncheck true\nsection gamma")
+        self.assertEqual(sorted(self.moved(new).picked), ["new"])
+
     def test_what_cannot_be_read_or_placed_runs_the_whole_suite(self) -> None:
-        for text, hunks, reason in (
-            (SUITE_TEXT, ((40, 1, 40, 1),), "a changed line (40) that cannot be placed"),
-            (SUITE_TEXT + "echo 'open\n", ((3, 1, 3, 1),), "does not read as functions"),
-            (SUITE_TEXT, (), "changed, and how cannot be read"),
+        for text, hunks, old, reason in (
+            (SUITE_TEXT, ((40, 1, 40, 1),), SUITE_TEXT, "a changed line (40) that cannot be placed"),
+            (SUITE_TEXT + "echo 'open\n", ((3, 1, 3, 1),), SUITE_TEXT, "does not read as functions"),
+            (SUITE_TEXT, (), SUITE_TEXT, "changed, and how cannot be read"),
+            (SUITE_TEXT, ((3, 1, 3, 1),), "", "a file that was not there"),
+            (SUITE_TEXT, ((5, 1, 5, 1),), "echo 'open\n", "at the base does not read as functions"),
         ):
             with self.subTest(reason=reason):
-                plan = self.plan(text, *hunks)
+                plan = self.plan(text, *hunks, old=old)
                 self.assertTrue(plan.full)
                 self.assertIn(reason, plan.reason)
+
+
+class SuiteChangeTest(Scratch):
+    """tests/smoke.sh's text at the base and the hunks since, read from git."""
+
+    def test_a_suite_not_there_at_the_base_has_no_old_text_and_git_failing_is_an_error(self) -> None:
+        root = self.dir / "repo"
+        (root / "tests").mkdir(parents=True)
+        (root / "README").write_text("x\n")
+        git(root, "init", "-q", "-b", "main")
+        git(root, "add", "-A")
+        git(root, "commit", "-q", "-m", "base")
+        (root / "tests" / "smoke.sh").write_text("#!/bin/bash\necho\n")
+        git(root, "add", "-A")
+        change = ss.suite_change(root, "HEAD")
+        self.assertEqual((change.old, change.hunks), ("", ((0, 0, 1, 2),)))
+        with self.assertRaisesRegex(ss.SelectionError, "failed"):
+            ss.suite_change(root, "no-such-ref")
 
 
 class ScratchSuite(Scratch):

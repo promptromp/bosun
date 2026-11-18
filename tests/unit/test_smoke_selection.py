@@ -22,6 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 import smoke_select as ss  # noqa: E402
+import test_smoke_select as selection_tests  # noqa: E402
 
 
 def repository_files() -> list[str]:
@@ -125,6 +126,41 @@ class SelectionRulesTest(unittest.TestCase):
             with self.subTest(path=path):
                 plan = ss.plan_for([path], self.sections, self.rules, self.graph)
                 self.assertTrue(plan.full and not plan.unknown, plan.reason)
+
+    def suite_plan(self, new: str) -> ss.Plan:
+        old = (ROOT / "tests" / "smoke.sh").read_text()
+        change = ss.SuiteChange(old, selection_tests.diff_hunks(old, new))
+        return ss.plan_for([ss.SUITE], ss.parse_sections(new), self.rules, self.graph, ss.Suite(new), change)
+
+    def test_structural_edits_of_the_suite_select_where_its_lines_went(self) -> None:
+        """A marker taken out, added after an always_run, or splitting a section moves lines it left alone
+        into another region: both regions run (the shared setup's: everything)."""
+        text = (ROOT / "tests" / "smoke.sh").read_text()
+        lines = text.split("\n")
+        resolve = next(line for line in lines if line.startswith("section resolve "))
+        merged = self.suite_plan(text.replace(resolve + "\n", ""))
+        self.assertTrue(merged.full)  # resolve's lines follow an always_run: now the shared setup's
+        self.assertIn("the shared setup", merged.reason)
+        always = next(k for k, line in enumerate(lines) if line == "always_run" and k > 4000)
+        stand_ins = "\n".join(
+            [*lines[: always + 1], "section stand-ins \"x\" covers 'x'", *lines[always + 1 :]]
+        )
+        self.assertTrue(self.suite_plan(stand_ins).full)
+        refresh = next(k for k, line in enumerate(lines) if line.startswith("section refresh "))
+        split = "\n".join(
+            [*lines[: refresh + 20], "section refresh-tail \"x\" covers 'x'", *lines[refresh + 20 :]]
+        )
+        plan = self.suite_plan(split)
+        self.assertLessEqual(
+            {"refresh", "refresh-tail", "console-sessions", "update-restart"}, set(plan.picked)
+        )
+        marker = next(k for k, line in enumerate(lines) if line.startswith("section launch-dry-run "))
+        up = "\n".join(
+            [*lines[: marker - 4], lines[marker], *lines[marker - 4 : marker], *lines[marker + 1 :]]
+        )
+        self.assertLessEqual(
+            {"resolve", "launch-dry-run"}, set(self.suite_plan(up).picked)
+        )  # resolve's checks moved
 
     def test_the_weights_reach_nothing(self) -> None:
         """They only balance the shards of a split run: a section moved between shards still runs."""
