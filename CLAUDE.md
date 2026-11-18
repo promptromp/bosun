@@ -618,7 +618,7 @@ label and refuses to run unless the fakes come first on PATH. A check makes no t
 duration or races a fixed sleep, but waits on what the code says or writes (a log line, a file, a lock's state, an
 exit; `hold_lock`/`release_lock` for a lock the test holds), a `wait_for` timeout being only a failsafe against a
 hang; how long a poll, a deadline or an interval waits is the unit tests', with an injected clock
-(`tests/unit/test_smoke_timing.py` holds the suite to it).
+(`tests/unit/test_smoke_timing.py` holds the suite to the common shapes of it).
 
 **Never test an install on the machine you are running on: `install.sh`, `bosun init --recommended`,
 `get.sh`, `bosun update` and `bosun uninstall` change launchd, `pmset`, the install and the config for
