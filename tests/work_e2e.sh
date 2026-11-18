@@ -563,7 +563,7 @@ the_update_itself() {
   valid
   kg_valid
   echo "  note  writes were paused for $FREEZE_MS ms (freeze_ms), on $YEAR_DAYS days of data"
-  freeze_check
+  on_the_data "the freeze, @DATA@, is under 10 000 ms: $FREEZE_MS ms" test "${FREEZE_MS:-99999}" -lt 10000
   check "each window brought along by the table: the orchestrator re-read, acme-api restarted, acme-web took stock first, invoice-exporter was waited for" brought_along
   check "... the orchestrator kept running, asked to re-read policy.md" kept_running_and_reread
   check "... acme-web's $BACKGROUND_SLEEP listed before its restart, and started again from its stock note" sleep_again
@@ -573,15 +573,15 @@ the_update_itself() {
   check "the temporary link a switch cut short before it is swept" test ! -L "$LEFT_LINK"
 }
 
-# The freeze, under 10 s. On a year of data that is the check of the freeze; on fewer days (a selection that does
-# not reach the freeze's code: tools/vm_select.py, tests/vm_selection.txt's `year` rules) it says what it measured.
-freeze_check() {
-  if [ "$YEAR_DAYS" -ge 365 ]; then
-    check "the freeze, on a year of data, is under 10 000 ms: $FREEZE_MS ms" test "${FREEZE_MS:-99999}" -lt 10000
-  else
-    check "the freeze, measured on $YEAR_DAYS days of data (not the year's check: a change to the freeze's code runs 365), is under 10 000 ms: $FREEZE_MS ms" \
-      test "${FREEZE_MS:-99999}" -lt 10000
-  fi
+# on_the_data "<description, with @DATA@ for what it measured on>" <command...>: a check of what the afternoon
+# update's data costs (the freeze, restoring the backup). On a year of data it is the year's check; on fewer days (a
+# selection that does not reach the freeze's code: tools/vm_select.py, tests/vm_selection.txt's `year` rules) it
+# says so, and is not the year's.
+on_the_data() {
+  local what="on a year of data" description="$1"
+  [ "$YEAR_DAYS" -ge 365 ] || what="measured on $YEAR_DAYS days of data, not the year's check (a change to the freeze's code runs 365)"
+  shift
+  check "${description//@DATA@/$what}" "$@"
 }
 
 # What restoring the backup costs on a year of data, for a recovering approval hook (8 s): restore's own
@@ -632,7 +632,7 @@ the_backup_and_the_hooks() {
   costs="$(restore_costs 2>&1)"
   restored=$?
   echo "  note  $(tail -1 <<<"$costs")"
-  check "restoring it, as a recovering approval hook does, takes less than the hook's 8 s" test "$restored" = 0
+  on_the_data "restoring it, as a recovering approval hook does, @DATA@, takes less than the hook's 8 s" test "$restored" = 0
   check "each hook of the version before's launch settings, given its own event, does its job on the next version" \
     hooks_run "$OUT/base-hooks.txt"
   echo "  note  $(cat "$OUT/base-hooks.txt.ran" 2>/dev/null || echo 0) of the $(grep -c . "$OUT/base-hooks.txt") hooks did"
@@ -1084,7 +1084,7 @@ cut_randomly() { # <name> <id pattern> <command...>: @N@ in the command is the c
 }
 
 # How far into a write the random cuts reach: a write's time, measured, and the rebuild from the whole
-# journal that a write starts with once a cut has left the file behind it (on a year of data most of its
+# journal that a write starts with once a cut has left the file behind it (on the afternoon's data most of its
 # time), so that some cuts fall after a write printed its id.
 CUT_MS=300
 cut_range() { # ledger|kg <a write of that store, as a command...>
@@ -1149,7 +1149,7 @@ all_approved() { # <file of quotes>: each one is in the item's history (and ther
 }
 
 # A write that finds ledger.json behind its journal (a cut left it so) first rebuilds it from the whole
-# journal, as `ledger validate --journal` does: on a year of data that is most of a write's time.
+# journal, as `ledger validate --journal` does: on the afternoon's data that is most of a write's time.
 swept_cuts() {
   echo "power cuts, swept: an approval (it writes both journal files) killed at each point of its run"
   local n ms took catch_up count=100 torn_before

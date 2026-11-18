@@ -37,8 +37,8 @@ unit tests, which follow them, and following them reaches nearly every part from
 
 A changed line of a function-read file outside every function (but a blank line or a comment where a
 statement could begin), or such a file that does not read as functions, is unknown too. Work's afternoon
-update gets 365 days of data when a changed file matches a `year` rule (the update's freeze), else 30, and its
-freeze check then says it measured 30.
+update gets 365 days of data when work runs whole (an `all` rule, an unknown file) or a changed file matches a
+`year` rule (the update's freeze); else 30, and its year-scale checks then say they measured 30.
 
 Run it as `vm_select.py [--root <repo>] [--suite <suite>] (--changed <ref> | --only <part>[,<part>...])`.
 --changed compares with the merge-base of <ref> and HEAD (committed, staged, unstaged and untracked files);
@@ -284,11 +284,12 @@ def make_choice(
 
 
 def choose(suite: str, suite_parts: Sequence[Marker], plan: Plan, rules: Rules) -> Choice:
-    """What <suite> runs for <plan>: whole for an `all` rule (or, but for live, an unknown file); else the
-    parts picked and what they need."""
+    """What <suite> runs for <plan>: whole for an `all` rule (or, but for live, an unknown file), and so for
+    work a year of data, as a whole run has; else the parts picked and what they need, with a year only when a
+    changed file is on a `year` rule."""
+    if suite in plan.whole or (plan.unknown and suite in FAIL_CLOSED):  # whole: what a whole run proves
+        return make_choice(suite, suite_parts, {p.id for p in suite_parts}, True, YEAR, rules)
     year = YEAR if plan.year else SHORT_YEAR
-    if suite in plan.whole or (plan.unknown and suite in FAIL_CLOSED):
-        return make_choice(suite, suite_parts, {p.id for p in suite_parts}, True, year, rules)
     picked = [p.id for p in suite_parts if (suite, p.id) in plan.picked]
     return make_choice(suite, suite_parts, set(picked) | set(needed(suite_parts, picked)), False, year, rules)
 
@@ -316,7 +317,8 @@ def year_note(choice: Choice, plan: Plan | None) -> str:
 
 
 def choice_line(choice: Choice, plan: Plan | None = None) -> str:
-    """`<suite>: <parts>   ~<minutes> min`, or nothing to run; live's says it is paid."""
+    """`<suite>: <parts>   ~<minutes> min`, or nothing to run; live's says it is paid, and for a change
+    (<plan>) that it runs only with --paid (--only is asked for by name)."""
     head = f"{choice.suite + ':':<6}"
     if not choice.parts:
         return f"{head}nothing to run"
@@ -324,7 +326,7 @@ def choice_line(choice: Choice, plan: Plan | None = None) -> str:
     shown = " ".join(f"{p}({year})" if p == YEAR_PART else p for p in choice.parts)
     if choice.whole:
         shown = f"whole ({len(choice.parts)} parts{', ' + year if year else ''})"
-    paid = ", paid: it runs only with --paid" if choice.paid else ""
+    paid = (", paid: it runs only with --paid" if plan else ", paid") if choice.paid else ""
     return f"{head}{shown}   ~{choice.minutes:.1f} min{paid}"
 
 

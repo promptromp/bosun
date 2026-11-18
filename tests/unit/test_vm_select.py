@@ -176,6 +176,11 @@ class PlanTest(unittest.TestCase):
         plan = vs.plan_for(["lib/common.sh"], PARTS, RULES, lambda _: frozenset())
         self.assertEqual((plan.unknown, plan.picked), ([], {}))
 
+    def test_a_whole_work_run_gets_a_year_also_when_it_fails_closed(self) -> None:
+        self.assertEqual(choose(["shared.sh"])["work"].year, vs.YEAR)
+        self.assertEqual(choose(["notes.txt"])["work"].year, vs.YEAR)
+        self.assertEqual(vs.only("work", PARTS["work"], ["afternoon-update"], RULES).year, vs.SHORT_YEAR)
+
     def test_the_freeze_s_code_gives_a_year_and_the_estimate_counts_it(self) -> None:
         short = choose(["lib/u.py"])["work"]
         year = choose(["lib/j.py"])["work"]
@@ -189,6 +194,9 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(
             (got.parts, got.year, got.whole), (("install", "afternoon-update", "ways-back"), 30, False)
         )
+        self.assertTrue(
+            vs.choice_line(vs.only("live", PARTS["live"], ["windows"], RULES)).endswith(" min, paid")
+        )
         with self.assertRaises(sel.SelectionError) as caught:
             vs.only("work", PARTS["work"], ["nope"], RULES)
         self.assertIn("work has no part nope", str(caught.exception))
@@ -200,7 +208,7 @@ class SaysTest(unittest.TestCase):
         self.assertEqual(vs.answer(choose(["shared.sh"])["run"]), "=> all")
         self.assertEqual(vs.answer(choose(["docs/x.md"])["run"]), "=> none")
         self.assertEqual(vs.answer(choose(["lib/j.py"])["work"]), "=> only install,afternoon-update year=365")
-        self.assertEqual(vs.answer(choose(["shared.sh"])["work"]), "=> all year=30")
+        self.assertEqual(vs.answer(choose(["shared.sh"])["work"]), "=> all year=365")
 
     def test_the_answer_for_every_suite_marks_live_s_paid(self) -> None:
         got = choose(["lib/b.py"])

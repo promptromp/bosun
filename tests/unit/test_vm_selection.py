@@ -306,6 +306,7 @@ class AnswersTest(Guard):
     def test_a_file_nothing_names_fails_closed_but_never_into_live(self) -> None:
         got = self.choices(["brand-new-thing.txt"])
         self.assertEqual([got[s].whole for s in vs.SUITES], [True, True, True, False])
+        self.assertEqual(got["work"].year, vs.YEAR, "failing closed proves what a whole run proves")
 
     def test_the_freeze_s_code_gives_the_afternoon_update_a_year(self) -> None:
         got = self.choices(["lib/journal.py"])
