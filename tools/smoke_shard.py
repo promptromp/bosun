@@ -25,8 +25,10 @@ Run it as `smoke_shard.py --script <tests/smoke.sh> --weights <file> --shard K/N
 shard's own sections, in file order; the suite adds what they need) or `=> none`. Whatever goes wrong is
 `=> all`: the shard runs every section it was given, so a broken split can only make a run longer. After a
 run, `--record <tests/.smoke-cache/durations>` in place of --shard writes the weights file anew from what the
-run measured (a section the record lacks keeps its weight). Plain python3 3.9 is enough, as for
-smoke_select.py."""
+run measured (a section the record lacks keeps its weight). `--seconds` in its place prints how long the
+sections (with what they need) take by the weights, a number alone (the pre-push hook leaves a selection
+longer than BOSUN_SMOKE_DEFER_SECONDS to the merge queue); it fails, printing nothing, when it cannot say.
+Plain python3 3.9 is enough, as for smoke_select.py."""
 
 from __future__ import annotations
 
@@ -186,6 +188,16 @@ def split(
     return plan.shards()
 
 
+def seconds(sections: Sequence[Section], chosen: Sequence[str], weights: Mapping[str, int]) -> int:
+    """How long the <chosen> sections and what they need take, by <weights> (a section they do not list: the
+    median of those they do)."""
+    plan = Split(sections, weights, 1)
+    unknown = [c for c in chosen if c not in plan.order]
+    if unknown:
+        raise ShardError(f"no section {', '.join(unknown)}")
+    return plan.cost(set().union(*(plan.with_needs(c) for c in chosen)))
+
+
 def answer(shards: Sequence[Shard], number: int, chosen: int, by: str) -> list[str]:
     """The report on shard <number> (1-based) of <shards>, of <chosen> sections, weighed <by>, ending in the
     answer."""
@@ -225,6 +237,18 @@ def refreshed(sections: Sequence[Section], old: Mapping[str, int], record: Mappi
     return WEIGHTS_HEADER + "".join(f"{line}\n" for line in lines)
 
 
+def print_seconds(script: Path, weights: Path, sections_arg: str | None) -> int:
+    """`--seconds`: the number on stdout, or on stderr why there is none (exit 1)."""
+    try:
+        sections = parse_sections(script.read_text(encoding="utf-8"))
+        chosen = [s for s in (sections_arg or "").split(",") if s] or [s.id for s in sections]
+        print(seconds(sections, chosen, read_weights(weights)))
+    except (OSError, ShardError) as error:
+        print(f"smoke_shard.py --seconds: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def main(argv: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n", 1)[0])
     parser.add_argument("--script", type=Path, required=True)
@@ -232,8 +256,11 @@ def main(argv: Sequence[str]) -> int:
     task = parser.add_mutually_exclusive_group(required=True)
     task.add_argument("--shard", help="K/N")
     task.add_argument("--record", type=Path, help="the durations a run recorded")
+    task.add_argument("--seconds", action="store_true", help="how long the sections take, by the weights")
     parser.add_argument("--sections", help="id,id,... (default: every section)")
     args = parser.parse_args(argv)
+    if args.seconds:
+        return print_seconds(args.script, args.weights, args.sections)
     if args.record is not None:
         sections = parse_sections(args.script.read_text(encoding="utf-8"))
         record = parse_weights(args.record.read_text(encoding="utf-8"))
