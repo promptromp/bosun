@@ -6,6 +6,7 @@ import argparse
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -26,7 +27,8 @@ import workstreams
 from knowledge_model import KnowledgeError
 
 
-FIXTURE = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "knowledge" / "acme-import.jsonl"
+REPO = Path(__file__).resolve().parents[2]
+FIXTURE = REPO / "tests" / "fixtures" / "knowledge" / "acme-import.jsonl"
 TASK = """---
 title: Do a thing
 kinds: mention
@@ -74,6 +76,26 @@ class TaskFileTest(unittest.TestCase):
         types = delegate.load_task_types()
         self.assertEqual(set(types), {"review", "fix-my-pr", "new-work", "investigate"})
         self.assertEqual(len(delegate.list_types(types, markdown=True).splitlines()), len(types))
+
+    def test_every_ledger_step_in_a_repo_task_file_is_a_valid_transition(self) -> None:
+        """What a task file tells the repo session to record (a transition, or a report's --state) is a move
+        each kind it takes allows from some state; outcomes are reports, never notes."""
+        paths = sorted((REPO / "orchestrator" / "tasks").glob("[!_]*.md"))
+        self.assertTrue(paths)
+        for path in paths:
+            text = path.read_text()
+            declared = re.search(r"^kinds: (.+)$", text, re.MULTILINE)
+            self.assertIsNotNone(declared, path.name)
+            assert declared is not None
+            kinds = list(ledger.KINDS) if declared.group(1).split() == ["any"] else declared.group(1).split()
+            self.assertEqual([kind for kind in kinds if kind not in ledger.KINDS], [], path.name)
+            self.assertNotIn("ledger note", text, f"{path.name}: report outcomes with ledger report")
+            steps = re.findall(r"bosun ledger transition \S+ (\S+)", text)
+            steps += re.findall(r"bosun ledger report \S+ --state (\S+)", text)
+            for state, kind in ((state, kind) for state in steps for kind in kinds):
+                with self.subTest(task=path.name, kind=kind, state=state):
+                    moves = ledger.KINDS[kind]["transitions"]
+                    self.assertTrue(any(state in ledger.allowed_targets(kind, s) for s in moves))
 
 
 class SiteOverlayTest(unittest.TestCase):

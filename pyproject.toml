@@ -83,6 +83,7 @@ impacted_map = [
     "orchestrator/**=tests/unit/test_console_server.py",
     "orchestrator/**=tests/unit/test_guard.py",
     "orchestrator/**=tests/unit/test_learn.py",
+    "orchestrator/**=tests/unit/test_task_table.py",
     "templates/*=bin/bosun",
     "console/*=bin/bosun",
     "console/*=tests/unit/test_app_icons.py",
@@ -112,13 +113,16 @@ impacted_map = [
     "bin/bosun=tests/unit/test_update_back.py",
     "bin/bosun=tests/unit/test_update_facts.py",
     "bin/bosun=tests/unit/test_update_gate.py",
-    # What a test reads of bosun's programs to hold a constant to it (the watchdog job's interval).
+    # What a test reads of bosun's programs to hold a constant to it (the watchdog job's interval), or a
+    # command's usage to its table (the watchdog's checks).
     "lib/common.sh=tests/unit/test_menu_status.py",
+    "libexec/bosun-watchdog=tests/unit/test_watchdog_usage.py",
     # The docs: bosun's code never reads them. A change counts as one to the site (mkdocs.yml),
     # whose change selects the tests that read a page.
     "docs/**=mkdocs.yml",
     "theme/*=mkdocs.yml",
     "[A-Z]*.md=mkdocs.yml",
+    "mkdocs.yml=tests/unit/test_task_table.py",
     "mkdocs.yml=tests/unit/test_docs_examples.py",
     "mkdocs.yml=tests/unit/test_update.py",
     "mkdocs.yml=tests/unit/test_update_summary.py",

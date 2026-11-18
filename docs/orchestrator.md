@@ -150,7 +150,8 @@ before its window reported, or moving it to another window. Each window reports 
 
 These rules live in the task's text: a repo window follows them, but neither auto mode nor
 `--dangerously-skip-permissions` technically stops it from doing more. To change a rule, edit the task file;
-`tests/smoke.sh` checks that its ledger steps are valid and that this table matches.
+the unit tests check that its ledger steps are valid (`tests/unit/test_delegate.py`) and that this table matches
+(`tests/unit/test_task_table.py`).
 
 **Your own rules.** To adapt the orchestrator to your team without forking, put files in your config folder:
 `policy.md` is appended to the orchestrator's policy; `tasks/<type>.md` adds a task type (in the format of
