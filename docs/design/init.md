@@ -55,7 +55,8 @@ What it does depends on what is at the install path, `~/.local/share/bosun`, and
 rather than guess (a folder that is not bosun's, a link to anything but a version, a versions folder
 without `bosun.git`). A checkout of bosun there, one an older `get.sh` made before versions side by side, is
 refused too, saying how to install again (its own `bosun uninstall`, or, if that keeps it or there is none,
-its `bosun stop` and moving it aside; then the install line), and nothing in it changes: such an install is installed again, never converted (decided 2026-11-18).
+its `bosun stop` and moving it aside; then the install line), and nothing in it changes: such an install is
+installed again, never converted (decided 2026-11-18).
 
 - **Nothing:** a first install. It clones `bosun.git` bare into `~/.local/share/bosun-versions`, one
   branch and no tags, and marks it the installer's (`bosun.managed`, which [uninstall](uninstall.md) goes by)

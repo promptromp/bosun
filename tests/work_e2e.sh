@@ -135,7 +135,8 @@ the_install() {
     bash -c 'bosun update --check --json | jq -e ".channel == \"main\" and .error == null"'
 }
 
-# Three days, with bosun stopped as launchd_for_real leaves it.
+# Three days, the clock a day on between them. launchd_for_real leaves bosun stopped, but the morning job starts it
+# again when the clock moves, so it may be running after day 3 (priya_forgotten stops it before its torn write).
 the_first_days() {
   echo "the first days: three of them, the clock a day on between them"
   day_1
