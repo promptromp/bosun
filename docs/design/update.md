@@ -643,14 +643,14 @@ link moved by hand: going back is then by hand), and a version to go back to tha
 versions (`legacy-*`, which has no hold or write gate: by hand, as [the guide](../updating.md#going-back)
 says).
 
-**Where the facts come from.** The record of the update gone over: both versions' folders and commits, its
-backup, its migrations (`migrated`) and what it wrote to `bosun.env` (`config_changed`, the plan's `renames`
-and `kept`). The backup's manifest, whose `from` and `to` must be the record's commits. Each version's
-stores' formats and rules versions, read from its source, as the plan reads the rules versions
-(`update_facts.source_formats`: no code of the older version runs in the back's process). The older version's folder stays until the next update; if it is gone, the back adds it again from
-`bosun.git` at its whole commit (`git worktree add --detach`, as the guide's path by hand does), fetching that
-commit from the origin first if `bosun.git` no longer has it, and a dry run adds it too, as an update's dry
-run makes the new version's folder.
+**Where the facts come from.** The record of the update gone over: both versions' folders and commits, its backup,
+its migrations (`migrated`) and what it wrote to `bosun.env` (`config_changed`, the plan's `renames` and `kept`).
+The backup's manifest, whose `from` and `to` must be the record's commits. Each version's stores' formats and
+rules versions, read from its source, as the plan reads the rules versions (`update_facts.source_formats`: no code
+of the older version runs in the back's process). The older version's folder stays until the next update; if it is
+gone, the back adds it again from `bosun.git` at its whole commit (`git worktree add --detach`, as the guide's
+path by hand does), fetching that commit from the origin first if `bosun.git` no longer has it, and a dry run adds
+it too, as an update's dry run makes the new version's folder.
 
 **What it restores, part by part.** What was written since the update stays wherever the older version can
 read it, each part decided on its own:
@@ -714,11 +714,11 @@ store-newer blocker. Its own part, `back`, says:
    steps](#the-steps), 5): it begins by making sure the install leads to the version updated to (a no-op after a
    freeze switched it), so a back cut short anywhere from `checked` is carried on by the next `bosun update` like
    an update; the launchd jobs the version updated from lists (`job_labels`) and the one updated to does not are
-   unloaded and their plists deleted (a newer version's job would run a command the older one lacks); and the
-   menu bar app is brought along only when the version updated to wants an app at least as new as the one
-   installed. So a back leaves the app as it is: it reads only what `bosun ... --json` prints, whose fields only grow, and takes one an older
-   bosun does not send as its default (as it does `starting`); a menu item whose command the older bosun
-   lacks fails with that command's error, and the next update brings the app to what its version wants.
+   unloaded and their plists deleted (a newer version's job would run a command the older one lacks); and the menu
+   bar app is brought along only when the version updated to wants an app at least as new as the one installed. So
+   a back leaves the app as it is: it reads only what `bosun ... --json` prints, whose fields only grow, and takes
+   one an older bosun does not send as its default (as it does `starting`); a menu item whose command the older
+   bosun lacks fails with that command's error, and the next update brings the app to what its version wants.
 6. Bring the windows along, as an update does, by its table: restarted once idle where the launch differs
    from what the older version would launch, a re-read where only the orchestrator's prompts differ, taking
    stock first where only background work runs, the ones waiting for me handed to the check-in loop, and the
@@ -755,15 +755,16 @@ store-newer blocker. Its own part, `back`, says:
 1. The name checked (`git check-ref-format --branch`), then the origin asked (`git ls-remote --heads`): a
    branch it does not have, or an origin it cannot reach, is refused before anything changes.
 2. As on the `main` channel: the head fetched into `bosun.git`, and its version folder made.
-3. The target checked against the data, before handing over. This is no branch's own: every update runs
-   it, so a revert on `main` that takes a format back is caught the same way. The target's stores' formats
-   and rules versions (from its source) are compared with the data's (its formats on disk, the installed
-   version's rules versions): a store the target would read in an older format, or under older rules, is
-   refused, with nothing changed but the folder (which a dry run makes too): "<branch> (abc1234) has the
-   ledger at format 1, and the data is at format 2: going back past a migration is bosun update --back's, to
-   the version the last update came from". The target's own plan already stops on a store newer than it
-   knows (`update_plan.GOING_BACK`, in every version since the plan), but says "not supported" and knows
-   nothing of rules; this check says what to do. (`update_facts.older_than_data`, run by the wrapper.)
+3. The target checked against the data, before handing over. This is no branch's own: every update runs it, so a
+   revert on `main` that takes a format back is caught the same way. The target's stores' formats and rules
+   versions (from its source) are compared with the data's (its formats on disk, the installed version's rules
+   versions): a store the target would read in an older format, or under older rules, is refused, with nothing
+   changed but the folder (which a dry run makes too): "the head of try-x (abc1234) has the ledger at format 1,
+   and the data is at format 2: going back past a migration or a rules change is bosun update --back's, to the
+   version the last update came from". The target's own plan already stops on a store newer than it knows
+   (`update_plan.GOING_BACK`, in every version since the plan), but says "not supported" and knows nothing of
+   rules; this check says what to do. (`update_facts.older_than_data`, which the wrapper runs as
+   `lib/update_back.py target-check`.)
 4. Unless `--dry-run`: `bosun.branch` set in `bosun.git`, and, where the channel is not `main`,
    `BOSUN_UPDATE_CHANNEL=main` written by `bosun settings set` (its writer and its `bosun.env.pre-init-<stamp>`
    copy), said in a line: "bosun follows <branch> from now on (bosun update --branch main follows main
@@ -797,23 +798,29 @@ and `menu_status.CONTRACT` does not change.
   reads what it can of them.
 - One store restored and the other kept can leave a fact written since that cites a ledger item now gone.
 
-**Testing.** Unit tests for the pure decisions: which update a back goes back over, for every shape of
-record; each refusal; each part's decision over format, rules and `bosun.env` changed or not; what restoring
-loses; `bosun.env` taken back with and without changes since; the plan's and summary's text; the target
-checked against the data; the release's jobs to unload and its app rule. Smoke sections, each with its
-`covers`, on the `update` section's install: going back over an update with no format change (a ledger write
-and a knowledge write between the update and the back survive, the windows come along, a second `--back` is
-refused, and `bosun update` offers the version again with its line in the plan), and over one with a format
-change (the store restored, what was written since in the back's own backup, `bosun.env` taken back); each
-refusal (no finished update, a second back, the backup a `kg forget` deleted when a restore needs it but not
-when none does, a `legacy-*` version); a back cut short at each step, carried on or put back; `--branch` to a
-branch of the local origin and back with `--branch main`, an unknown branch refused with nothing changed,
-and a branch older in format refused, pointing at `--back`. In the VM, `tests/work_e2e.sh` keeps its path by
-hand (the fallback when the newer version's own update is what broke) and adds `bosun update --back` twice:
-over an update with no format change (`tests/sandbox/update_patch.sh` gets a variant that keeps the format),
-with work written between the update and the back that must all be there after it, and over the format
-change, whose restore is checked against the backup. `tests/install_e2e.sh` (`mac run`) does `--branch` to a
-branch of its local origin and back to `main`.
+**Testing.** Unit tests (`tests/unit/test_update_back_plan.py`, `test_update_back.py`, and the general changes
+in `test_update.py`, `test_update_gate.py`, `test_update_facts.py`, `test_update_lookup.py`, `test_migrations.py`):
+which update a back goes back over, for every shape of record; each refusal (nothing finished, a second back, the
+install led elsewhere, a `legacy-*` version, a restore whose backup is gone); each part's decision over format,
+rules and `bosun.env`; what restoring loses; `bosun.env` taken back with and without changes since; a back that
+keeps everything (no freeze), one that restores a store, one whose restore fails while writes are paused (put
+back) and one whose backup is found damaged (the rehearsal fails); the plan's and summary's text; the target
+checked against the data; the release's link, jobs to unload and app rule; the write gate both ways and for a
+checkout; a skipped head of `main`. Smoke sections, on installs of their own made from the `update` section's
+versions: `update-back` (over the format change from v1 to v2: the ledger restored, the write made since in the
+back's own backup, `bosun.env` taken back, a second `--back` refused, the version left skipped, forward again with
+the plan's line; with the backup gone, blocked; over v2 to v3, which changes nothing the data is read by: a ledger
+and a knowledge write kept, no freeze and no backup, the summary beside the update's backup) and `update-branch`
+(an unknown branch and a bad name refused with nothing changed, `--json`'s object, a dry run that writes nothing,
+the plan said no to while the install follows the branch, the update to its head, a branch older in format and
+one older in rules refused pointing at `--back`, `--branch main`). A back cut short at each step is not killed in
+the smoke suite: what carries it on is the update's own (`resume`, and the release that leads the install), unit
+tested. In the VM, `tests/work_e2e.sh` keeps its path by hand (the fallback when the newer version's own update is
+what broke) and adds `bosun update --back` twice: over the update to the next version (format 2: the ledger
+restored, a ledger write made since in the back's backup, an ontology write kept), and over an update to the
+version after (`tests/sandbox/update_patch.sh --again`: the same format), which restores nothing and keeps both
+writes. `tests/install_e2e.sh` (`mac run`) does `--branch` to a branch it pushes to its local origin, `--branch
+main`, and the releases again.
 
 ## Testing
 
