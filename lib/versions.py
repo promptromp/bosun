@@ -2,20 +2,14 @@
 (docs/design/update.md, "Versions side by side, switched in one step").
 
 A version is a git worktree of the bare repository `<versions>/bosun.git`, in a folder named by
-the first 12 characters of its commit. A checkout from before versions existed is kept as
-`legacy-<12>` after the first update swaps it for the link. The install path is never missing:
-`point` renames a new link over it, `swap_in_link` exchanges link and checkout in one call; `switch`
-does whichever the install needs. `prune` deletes what an update no longer needs, but never a legacy
-checkout or an older version that holds anything of yours (lib/checkout_work.py), and `sweep_links` the
-temporary links a switch cut short left.
+the first 12 characters of its commit. The install path is never missing: `point` renames a new link
+over it. `prune` deletes what an update no longer needs, but never an older version that holds anything
+of yours (lib/checkout_work.py), and `sweep_links` the temporary links a switch cut short left.
 """
 
 from __future__ import annotations
 
-import ctypes
-import errno
 import os
-import shutil
 import subprocess
 import sys
 import uuid
@@ -27,13 +21,7 @@ import install_paths
 import journal
 
 
-LEGACY_PREFIX = "legacy-"
-
 LOOK_SECONDS = 30  # the most lsof or ps may take to say whether a folder is in use
-# Flags that exchange two paths atomically: macOS RENAME_SWAP, Linux RENAME_EXCHANGE.
-_RENAME_SWAP = 0x00000002
-_RENAME_EXCHANGE = 2
-_AT_FDCWD = -100
 
 
 def git(
@@ -124,17 +112,6 @@ def current(install: Path) -> Path | None:
     return target if target.is_absolute() else install.parent / target
 
 
-def legacy_folder(versions: Path, commit: str) -> Path:
-    """Where the first update keeps the checkout from before versions at <commit>."""
-    return versions / f"{LEGACY_PREFIX}{commit[:12]}"
-
-
-def before_versions(root: Path) -> bool:
-    """Whether the bosun in <root> is a checkout from before versions: anything but a version folder,
-    or one the first update kept as legacy-* (where a conversion put back leads the link)."""
-    return not install_paths.is_version_folder(root) or root.name.startswith(LEGACY_PREFIX)
-
-
 def _link_name(install: Path) -> str:
     return f".{install.name}.link-"
 
@@ -154,79 +131,6 @@ def point(install: Path, target: Path) -> None:
         link.unlink(missing_ok=True)
         raise
     journal.flush_folder(install.parent)
-
-
-def _swap_macos(libc: ctypes.CDLL, first: bytes, second: bytes) -> int:
-    return int(libc.renamex_np(first, second, _RENAME_SWAP))
-
-
-def _swap_linux(libc: ctypes.CDLL, first: bytes, second: bytes) -> int:
-    return int(libc.renameat2(_AT_FDCWD, first, _AT_FDCWD, second, _RENAME_EXCHANGE))
-
-
-_SWAPS: dict[str, Callable[[ctypes.CDLL, bytes, bytes], int]] = {
-    "darwin": _swap_macos,
-    "linux": _swap_linux,
-}
-
-
-def _libc() -> ctypes.CDLL:
-    return ctypes.CDLL(None, use_errno=True)
-
-
-def _swap(first: Path, second: Path) -> None:
-    """Exchange two paths in one call; raises OSError when it cannot."""
-    swap = _SWAPS.get(sys.platform)
-    if swap is None:
-        raise OSError(errno.ENOSYS, f"no atomic swap of two paths on {sys.platform}")
-    libc = _libc()
-    try:
-        failed = swap(libc, os.fsencode(first), os.fsencode(second)) != 0
-    except AttributeError as exc:
-        raise OSError(errno.ENOSYS, f"this libc has no atomic swap of two paths ({exc})") from exc
-    if failed:
-        code = ctypes.get_errno()
-        raise OSError(code, f"cannot swap {first} and {second}: {os.strerror(code)}")
-
-
-def swap_in_link(install: Path, target: Path, legacy: Path) -> Path:
-    """Replace the checkout at `install` with a link to `target` in one step, and keep the checkout
-    as `legacy` (its legacy_folder beside `target`, as the update's record names it): the link is made
-    there, then the two exchanged in one call, so the checkout is never anywhere else, nor the install
-    path missing. Returns where the checkout went. Refuses, with nothing changed, when that folder exists;
-    a link there is one a swap cut short left (none other is ever made in the versions folder), and is
-    replaced."""
-    if legacy.is_symlink():
-        legacy.unlink()
-    if os.path.lexists(legacy):
-        raise FileExistsError(errno.EEXIST, f"{legacy} is already there; not converting {install}")
-    os.symlink(target, legacy)
-    try:
-        _swap(legacy, install)
-    except OSError:
-        legacy.unlink(missing_ok=True)
-        raise
-    journal.flush_folder(install.parent)
-    journal.flush_folder(legacy.parent)
-    return legacy
-
-
-def switch(install: Path, target: Path, kept: Path) -> Path | None:
-    """`install` made to lead to `target` in one step: the link pointed there (point), or the checkout
-    from before versions swapped for that link and kept as `kept` (switched_from, which the update
-    records first). Returns where the checkout went; None when the install was a link already."""
-    if install.is_symlink():
-        point(install, target)
-        return None
-    return swap_in_link(install, target, kept)
-
-
-def switched_from(install: Path, target: Path, root: Path, commit: str) -> Path:
-    """Where the version in `root`, at `commit`, is once switch(install, target) is done: the same
-    folder, but for the checkout at `install`, which goes to its legacy folder beside `target`."""
-    if root == install and not install.is_symlink():
-        return legacy_folder(target.parent, commit)
-    return root
 
 
 def _open_in(folder: Path) -> bool | None:
@@ -273,9 +177,6 @@ def _in_use(folder: Path) -> bool | None:
 
 
 def _remove(versions: Path, folder: Path) -> bool:
-    if folder.name.startswith(LEGACY_PREFIX):
-        shutil.rmtree(folder)
-        return True
     done = git("-C", str(versions / install_paths.REPO), "worktree", "remove", "--force", str(folder))
     return done.returncode == 0 and not folder.exists()
 
@@ -297,17 +198,8 @@ def _candidates(versions: Path, keep: Collection[Path]) -> list[Path]:
     ]
 
 
-def kept(folder: Path) -> str:
-    """Why prune keeps <folder> though it is neither version of the update, or "": a checkout from before
-    versions with anything of yours in it, or that the installer did not make (as bosun uninstall
-    decides for a checkout); an older version with a change or a commit of its own."""
-    if folder.name.startswith(LEGACY_PREFIX):
-        return checkout_work.kept(folder)
-    return checkout_work.version_kept(folder)
-
-
 def held_back(
-    versions: Path, keep: Collection[Path], work: Callable[[Path], str] = kept
+    versions: Path, keep: Collection[Path], work: Callable[[Path], str] = checkout_work.version_kept
 ) -> list[tuple[Path, str]]:
     """Each folder prune keeps for what <work> finds in it although `keep` does not name it, and why."""
     found = ((folder, work(folder)) for folder in _candidates(versions, keep))
@@ -333,9 +225,12 @@ def _prune_one(versions: Path, folder: Path, work: Callable[[Path], str]) -> boo
         return False
 
 
-def prune(versions: Path, keep: Collection[Path], *, work: Callable[[Path], str] = kept) -> list[Path]:
-    """Remove every version folder and legacy checkout not in `keep`; returns those removed. One that
-    `work` (kept, by default) finds anything of yours in stays, and held_back says why. A folder a
+def prune(
+    versions: Path, keep: Collection[Path], *, work: Callable[[Path], str] = checkout_work.version_kept
+) -> list[Path]:
+    """Remove every version folder not in `keep`; returns those removed. One that `work`
+    (checkout_work.version_kept, by default: an older version with a change or a commit of its own, or a
+    folder that is no version at all) finds anything of yours in stays, and held_back says why. A folder a
     process has open or names in its command line stays, and so does every folder when lsof or ps is
     missing, fails or takes too long (the safe direction; a line on stderr says so). One that cannot be
     removed is said on stderr and the rest go on; a link there is never followed."""

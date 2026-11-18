@@ -198,11 +198,8 @@ def _unseen(older: Path, commit: str) -> Older:
 
 def _older(over: UpdateState, dry_run: bool) -> Older:
     """The version <over> came from: its folder, added again if it is gone (a dry run adds none, and reads
-    what it can of it from bosun.git: _unseen); UpdateRefused for a checkout from before versions, or a
-    folder that is not that version."""
+    what it can of it from bosun.git: _unseen); UpdateRefused for a folder that is not that version."""
     older = Path(over.from_root)
-    if versions.before_versions(older):
-        raise UpdateRefused(update_back_plan.LEGACY.format(folder=older))
     if not older.is_dir():
         if dry_run:
             return _unseen(older, over.from_commit)

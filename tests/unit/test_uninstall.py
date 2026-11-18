@@ -902,9 +902,8 @@ class TheCheckout(World):
 
 
 class SideBySide(World):
-    """An install get.sh makes now: bosun.git and two versions of it in ~/.local/share/bosun-versions, the
-    checkout from before versions the first update kept there, and ~/.local/share/bosun the link to the
-    version in use, which this runs from."""
+    """An install get.sh makes now: bosun.git and two versions of it in ~/.local/share/bosun-versions, and
+    ~/.local/share/bosun the link to the version in use, which this runs from."""
 
     git_identity = ("-c", "user.name=test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false")
 
@@ -940,17 +939,13 @@ class SideBySide(World):
         for commit, folder in ((old, self.older), (new, self.running)):
             add = ["git", "--git-dir", str(repo), "worktree", "add", "-q", "--detach", str(folder), commit]
             real_run(add, check=True, capture_output=True)
-        self.legacy = self.versions / f"legacy-{old[:12]}"
-        real_run(["git", "clone", "-q", "-b", "main", str(origin), str(self.legacy)], check=True)
-        real_run(["git", "-C", str(self.legacy), "reset", "-q", "--hard", old], check=True)
-        real_run(["git", "-C", str(self.legacy), "config", "bosun.managed", "true"], check=True)
         self.root.symlink_to(self.running)
 
     def assert_kept(self, why: str) -> str:
         status, output = self.run_it("--yes")
         self.assertEqual(status, 0)
         self.assertTrue(self.root.is_symlink() and (self.root / "bin" / "bosun").exists())
-        self.assertTrue(self.versions.is_dir() and self.legacy.is_dir())
+        self.assertTrue(self.versions.is_dir())
         self.assertIn(why, output)
         return output
 
@@ -965,11 +960,7 @@ class SideBySide(World):
         removed = [line for line in output.splitlines() if line.startswith("removed ~/.local/share/")]
         self.assertEqual(
             removed,
-            [
-                f"removed ~/.local/share/bosun-versions/{self.legacy.name}",
-                "removed ~/.local/share/bosun-versions",
-                "removed ~/.local/share/bosun",
-            ],
+            ["removed ~/.local/share/bosun-versions", "removed ~/.local/share/bosun"],
         )
 
     def test_work_in_a_version_keeps_the_versions_and_the_link(self) -> None:
@@ -999,10 +990,13 @@ class SideBySide(World):
         real_run(add, check=True, capture_output=True)
         self.assert_kept("other worktrees")
 
-    def test_the_checkout_from_before_versions_with_work_keeps_them(self) -> None:
-        (self.legacy / "notes.txt").write_text("mine\n")
-        output = self.assert_kept("uncommitted changes")
-        self.assertIn(f"~/.local/share/bosun-versions/{self.legacy.name}", output)
+    def test_a_folder_bosun_does_not_know_in_the_versions_folder_keeps_them(self) -> None:
+        """No version, nor anything else bosun puts there: it may be yours, so the lot stays."""
+        mine = self.versions / "legacy-0123456789ab"
+        mine.mkdir()
+        (mine / "notes.txt").write_text("mine\n")
+        self.assert_kept("what bosun does not know (legacy-0123456789ab)")
+        self.assertTrue((mine / "notes.txt").is_file())
 
     def test_versions_the_installer_did_not_make_are_yours(self) -> None:
         real_run(
@@ -1011,13 +1005,13 @@ class SideBySide(World):
         )
         self.assert_kept("not made by the installer")
 
-    def test_jobs_that_run_the_link_a_version_or_the_checkout_before_them_go(self) -> None:
-        """A plist names the install link now; an older one may name a version's folder or the
-        checkout from before versions. Still only as install.sh renders it, to the letter."""
+    def test_jobs_that_run_the_link_or_a_version_go(self) -> None:
+        """A plist names the install link now; an older one may name a version's folder. Still only as
+        install.sh renders it, to the letter."""
         renamed = {
             "com.mine.morning": self.root,
             "com.mine.watchdog": self.older,
-            "com.mine.learn": self.legacy,
+            "com.mine.learn": self.running,
         }
         for label, root in renamed.items():
             self.write_plist(label, f'exec "{root}/bin/bosun" morning')

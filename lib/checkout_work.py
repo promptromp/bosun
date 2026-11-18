@@ -1,8 +1,7 @@
 """What deleting a checkout of bosun, or a version of it, would lose: the one check `bosun uninstall` and
 `bosun update` go by (docs/design/uninstall.md, "Your work is not bosun's to delete"). Uninstall deletes a
-checkout or versions folder only when it finds nothing; the first update refuses to set aside a checkout
-that holds anything; an update's prune keeps a checkout from before versions, or an older version, that
-does.
+checkout or versions folder only when it finds nothing; an update's prune keeps an older version that holds
+anything.
 
 It only reads, through git, which never looks above the folder it checks nor follows a GIT_* variable of
 the caller's to another repository. Imported by lib/uninstall_detect.py, lib/uninstall_plan.py (Checkout,
@@ -140,11 +139,6 @@ def why_kept(piece: Checkout) -> str:
     return f"it has {piece.work}; delete it once you have what you need" if piece.work else ""
 
 
-def kept(root: Path) -> str:
-    """Why the checkout at <root> is not bosun's to delete, or "": as bosun uninstall decides for one."""
-    return why_kept(checkout(root))
-
-
 # ---- versions side by side ------------------------------------------------------------------------------
 
 
@@ -191,16 +185,15 @@ def version_folders(folder: Path) -> list[Path]:
     return sorted(folder / name for name in names - {install_paths.REPO} if (folder / name).is_dir())
 
 
-def versions_work(folder: Path, found: Collection[Path], others: Collection[str] = ()) -> str:
+def versions_work(folder: Path, found: Collection[Path]) -> str:
     """What deleting the versions folder <folder> would lose beyond its versions' files (<found>, each
     checked on its own by version_work): a stash in its repository, a branch or tag of yours on no remote
     (the branch the repository follows is bosun's, and may be behind a rewrite upstream), a worktree
-    outside the folder, and anything in the folder that is neither a version nor one of <others> (the
-    checkouts from before versions, checked on their own)."""
+    outside the folder, and anything in the folder that is not a version."""
     repo = folder / install_paths.REPO
     branch = (git(repo, "config", "--get", "bosun.branch") or "main").strip()
     refs = (f"--exclude={branch}", "--branches", "--tags")
     work = first_work(repo_work(repo, (repo, *found), refs))
-    known = {install_paths.REPO, ".DS_Store", *(path.name for path in found), *others}
+    known = {install_paths.REPO, ".DS_Store", *(path.name for path in found)}
     unknown = [name for name in entries(folder) if name not in known]
     return work or (f"what bosun does not know ({', '.join(unknown[:3])})" if unknown else "")

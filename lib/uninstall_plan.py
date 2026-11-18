@@ -7,9 +7,8 @@ bosun, or everything in it is listed here. A state or config folder can be set t
 it" is not safe to delete, and neither is a folder that holds someone else's files under bosun's names.
 
 The install goes last, and whole or not at all: the checkout, or with versions side by side the versions
-folder (its repository and every version in it, a worktree each), the checkouts from before versions kept
-there, and the link that led to the version in use. Each is checked as a checkout is, and anything of yours
-in any of them keeps the lot.
+folder (its repository and every version in it, a worktree each) and the link that led to the version in
+use. Each is checked as a checkout is, and anything of yours in any of them keeps the lot.
 """
 
 from __future__ import annotations
@@ -111,7 +110,6 @@ class Facts:
     unsafe: tuple[str, ...] = ()  # folders that hold your home folder or bosun's checkout
     install_link: str = ""  # versions side by side: the install path, the link to the version in use
     versions: tuple[Checkout, ...] = ()  # each version's folder in the versions folder, and its own work
-    legacy: tuple[Checkout, ...] = ()  # the checkouts from before versions kept there (legacy-*)
     leftover_links: tuple[str, ...] = ()  # temporary links beside the install a switch cut short left
 
 
@@ -365,21 +363,20 @@ def kept_because(piece: Checkout, facts: Facts) -> str:
 
 
 def pieces(facts: Facts) -> tuple[Checkout, ...]:
-    """What the install is made of, each checked as a checkout: the checkouts from before versions, the
-    versions, and what holds them (or the checkout alone)."""
-    return (*facts.legacy, *facts.versions, facts.checkout)
+    """What the install is made of, each checked as a checkout: the versions, and what holds them (or the
+    checkout alone)."""
+    return (*facts.versions, facts.checkout)
 
 
 def install_steps(facts: Facts) -> tuple[Step, ...]:
-    """The install, last of all and all of it or none: the checkouts from before versions, the folder
-    that holds the code (the checkout, or the versions folder with every version in it), then the link
-    that led into it."""
+    """The install, last of all and all of it or none: the folder that holds the code (the checkout, or
+    the versions folder with every version in it), then the link that led into it."""
     if any(kept_because(piece, facts) for piece in pieces(facts)):
         return ()
-    folders = (*(piece.root for piece in facts.legacy), facts.checkout.root)
+    folder = facts.checkout.root
     links = (facts.install_link,) if facts.install_link else ()
     return (
-        *(Step(CHECKOUT, folder, by_hand=f"rm -rf {quoted(folder)}") for folder in folders),
+        Step(CHECKOUT, folder, by_hand=f"rm -rf {quoted(folder)}"),
         *(Step(LINK, link, by_hand=f"rm {quoted(link)}") for link in links),
     )
 

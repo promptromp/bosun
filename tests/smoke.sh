@@ -5943,7 +5943,7 @@ PY
   ug() { git -C "$U_UP" -c core.hooksPath=/dev/null -c commit.gpgsign=false -c user.name=acme -c user.email=dev@example.com "$@"; }
   ug init -q -b main
   # No housekeeping after upstream's commits: git (2.54 at least) starts a detached repack after a commit of
-  # a few hundred objects, and a local clone (here, update-convert's) hardlinks upstream's objects while that
+  # a few hundred objects, and a local clone (here, an install section's) hardlinks upstream's objects while that
   # repack writes its tmp_pack, and dies ("hardlink different from source"). As lib/knowledge_store.py does.
   ug config maintenance.auto false
   ug config gc.auto 0
@@ -6492,55 +6492,6 @@ HAND
     [ "$1" = 1 ] && cmp -s "$2.plist" "$3/morning.plist" && cmp -s "$2.watchdog.plist" "$3/watchdog.plist" && [ "$4" = "$5" ]' \
     _ "$rc" "$u_jobs" "$U" "$bootouts" "$(u_bootouts)"
 
-  section update-convert "the first update converts a checkout from before versions (fake launchctl)" needs update covers 'get.sh,docs/updating.md,lib/update*.py,libexec/bosun-update,libexec/bosun-ledger'
-  # An install an earlier get.sh made: a checkout of upstream at v1 in the install path, with a ledger
-  # v1 wrote. get.sh adds bosun.git beside it and v2's folder, then runs v2's bosun update --from the
-  # checkout, as here. No tmux session runs, so it is a quiet moment at once.
-  mkdir -p "$WORK/c/share" "$WORK/c/state" "$WORK/c/config"
-  C="$(cd "$WORK/c" && pwd -P)" # as the update names its folders
-  C_LINK="$C/share/bosun"
-  C_VERSIONS="$C/share/bosun-versions"
-  git clone -q "$U_UP" "$C_LINK"
-  git -C "$C_LINK" -c core.hooksPath=/dev/null reset -q --hard "$U_V1_COMMIT"
-  git -C "$C_LINK" config bosun.managed true
-  git -c core.hooksPath=/dev/null clone -q --bare --single-branch --branch main "$U_UP" "$C_VERSIONS/bosun.git"
-  git --git-dir="$C_VERSIONS/bosun.git" config bosun.managed true
-  git --git-dir="$C_VERSIONS/bosun.git" -c core.hooksPath=/dev/null fetch -q origin +refs/heads/main:refs/remotes/origin/main
-  git --git-dir="$C_VERSIONS/bosun.git" -c core.hooksPath=/dev/null worktree add -q --detach "$C_VERSIONS/${U_V2_COMMIT:0:12}" "$U_V2_COMMIT"
-  C_V2="$(cd "$C_VERSIONS/${U_V2_COMMIT:0:12}" && pwd -P)"
-  C_LEGACY="$C_VERSIONS/legacy-${U_V1_COMMIT:0:12}"
-  C_ENV=(env BOSUN_STATE_DIR="$C/state" BOSUN_LOG_DIR="$C/state/logs" BOSUN_CONFIG_DIR="$C/config"
-    BOSUN_SESSION_NAME=convert-test BOSUN_LAUNCHD_LABEL=com.bosun.convert-test BOSUN_SKIP_PREFLIGHT=1
-    BOSUN_KNOWLEDGE_GIT=0 BOSUN_CLAUDE_BIN="$U/quiet-claude")
-  "${C_ENV[@]}" "$C_LINK/bin/bosun" ledger upsert 'review:acme/api#7' --kind review-request --title "Written on v1" >/dev/null
-  c_update() { "${C_ENV[@]}" "$C_V2/bin/bosun" update --from "$C_LINK" "$@" 2>&1; }
-  echo "a stray note" >"$C_LINK/notes.txt"
-  check "a checkout with anything of yours in it is not converted (exit 1), saying what" fails_with "$C_LINK has uncommitted changes" c_update --yes
-  rm "$C_LINK/notes.txt"
-  c_before="$(cd "$C" && find state config -type f ! -name '*.lock' -print0 | LC_ALL=C sort -z | xargs -0 shasum)"
-  out="$(c_update --dry-run)"
-  check "a dry run shows the plan and what converting adds: the quiet moment, its own work stopped, the checkout kept" bash -c '
-    grep -q "ledger: format 1 -> 2" <<<"$1" && grep -q "This first update converts $2, a checkout from before versions" <<<"$1" &&
-      grep -q "keeping the checkout as $3" <<<"$1" && grep -q "A dry run: nothing has changed." <<<"$1"' _ "$out" "$C_LINK" "$C_LEGACY"
-  check "... and changes nothing" bash -c '[ ! -L "$1" ] && [ ! -e "$2" ] && [ "$(cd "$3" && find state config -type f ! -name "*.lock" -print0 | LC_ALL=C sort -z | xargs -0 shasum)" = "$4" ]' \
-    _ "$C_LINK" "$C_LEGACY" "$C" "$c_before"
-  c_update --yes >"$C/convert.out"
-  rc=$?
-  check "--yes converts (exit 0)" u_ended_well "$rc" "$C/convert.out"
-  check "... the install path a link to v2, the checkout swapped out in one step and kept as legacy-<v1>" bash -c '
-    [ -L "$1" ] && [ "$(cd "$1" && pwd -P)" = "$2" ] && [ "$(git -C "$3" rev-parse HEAD)" = "$4" ] && [ -z "$(ls -A "$(dirname "$1")" | grep "^\.bosun\.link-")" ]' \
-    _ "$C_LINK" "$C_V2" "$C_LEGACY" "$U_V1_COMMIT"
-  c_bosun() { "${C_ENV[@]}" "$C_LINK/bin/bosun" "$@" 2>&1; }
-  check "... the ledger v1 wrote migrated to format 2" test "$(jq -r '"\(.version) \(.items["review:acme/api#7"].title)"' "$C/state/ledger.json")" = "2 Written on v1"
-  check "... and valid against its journal" test "$(c_bosun ledger validate --journal)" = "ledger is valid"
-  check "... the record says done, from the legacy folder" jq -e --arg legacy "$C_LEGACY" '.step == "done" and .from_root == $legacy' "$C/state/update.json"
-  check "... and the mark of what it stopped of bosun's own work is gone: the release brought that back" test ! -e "$C/state/update/own-work.json"
-  check "... its jobs loaded on the link" bash -c 'grep -qF "exec \"$2/bin/bosun\" " "$1/Library/LaunchAgents/com.bosun.convert-test.watchdog.plist"' _ "$HOME" "$C_LINK"
-  check "... and it ends with where the checkout is, and the summary" bash -c '
-    grep -qF "The checkout is kept as $2 until the next update" "$1" && grep -q "^bosun updated: ${3:0:7} -> ${4:0:7}" "$1" &&
-      [ "$(tail -1 "$1")" = "Going back: bosun update --back (docs/updating.md#going-back)" ]' _ "$C/convert.out" "$C_LEGACY" "$U_V1_COMMIT" "$U_V2_COMMIT"
-  check "an update after it is one between versions: from v2, up to date" contains "$("${C_ENV[@]}" "$C_V2/bin/bosun" update --from "$C_V2" --dry-run 2>&1)" "bosun is up to date (${U_V2_COMMIT:0:7})"
-
   section update-back "bosun update --back: one step back, what it restores and what it keeps (fake launchctl)" needs update-upstream covers 'tests/sandbox/update_patch.sh,lib/update_back*.py,lib/update.py,lib/update_state.py,lib/update_backups.py,lib/update_summary.py,lib/update_lookup.py,lib/migrations.py,libexec/bosun-update'
   # An install of its own at the origin's v1 (its ledger at format 1, its common.sh without the
   # connector keys), following upstream's branch b-main: at v2 first (the ledger's format 2, and the kept keys
@@ -6750,9 +6701,6 @@ done
 check "what it left in the knowledge base's config" knows_all_of "$WORK/state" "$WORK/kg-config"
 if [ -d "$WORK/u/state" ]; then
   check "what bosun update left in its state and config" knows_all_of "$WORK/u/state" "$WORK/u/config"
-fi
-if [ -d "$WORK/c/state" ]; then
-  check "what the first update, converting, left in its state and config" knows_all_of "$WORK/c/state" "$WORK/c/config"
 fi
 
 always_run "the repository this ran from"

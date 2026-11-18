@@ -57,8 +57,7 @@ set_update_defaults() {
   # What `bosun update` follows: releases (the newest dated tag, v<YYYY.MM.DD>) or main (the head of the
   # branch, for developers). Anything else makes the update refuse.
   BOSUN_UPDATE_CHANNEL="releases"
-  # The morning run leaves the session alone if you typed in an attached tmux client this recently, and
-  # the first `bosun update` of an older install waits until nobody has.
+  # The morning run leaves the session alone if you typed in an attached tmux client this recently.
   BOSUN_ACTIVE_CLIENT_MINUTES="10"
 }
 
@@ -1882,39 +1881,6 @@ reload_changed_jobs() { # [--dry-run]
   return "$status"
 }
 
-# The labels of the launchd jobs that run bosun's own background work (the watchdog and learning) that
-# are loaded now: what `bosun update`, converting a checkout from before versions, is about to stop.
-loaded_own_jobs() {
-  local label
-  for label in "$(watchdog_label)" "$(learn_label)"; do
-    if job_loaded "$label"; then echo "$label"; fi
-  done
-}
-
-# The launchd jobs that run bosun's own background work unloaded, where loaded; prints the label of each
-# it unloaded. `bosun update` stops them while it converts a checkout from before versions, whose jobs
-# know of no update to hold their work for. One that is still loaded after a few tries fails it (exit 1,
-# said on stderr); the others are still unloaded.
-stop_own_jobs() {
-  local label tries status=0
-  for label in "$(watchdog_label)" "$(learn_label)"; do
-    job_loaded "$label" || continue
-    launchctl bootout "gui/$(id -u)/$label" 2>/dev/null
-    tries=10
-    while job_loaded "$label" && [ "$tries" -gt 0 ]; do
-      sleep 0.5
-      tries=$((tries - 1))
-    done
-    if job_loaded "$label"; then
-      log "ERROR: could not unload $label" >&2
-      status=1
-    else
-      echo "$label"
-    fi
-  done
-  return "$status"
-}
-
 # Each launchd job <label> that is loaded or has its plist installed, unloaded and its plist deleted, its
 # label said once it is (with --dry-run, said only): what an update's release does to the jobs the version
 # it updates to has none of (lib/update.py, _unload_jobs), as each would run a command that version lacks.
@@ -1934,21 +1900,6 @@ unload_jobs() { # [--dry-run] <label...>
     fi
     [ "$dry" = 1 ] || rm -f "$plist"
     echo "$label"
-  done
-  return "$status"
-}
-
-# Each launchd job <label> that is not loaded, loaded again from its plist as it is on disk: what a
-# conversion put back loads of what it stopped (nothing rendered, so the code the install path leads to
-# runs under the plists it had). One already loaded is left as it is.
-start_jobs() { # <label...>
-  local label plist status=0
-  for label in "$@"; do
-    job_loaded "$label" && continue
-    plist="$HOME/Library/LaunchAgents/$label.plist"
-    launchctl bootstrap "gui/$(id -u)" "$plist" && continue
-    log "ERROR: launchctl bootstrap failed for $plist" >&2
-    status=1
   done
   return "$status"
 }

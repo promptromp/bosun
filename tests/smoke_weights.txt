@@ -70,7 +70,6 @@ agy-windows 17
 get-sh 4
 update-upstream 2
 update 131
-update-convert 9
 update-back 30
 update-branch 15
 uninstall-files 2

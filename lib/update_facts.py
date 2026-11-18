@@ -1,10 +1,8 @@
 """The facts `bosun update` gathers for its plan (docs/design/update.md, step 1): each version's
 commit, formats, rules versions, config keys and prompts; the windows open and whether what they were
 launched with changed; what the new version needs; a running console; the items handed out; and what
-stops an update before it changes anything. The first update, which converts a checkout from before
-versions, also asks whether it is a quiet moment (quiet_facts) and where the check-in loop runs.
-update_plan makes the plan from them; lib/update.py carries it out. It reads, and asks the versions'
-own commands; it changes nothing.
+stops an update before it changes anything. update_plan makes the plan from them; lib/update.py
+carries it out. It reads, and asks the versions' own commands; it changes nothing.
 
 The folders and the tmux session come from the environment the wrapper (libexec/bosun-update) passes.
 """
@@ -338,8 +336,7 @@ def _window(
     root: Path, window: dict[str, Any], state_dir: Path, session: str, kept: Mapping[str, str]
 ) -> WindowFacts:
     """What the plan knows of <window>. One outside the window list with no launch recorded (a shell,
-    a Claude started by hand; in a conversion also one an older version's `send --new` opened, whose
-    hooks take the older command lines) was not started by bosun, and is left as it is."""
+    a Claude started by hand) was not started by bosun, and is left as it is."""
     name = str(window.get("name"))
     kind = _kind(window)
     status = status_of(window)
@@ -407,50 +404,6 @@ def window_facts(root: Path, kept: Mapping[str, str] | None = None) -> list[Wind
     launched with, or its launch there would be refused (launch_compared)."""
     where = folders()
     return [_window(root, w, where.state_dir, where.session, kept or {}) for w in open_windows(root)]
-
-
-@dataclass(frozen=True)
-class Quiet:
-    """What the first update waits on before it converts (docs/design/update.md, "The first update
-    converts, at a quiet moment"): each window's agent and its status, the checkin window's left out
-    (its loop is bosun's, and stopped); how many minutes ago someone typed in a client attached to the
-    session (None: none is attached); and BOSUN_ACTIVE_CLIENT_MINUTES."""
-
-    statuses: tuple[tuple[str, str], ...]
-    typed: int | None
-    minutes: int
-
-
-ACTIVE_MINUTES = 10  # lib/common.sh's default of BOSUN_ACTIVE_CLIENT_MINUTES, if it cannot be read
-
-
-def _whole(text: str) -> int | None:
-    return int(text) if text.strip().isdigit() else None
-
-
-def quiet_facts(root: Path) -> Quiet:
-    """The windows' statuses (`bosun sessions --json` of the version in <root>) and when someone last
-    typed in the session (its minutes_since_client_input), for the conversion's wait."""
-    statuses = tuple((str(w.get("name")), status_of(w)) for w in open_windows(root) if _kind(w) != "checkin")
-    done = shell(root, 'printf "%s %s" "$BOSUN_ACTIVE_CLIENT_MINUTES" "$(minutes_since_client_input)"')
-    minutes, _, typed = done.stdout.partition(" ")
-    active = _whole(minutes)
-    return Quiet(statuses, _whole(typed), ACTIVE_MINUTES if active is None else active)
-
-
-def own_jobs_loaded(root: Path) -> list[str]:
-    """The launchd jobs of bosun's own background work (the watchdog, learning) loaded now, as the
-    version in <root> names them (lib/common.sh's loaded_own_jobs)."""
-    return shell(root, "loaded_own_jobs").stdout.split()
-
-
-def checkin_loop_pid(root: Path) -> int | None:
-    """The pid of the check-in loop in the checkin window, if one runs there (lib/common.sh's
-    checkin_loop_pid, as the version in <root> finds it)."""
-    done = shell(
-        root, 'read -r pane _ <<<"$(find_window checkin)"; [ -n "${pane:-}" ] && checkin_loop_pid "$pane"'
-    )
-    return _whole(done.stdout) if done.returncode == 0 else None
 
 
 def missing(root: Path) -> list[str]:
@@ -538,16 +491,17 @@ def dangling_links(state_dir: Path, config_dir: Path) -> list[str]:
 
 
 def install_problem(old_root: Path, new_root: Path) -> list[str]:
-    """A blocker unless the new version is a folder beside the install, and the version updated from
-    is the install's: a folder beside it that the link leads to, or the checkout from before versions
-    still at the install path, which the first update swaps for the link."""
+    """A blocker unless the install is a link and both versions are its own (install_paths): the new one
+    a folder beside it, and the one updated from. A checkout at the install path (one an older get.sh
+    made, from before versions side by side) is not that: it is installed again, never updated
+    (docs/updating.md)."""
     install = install_paths.install_path(new_root)
     beside = install != new_root and install_paths.install_path(old_root) == install
-    if beside and (install.is_symlink() or (old_root == install and install.is_dir())):
+    if beside and install.is_symlink():
         return []
     problem = (
         f"bosun update moves an install with its versions side by side ({install} a link to one of "
-        f"them, or the checkout from before versions it converts); {old_root} and {new_root} are not that"
+        f"them); {old_root} and {new_root} are not that"
     )
     return [problem]
 

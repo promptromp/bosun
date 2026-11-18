@@ -138,12 +138,6 @@ class RefusedTest(BackWorld):
         versions.point(self.install, self.old)
         self.assertIn("going back is then by hand", self.refused())
 
-    def test_a_checkout_from_before_versions_is_left_to_be_done_by_hand(self) -> None:
-        legacy = versions.legacy_folder(self.new.parent, FROM)
-        legacy.mkdir()
-        update_state.write(self.state, dataclasses.replace(self.over, from_root=str(legacy)))
-        self.assertIn("checkout from before versions", self.refused())
-
     def test_a_restore_without_the_backup_a_forget_deleted_is_blocked_in_the_plan(self) -> None:
         source(self.new, rules=2)  # the ledger's rules changed: it needs the backup
         update_backups.delete_all(self.state)
