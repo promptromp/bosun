@@ -10,6 +10,7 @@ import fcntl
 import io
 import json
 import os
+import plistlib
 import re
 import shutil
 import signal
@@ -38,6 +39,7 @@ import update_agents
 import update_backups
 import update_facts
 import update_gate
+import update_lookup
 import update_notes
 import update_plan
 import update_state
@@ -480,7 +482,7 @@ class ReleaseTest(World):
         ):
             done = update.release(self.record("checked"))
         self.assertEqual((done.step, done.findings), ("released", ("launchd: bootstrap failed",)))
-        self.assertEqual(self.link().resolve(), self.old.resolve())  # nothing pointed anywhere
+        self.assertEqual(self.link().resolve(), self.new.resolve())  # at the version updated to, not back
 
     def test_the_jobs_reloaded_are_recorded_with_those_of_a_release_before(self) -> None:
         """A release carried on (cut short after the reload) keeps the jobs the first one reloaded."""
@@ -727,6 +729,198 @@ class ReleaseExtrasTest(World):
         self.assertEqual(seen, [("app", "checked"), ("console", "checked")])
         self.assertEqual(done.step, "released")
         self.assertEqual(done.findings, ("bosun.app: y", "the console: x", "warn: on battery"))
+
+
+class ReleaseForEveryUpdateTest(World):
+    """What every update's release does since `bosun update --back` (docs/design/update.md, "Going back,
+    and trying a branch"): it leads the install to the version updated to first, unloads the jobs that version
+    lacks, and never takes the menu bar app back to an older version."""
+
+    def released(self, state: UpdateState) -> UpdateState:
+        with (
+            mock.patch.object(update, "_reload_jobs", return_value=([], [])),
+            mock.patch.object(update_facts, "open_windows", return_value=[]),
+            mock.patch.object(update, "_doctor", return_value=[]),
+            mock.patch.object(update, "_prune", return_value=[]),
+        ):
+            return update.release(state)
+
+    def test_the_install_is_led_to_the_version_updated_to_first(self) -> None:
+        """A back that restored nothing records `checked` with the link where it was: the release switches,
+        before the jobs are reloaded from that version."""
+        seen: list[Path] = []
+
+        def reload(root: Path) -> tuple[list[str], list[str]]:
+            seen.append(self.link().resolve())
+            return [], []
+
+        with (
+            mock.patch.object(update, "_reload_jobs", side_effect=reload),
+            mock.patch.object(update_facts, "open_windows", return_value=[]),
+            mock.patch.object(update, "_doctor", return_value=[]),
+            mock.patch.object(update, "_prune", return_value=[]),
+        ):
+            update.release(self.record("checked"))
+        self.assertEqual(seen, [self.new.resolve()])
+
+    def test_one_the_freeze_switched_already_is_left_as_it_is(self) -> None:
+        versions.point(self.install, self.new)
+        with mock.patch.object(versions, "point") as point:
+            self.released(self.record("checked"))
+        point.assert_not_called()
+
+    def test_jobs_the_version_updated_to_lacks_are_unloaded_and_kept_for_the_summary(self) -> None:
+        def shell(root: Path, script: str, *args: str) -> subprocess.CompletedProcess[str]:
+            self.assertEqual((root, script), (update_facts.THIS, 'unload_jobs "$@"'))
+            return subprocess.CompletedProcess([], 0, " ".join(args) + "\n", "")
+
+        with (
+            mock.patch.object(
+                update_facts, "dropped_jobs", return_value=["com.bosun.morning.now"]
+            ) as dropped,
+            mock.patch.object(update_facts, "shell", side_effect=shell),
+        ):
+            done = self.released(self.record("checked", unloaded=("com.bosun.morning.login",)))
+        dropped.assert_called_once_with(self.old, self.new)
+        self.assertEqual(done.unloaded, ("com.bosun.morning.login", "com.bosun.morning.now"))
+        self.assertEqual(update_state.read(self.state), done)
+
+    def test_a_job_that_cannot_be_unloaded_is_a_finding(self) -> None:
+        failed = subprocess.CompletedProcess([], 1, "", "could not unload com.bosun.morning.now\n")
+        with (
+            mock.patch.object(update_facts, "dropped_jobs", return_value=["com.bosun.morning.now"]),
+            mock.patch.object(update_facts, "shell", return_value=failed),
+        ):
+            done = self.released(self.record("checked"))
+        self.assertIn("launchd: could not unload com.bosun.morning.now", done.findings)
+
+    def app(self, installed: str, wanted: str) -> Any:
+        """bosun.app <installed> in a home of its own, and <wanted> in the new version's app/VERSION."""
+        home = self.state.parent / "home"
+        app = app_release.app_path(home)
+        (app / "Contents").mkdir(parents=True)
+        (app / "Contents" / "Info.plist").write_bytes(
+            plistlib.dumps({"CFBundleShortVersionString": installed})
+        )
+        (self.new / "app").mkdir()
+        (self.new / "app" / "VERSION").write_text(wanted + "\n")
+        return mock.patch.dict(os.environ, {"HOME": str(home)})
+
+    def test_an_app_newer_than_the_version_wants_is_left_as_it_is(self) -> None:
+        out = io.StringIO()
+        with (
+            self.app("0.1.4", "0.1.3"),
+            mock.patch.object(update_facts, "bosun") as bosun,
+            contextlib.redirect_stdout(out),
+        ):
+            self.assertEqual(REAL_BRING_APP_ALONG(self.new), [])
+        bosun.assert_not_called()
+        self.assertIn(
+            "bosun.app 0.1.4 is newer than this version wants (0.1.3): left as it is", out.getvalue()
+        )
+
+    def test_an_app_older_than_the_version_wants_is_brought_along(self) -> None:
+        done = subprocess.CompletedProcess([], 0, "bosun.app 0.1.4 installed\n", "")
+        with self.app("0.1.3", "0.1.4"), mock.patch.object(update_facts, "bosun", return_value=done) as bosun:
+            self.assertEqual(REAL_BRING_APP_ALONG(self.new), [])
+        bosun.assert_called_once_with(self.new, "app", "update")
+
+    def test_which_app_is_older_goes_by_its_numbers(self) -> None:
+        for wanted, installed, older in (
+            ("0.1.3", "0.1.4", True),
+            ("0.1.4", "0.1.4", False),
+            ("0.2.0", "0.1.10", False),
+            ("0.1.9", "0.1.10", True),
+            ("0.1.4", None, False),
+            ("0.1.4-beta", "0.1.5", False),
+        ):
+            with self.subTest(wanted=wanted, installed=installed):
+                self.assertEqual(app_release.wants_older(wanted, installed), older)
+
+
+class BegunTest(World):
+    def test_each_record_keeps_the_last_finished_one_from_when_it_started(self) -> None:
+        last = self.record("done", id="u1")
+        begun = update.begun(a_plan(), self.old, self.new, (), self.state)
+        self.assertEqual((begun.kind, begun.previous), ("", update_state.bare(last)))
+        failed = self.record("failed", id="u2", previous=update_state.bare(last))
+        again = update.begun(a_plan(), self.old, self.new, (), self.state, kind=update_state.BACK)
+        self.assertEqual((again.kind, update_state.from_object(again.previous)), (update_state.BACK, last))
+        self.assertNotEqual(failed.id, last.id)  # the failed one is never the one kept
+
+    def test_with_nothing_finished_it_keeps_none(self) -> None:
+        (self.state / update_state.STATE_FILE).unlink(missing_ok=True)
+        self.assertEqual(update.begun(a_plan(), self.old, self.new, (), self.state).previous, {})
+
+
+class BackCarriedOnTest(World):
+    """A back cut short is carried on, or put back, by the update's own machinery (resume,
+    update_gate.recover), whose record it shares (kind back)."""
+
+    def back_record(self, step: str, **fields: Any) -> UpdateState:
+        """A back from the new version to the old one, at <step>."""
+        state = dataclasses.replace(
+            self.record(step, **fields),
+            from_root=str(self.new),
+            to_root=str(self.old),
+            from_commit=TO,
+            to_commit=FROM,
+            kind=update_state.BACK,
+        )
+        update_state.write(self.state, state)
+        return state
+
+    def test_one_that_restored_nothing_cut_short_at_checked_is_switched_and_finished(self) -> None:
+        """It records `checked` before the release switches: carried on, the release leads the install to the
+        older version, its windows come along, the version it left is skipped, and it says it was a back."""
+        versions.point(self.install, self.new)
+        self.back_record("checked")
+
+        def done(state: UpdateState) -> UpdateState:
+            ended = update_state.advanced(state, "done")
+            update_state.write(self.state, ended)
+            return ended
+
+        out = io.StringIO()
+        with (
+            mock.patch.object(update, "_reload_jobs", return_value=([], [])),
+            mock.patch.object(update_facts, "open_windows", return_value=[]),
+            mock.patch.object(update_facts, "dropped_jobs", return_value=[]),
+            mock.patch.object(update, "_doctor", return_value=[]),
+            mock.patch.object(update, "_prune", return_value=[]),
+            mock.patch.object(update, "_windows_brought_along", side_effect=done),
+            mock.patch.dict(os.environ, {"BOSUN_UPDATE_CHANNEL": "main"}),
+            contextlib.redirect_stdout(out),
+        ):
+            self.assertTrue(update._carried_on(self.state, update.Said()))
+        self.assertEqual(self.link().resolve(), self.old.resolve())
+        recorded = update_state.read(self.state)
+        assert recorded is not None
+        self.assertEqual((recorded.step, recorded.kind), ("done", update_state.BACK))
+        self.assertIn(
+            f"A back from {TO[:7]} to {FROM[:7]} that was cut short: carried on to the end.", out.getvalue()
+        )
+        self.assertEqual(update_lookup.skipped_version(self.state), TO[:12])
+
+    def test_one_cut_short_while_writes_were_paused_is_put_back_bosun_env_too(self) -> None:
+        """At `migrated`, with bosun.env among what it restores: the next writer puts the back's own backup
+        back, and the install at the newer version it was going back from."""
+        versions.point(self.install, self.new)
+        env = self.config / "bosun.env"
+        env.write_text("BOSUN_NEW=1\n")
+        now = datetime(2026, 11, 18, 15, 0, tzinfo=UTC)
+        backup = update_backups.take(self.state, self.config, TO, FROM, {"ledger": 1, "knowledge": 0}, now)
+        self.ledger("upsert", "review:acme/exporter#99", "--kind", "review-request", "--title", "half way")
+        env.write_text("BOSUN_OLD=1\n")  # taken back, half way
+        restorable = (*update_backups.STORE_PARTS["ledger"], "config/bosun.env")
+        self.back_record("migrated", backup=str(backup), restorable=restorable)
+        self.assertTrue(update_gate.recover(self.state, self.config))
+        self.assertEqual(env.read_text(), "BOSUN_NEW=1\n")
+        self.assertNotIn("review:acme/exporter#99", ledger.load_at(self.state)["items"])
+        self.assertEqual(self.link().resolve(), self.new.resolve())
+        recorded = update_state.read(self.state)
+        assert recorded is not None
+        self.assertEqual((recorded.step, recorded.kind), ("restored", update_state.BACK))
 
 
 class ThroughTest(World):
@@ -1050,7 +1244,10 @@ class RunTest(World):
         self.assertRegex(
             out, re.compile(r"^Agents\n  api +restarted; resumed: waiting on CI for PR 12$", re.MULTILINE)
         )
-        self.assertIn("Going back: docs/updating.md#going-back\nbosun is up to date (bbbbbbb).\n", out)
+        self.assertIn(
+            "Going back: bosun update --back (docs/updating.md#going-back)\nbosun is up to date (bbbbbbb).\n",
+            out,
+        )
 
     def test_json_carries_the_summary_of_an_update_that_ended(self) -> None:
         windows = {"api": ("repo", "restart", "restarted", "answered")}

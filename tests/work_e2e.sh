@@ -7,9 +7,11 @@
 # through the journals, then a mid-afternoon update to the next version (this checkout and
 # tests/sandbox/update_patch.sh) on a year of data, with windows idle, busy and waiting on a background
 # sleep, writes and hooks arriving all along and Slack messages during the hold; going back by hand,
-# as docs/updating.md says, and forward again. Then writers at once, the clock going back, writes cut short
-# like a power cut, the knowledge files changed outside their journal (by hand, by git, by the release),
-# launchd, the console, uninstall, and a year on. At each step the ledger, the knowledge base and their
+# as docs/updating.md says, and forward again; going back with bosun update --back over that update (the
+# ledger restored, what was written since kept in its own backup) and forward again, then over an update to
+# the version after (update_patch.sh --again), which restores nothing and keeps what was written since. Then
+# writers at once, the clock going back, writes cut short like a power cut, the knowledge files changed
+# outside their journal (by hand, by git, by the release), launchd, the console, uninstall, and a year on. At each step the ledger, the knowledge base and their
 # journals must hold up (`ledger validate --journal`, `kg validate`), and nothing of a person deleted on
 # request may be left in the knowledge folder, its history or an update's backup.
 # Claude Code is a stand-in (tests/sandbox/claude-stand-in). It changes the machine it runs on (launchd,
@@ -327,7 +329,7 @@ summary_says() { # <output> <from commit> <to commit>: it ends with the summary,
   sed -n '/^bosun updated: /,$p' "$1" >"$1.summary"
   grep -qE "^bosun updated: ${2:0:7} -> ${3:0:7} \([0-9]+ commits?\) in " "$1.summary" &&
     grep -qE "^Backup: ~/.local/state/bosun/backups/[^ ]+ \([0-9.]+ (bytes|KB|MB|GB)\)$" "$1.summary" &&
-    [ "$(tail -1 "$1.summary")" = "Going back: docs/updating.md#going-back" ] || {
+    [ "$(tail -1 "$1.summary")" = "Going back: bosun update --back (docs/updating.md#going-back)" ] || {
     cat "$1.summary"
     return 1
   }
@@ -1029,6 +1031,81 @@ forward_again() {
   afternoon_settings_off
 }
 
+# ---- going back with the command, and forward again --------------------------------------------------
+
+has_item() { jq -e --arg id "$2" '.items | has($id)' "$1/ledger.json" >/dev/null; } # <state folder> <item>
+has_fact() { bosun kg facts feature/csv-export --status all --closed --json | jq -e --arg v "$1" 'any(.[]; .value == $v)' >/dev/null; }
+backups_now() { find "$STATE/backups" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' '; }
+refused_saying() { # <text> <command...>: it fails, saying <text>
+  local text="$1" out
+  shift
+  if out="$("$@" 2>&1)"; then
+    echo "succeeded: $(tail -5 <<<"$out")"
+    return 1
+  fi
+  grep -qF -- "$text" <<<"$out" || { tail -5 <<<"$out" && return 1; }
+}
+
+back_with_the_command() {
+  echo "going back with bosun update --back, over the update whose migration the next version ran"
+  local over fact="Written after the update: the export check passed again"
+  over="$(jq -r .backup "$STATE/update.json")"
+  check "a ledger write after the update" bosun ledger upsert 'review:acme/api#90' --kind review-request --title "Written after the update"
+  check "... and an ontology write" bosun kg propose feature/csv-export caveat --value "$fact" --source "ledger:$T_JSON"
+  check "bosun update --back --dry-run: the ledger restored (format 2 -> 1), with what that loses; the ontology kept" bash -c '
+    out="$(bosun update --back --dry-run 2>&1)" && grep -qE "ledger: format 2 -> 1: restored from that update.s backup; loses [0-9]+ changes? written since" <<<"$out" &&
+      grep -q "review:acme/api#90" <<<"$out" && grep -q "knowledge: kept, with what was written since" <<<"$out" || { tail -20 <<<"$out"; exit 1; }'
+  check "bosun update --back --yes goes back (exit 0)" bash -c 'bosun update --back --yes >"$1" 2>&1 || { tail -20 "$1"; exit 1; }' _ "$OUT/back.txt"
+  check "... to the version before" test "$(git -C "$DIR" rev-parse HEAD)" = "$A_COMMIT"
+  check "... the ledger restored, in format 1, without the write made since" bash -c '
+    [ "$(jq -r .version "$1/ledger.json")" = 1 ] && ! jq -e ".items | has(\"review:acme/api#90\")" "$1/ledger.json" >/dev/null' _ "$STATE"
+  valid "... and valid against its journal on the version before"
+  check "... that write kept in the backup going back took first" bash -c '
+    own="$(jq -r .backup "$1/update.json")" && [ "$own" != "$2" ] && jq -e ".items | has(\"review:acme/api#90\")" "$own/state/ledger.json" >/dev/null' _ "$STATE" "$over"
+  check "... the ontology kept, with the fact written since" has_fact "$fact"
+  kg_valid
+  check "... its summary says it went back, and how to go forward" bash -c '
+    grep -q "^bosun went back: " "$1" && [ "$(tail -1 "$1")" = "Going forward again: bosun update" ]' _ "$OUT/back.txt"
+  check "... and --check no longer offers the version it left" bash -c 'bosun update --check --json | jq -e ".skipped == true and .available == true"'
+  check "a second --back is refused: one step back, never further" refused_saying "bosun already went back" bosun update --back --dry-run
+  check "bosun update goes forward again, its plan saying --back left that version" bash -c '
+    bosun update --dry-run 2>&1 | grep -q "^bosun update --back left this version on "'
+  check "... and does (exit 0)" bash -c 'bosun update --yes >"$1" 2>&1 || { tail -20 "$1"; exit 1; }' _ "$OUT/forward-after-back.txt"
+  check "... on the next version, the ledger migrated again" bash -c '
+    [ "$(git -C "$1" rev-parse HEAD)" = "$2" ] && [ "$(jq -r "\"\(.version) \(.update_patch)\"" "$3/ledger.json")" = "2 migrated" ]' _ "$DIR" "$B_COMMIT" "$STATE"
+  valid
+}
+
+back_keeps_what_was_written() {
+  echo "going back over an update that changes nothing a version reads the data by: what was written since stays"
+  local over backups fact="Written after the version after: the export check passed"
+  check "the version after the next one: update_patch.sh --again (the same format 2, another line of policy.md)" a_head after --again
+  check "bosun update --yes takes it there (exit 0)" bash -c 'bosun update --yes >"$1" 2>&1 || { tail -20 "$1"; exit 1; }' _ "$OUT/after.txt"
+  over="$(jq -r .backup "$STATE/update.json")"
+  backups="$(backups_now)"
+  check "a ledger write after that update" bosun ledger upsert 'review:acme/api#91' --kind review-request --title "Written after the version after"
+  check "... and an ontology write" bosun kg propose feature/csv-export caveat --value "$fact" --source "ledger:$T_JSON"
+  check "bosun update --back --dry-run keeps both stores, restoring nothing" bash -c '
+    out="$(bosun update --back --dry-run 2>&1)" && grep -q "ledger: kept, with what was written since (format 2" <<<"$out" &&
+      grep -q "knowledge: kept" <<<"$out" && ! grep -q "restored" <<<"$out" || { tail -20 <<<"$out"; exit 1; }'
+  check "bosun update --back --yes (exit 0)" bash -c 'bosun update --back --yes >"$1" 2>&1 || { tail -20 "$1"; exit 1; }' _ "$OUT/back-kept.txt"
+  check "... back on the next version" test "$(git -C "$DIR" rev-parse HEAD)" = "$B_COMMIT"
+  check "... the ledger write and the ontology write made since both there" bash -c 'jq -e ".items | has(\"review:acme/api#91\")" "$1/ledger.json" >/dev/null' _ "$STATE"
+  check "... (the ontology's)" has_fact "$fact"
+  check "... nothing frozen and no backup taken" bash -c '
+    jq -e ".kind == \"back\" and .backup == \"\" and .freeze_ms == 0" "$1/update.json" >/dev/null && [ "$(find "$1/backups" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d " ")" = "$2" ]' _ "$STATE" "$backups"
+  check "... its summary saved beside the backup of the update it went back over" grep -q "^bosun went back: " "$over/back-summary.md"
+  valid
+  kg_valid
+}
+
+the_ways_back() { # by hand and forward again, then the command: a restore and forward again, then none
+  going_back
+  forward_again
+  back_with_the_command
+  back_keeps_what_was_written
+}
+
 forgotten_after_the_update() {
   echo "Sam asks to be forgotten after the updates: no backup or rehearsal copy may hold him"
   check "the update backups hold Sam now" bash -c 'grep -rqF "$1" "$2"' _ "$K_SAM" "$STATE/backups"
@@ -1543,8 +1620,7 @@ the_first_knowledge_write
 knowledge_privacy
 the_new_days
 a_mid_afternoon_update
-going_back
-forward_again
+the_ways_back
 forgotten_after_the_update
 twenty_writers
 knowledge_writers

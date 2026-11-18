@@ -12,15 +12,16 @@ The folders and the tmux session come from the environment the wrapper (libexec/
 from __future__ import annotations
 
 import dataclasses
+import fnmatch
 import hashlib
 import json
 import os
 import re
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import console_token
 import install_paths
@@ -31,6 +32,7 @@ import ledger
 import migrations
 import signals
 import update_agents
+import update_back_plan
 import update_backups
 import update_gate
 import update_notes
@@ -49,6 +51,7 @@ EXTRA = "extra"  # `bosun sessions`' kind of a window outside the window list
 COMMAND_SECONDS = 600  # the most a bosun command the update runs may take
 PREFLIGHT_NEXT = "\nWhat to do next:"
 STORE_ERRORS = (ledger.LedgerError, knowledge_store.StoreError, KnowledgeError, JournalError)
+SHORT = update_gate.SHORT
 
 
 class UpdateRefused(Exception):
@@ -127,41 +130,121 @@ def shell(
 # ---- the facts each version gives the plan ------------------------------------------------------
 
 
-def prompts(root: Path) -> dict[str, str]:
-    """Each prompt file of the version in <root> (update_plan.PROMPTS), by its path there, and the
+class Source(Protocol):
+    """Where a version's files are read from, as text a plan compares and never as code that runs: its
+    folder (Folder), or bosun.git at its commit, never checked out (Committed)."""
+
+    def read(self, path: str) -> bytes | None:
+        """The file at <path> (relative to the version's top), byte for byte; None when there is none."""
+
+    def names(self, pattern: str) -> list[str]:
+        """The files whose path matches <pattern>, a glob over its parts ("orchestrator/tasks/*.md"),
+        sorted."""
+
+
+@dataclass(frozen=True)
+class Folder:
+    """A version's folder."""
+
+    root: Path
+
+    def read(self, path: str) -> bytes | None:
+        try:
+            return (self.root / path).read_bytes()
+        except OSError:
+            return None
+
+    def names(self, pattern: str) -> list[str]:
+        return sorted(p.relative_to(self.root).as_posix() for p in self.root.glob(pattern) if p.is_file())
+
+
+def _matches(name: str, pattern: str) -> bool:
+    """Whether the path <name> matches the glob <pattern> part for part, as Path.glob matches it."""
+    parts, wanted = name.split("/"), pattern.split("/")
+    return len(parts) == len(wanted) and all(
+        fnmatch.fnmatchcase(a, b) for a, b in zip(parts, wanted, strict=True)
+    )
+
+
+@dataclass(frozen=True)
+class Committed:
+    """A version as the git directory <repo> holds it at <commit>, never checked out (a dry run of `bosun
+    update --back` whose older folder is gone adds none)."""
+
+    repo: Path
+    commit: str
+
+    def read(self, path: str) -> bytes | None:
+        return versions.show(self.repo, self.commit, path)
+
+    def names(self, pattern: str) -> list[str]:
+        return sorted(name for name in versions.tree(self.repo, self.commit) if _matches(name, pattern))
+
+
+def prompts_in(source: Source) -> dict[str, str]:
+    """Each prompt file of the version <source> holds (update_plan.PROMPTS), by its path there, and the
     SHA-256 of its content."""
     found: dict[str, str] = {}
     for pattern in update_plan.PROMPTS:
-        for path in sorted(root.glob(pattern)):
-            if path.is_file():
-                found[path.relative_to(root).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+        for name in source.names(pattern):
+            data = source.read(name)
+            if data is not None:
+                found[name] = hashlib.sha256(data).hexdigest()
     return found
 
 
+def prompts(root: Path) -> dict[str, str]:
+    """prompts_in the version in <root>."""
+    return prompts_in(Folder(root))
+
+
+def _text(source: Source, path: str) -> str:
+    data = source.read(path)
+    return data.decode("utf-8", "replace") if data is not None else ""
+
+
+def keys_in(source: Source) -> frozenset[str]:
+    """The config keys the version <source> holds has a default for (lib/common.sh)."""
+    return frozenset(CONFIG_KEY.findall(_text(source, "lib/common.sh")))
+
+
 def config_keys(root: Path) -> frozenset[str]:
-    """The config keys the version in <root> has a default for (lib/common.sh)."""
-    try:
-        return frozenset(CONFIG_KEY.findall((root / "lib" / "common.sh").read_text()))
-    except OSError:
-        return frozenset()
+    """keys_in the version in <root>."""
+    return keys_in(Folder(root))
 
 
-def _source_int(path: Path, name: str) -> int:
-    """The whole number <name> is set to at the top level of the Python file <path>; 0 if it is not.
-    Read from the source, so that no other version's code runs in this process."""
-    try:
-        found = re.search(rf"^{name} = (\d+)$", path.read_text(), re.MULTILINE)
-    except OSError:
-        return 0
+def _int_in(source: Source, path: str, name: str) -> int:
+    """The whole number <name> is set to at the top level of the Python file <path> of <source>; 0 if it is
+    not. Read as text, so that no other version's code runs in this process."""
+    found = re.search(rf"^{name} = (\d+)$", _text(source, path), re.MULTILINE)
     return int(found.group(1)) if found else 0
 
 
-def rules(root: Path) -> dict[str, int]:
-    """The rules version of each store's journal in the version in <root>."""
+def rules_in(source: Source) -> dict[str, int]:
+    """The rules version of each store's journal in the version <source> holds."""
     return {
-        "ledger": _source_int(root / "lib" / "ledger.py", "RULES_VERSION"),
-        "knowledge": _source_int(root / "lib" / "knowledge.py", "KG_RULES_VERSION"),
+        "ledger": _int_in(source, "lib/ledger.py", "RULES_VERSION"),
+        "knowledge": _int_in(source, "lib/knowledge.py", "KG_RULES_VERSION"),
     }
+
+
+def rules(root: Path) -> dict[str, int]:
+    """rules_in the version in <root>."""
+    return rules_in(Folder(root))
+
+
+def formats_in(source: Source) -> dict[str, int]:
+    """The format of each store the version <source> holds writes (0: it says none), as rules_in reads
+    its rules versions."""
+    return {
+        "ledger": _int_in(source, "lib/ledger.py", "LEDGER_FORMAT"),
+        "knowledge": _int_in(source, "lib/knowledge_store.py", "KNOWLEDGE_FORMAT"),
+    }
+
+
+def source_formats(root: Path) -> dict[str, int]:
+    """formats_in the version in <root>."""
+    return formats_in(Folder(root))
 
 
 def store_formats(state_dir: Path, config_dir: Path) -> tuple[dict[str, int], list[str]]:
@@ -506,13 +589,53 @@ def _steps(store: str, found: int, target: int) -> list[tuple[int, int]]:
 
 def plan_for(old_root: Path, new_root: Path, state_dir: Path, config_dir: Path) -> Plan:
     """The plan from the version in <old_root> to the one in <new_root> (this code), for the data in
-    <state_dir> and <config_dir>: update_plan.make_plan over the facts gathered here, with what else
-    stops an update (a store whose format cannot be read, a link a backup cannot copy, versions not
-    side by side) among its blockers."""
+    <state_dir> and <config_dir>: plan_from over the facts gathered here, with the config the update
+    writes, and a line when `bosun update --back` left the version it goes to (left_by_back)."""
     old, new = live_facts(state_dir, config_dir, old_root), new_facts(new_root)
     # What the update writes to bosun.env, which each window's launch is compared with: an older
     # install's orchestrator that keeps every connector is no launch change.
     kept = migrations.keys_to_keep(config_dir, new.keys - old.keys)
+    plan = plan_from(
+        Versions(old, new, old_root, new_root),
+        state_dir,
+        config_dir,
+        kept=kept,
+        renames=config_renames(config_dir),
+        user_changes=migrations.USER_FILE_CHANGES,
+    )
+    return dataclasses.replace(
+        plan,
+        kept=tuple(kept.items()),
+        unwritten=migrations.keys_unwritten(config_dir, new.keys - old.keys),
+        left_by_back=left_by_back(state_dir, new.commit),
+    )
+
+
+@dataclass(frozen=True)
+class Versions:
+    """The two versions a plan goes between: their facts, and their folders."""
+
+    old: VersionFacts
+    new: VersionFacts
+    old_root: Path
+    new_root: Path
+
+
+def plan_from(
+    versions_: Versions,
+    state_dir: Path,
+    config_dir: Path,
+    *,
+    kept: Mapping[str, str],
+    renames: Sequence[tuple[str, str]],
+    user_changes: Sequence[tuple[str, str]],
+) -> Plan:
+    """update_plan.make_plan over <versions_>' facts and those gathered here (each window compared with
+    what the new version would launch once <kept> is in bosun.env), with what else stops it (a store
+    whose format cannot be read, a link a backup cannot copy, versions not side by side) among its
+    blockers, the windows the last update still waits for, and the jobs the release unloads. An update's
+    plan (plan_for) and a back's (lib/update_back.py) are made by it."""
+    old, new, old_root, new_root = versions_.old, versions_.new, versions_.old_root, versions_.new_root
     cut_short, unreadable_kb = deletion_cut_short(state_dir, config_dir)
     reloads, unrenderable = jobs(new_root, kept)
     plan = update_plan.make_plan(
@@ -521,8 +644,8 @@ def plan_for(old_root: Path, new_root: Path, state_dir: Path, config_dir: Path) 
         commits=commits(new_root, old.commit, new.commit),
         windows=window_facts(new_root, kept),
         jobs=reloads,
-        renames=config_renames(config_dir),
-        user_changes=migrations.USER_FILE_CHANGES,
+        renames=renames,
+        user_changes=user_changes,
         in_flight=in_flight(state_dir, config_dir),
         missing=missing(new_root),
         deletion_cut_short=cut_short,
@@ -538,13 +661,72 @@ def plan_for(old_root: Path, new_root: Path, state_dir: Path, config_dir: Path) 
         *dangling_links(state_dir, config_dir),
         *install_problem(old_root, new_root),
     ]
-    unwritten = migrations.keys_unwritten(config_dir, new.keys - old.keys)
     owed, owed_left = owed_windows(state_dir, plan)
     return dataclasses.replace(
         plan,
         blockers=(*plan.blockers, *extra),
-        kept=tuple(kept.items()),
-        unwritten=unwritten,
         owed=owed,
         owed_left=owed_left,
+        unload=tuple(dropped_jobs(old_root, new_root)),
     )
+
+
+# ---- what every update's release and the wrapper check, and a back's own facts ---------------------
+
+THIS = Path(__file__).resolve().parents[1]  # this code's folder, whose helpers act for any version
+
+
+# What a version's jobs run, as lib/common.sh's job_kinds says. One from before it lists job_labels: each a
+# job that runs bosun, but the menu bar app's Open at Login job, where it has app_label (released ones do).
+JOB_KINDS = (
+    "if declare -F job_kinds >/dev/null; then job_kinds; "
+    'else app="$(declare -F app_label >/dev/null && app_label)"; for l in $(job_labels); do '
+    'k=bosun; [ -n "$app" ] && [ "$l" = "$app" ] && k=app; printf "%s\\t%s\\n" "$l" "$k"; done; fi'
+)
+BOSUN_JOB = "bosun"  # a job that runs a bosun command; `app` runs the menu bar app's own binary
+
+
+def job_kinds(root: Path) -> dict[str, str] | None:
+    """Each launchd job's label the version in <root> lists and what it runs (lib/common.sh's job_kinds:
+    `bosun` or `app`); None when it cannot say (its shell failed, or listed nothing)."""
+    done = shell(root, JOB_KINDS)
+    found = dict(line.split("\t", 1) for line in done.stdout.splitlines() if "\t" in line)
+    return found if done.returncode == 0 and found else None
+
+
+def dropped_jobs(old_root: Path, new_root: Path) -> list[str]:
+    """The launchd jobs installed (a plist, or loaded) that run a bosun command (job_kinds), whose label the
+    version in <old_root> lists and the one in <new_root> does not: each would run a command that version may
+    lack, so the release unloads it (this code's unload_jobs, asked with --dry-run here). None when either
+    version cannot say what it lists: a version that cannot be asked must never have every job taken for
+    dropped. The menu bar app's Open at Login job is never one: it runs the app, and no reload makes it
+    again."""
+    old, new = job_kinds(old_root), job_kinds(new_root)
+    if old is None or new is None:
+        return []
+    labels = [label for label, kind in old.items() if kind == BOSUN_JOB and label not in new]
+    if not labels:
+        return []
+    return shell(THIS, 'unload_jobs --dry-run "$@"', *labels).stdout.split()
+
+
+def older_than_data(target: Path, name: str, state_dir: Path, config_dir: Path, installed: Path) -> list[str]:
+    """Why the version in <target> (called <name>) would read the data older than it is, a line each
+    (update_back_plan.older_than_data): a store in a format, or under rules, older than the data's (its
+    formats on disk, the rules of the version <installed>). What the wrapper checks before it hands over."""
+    return update_back_plan.older_than_data(
+        f"{name} ({versions.commit_of(target)[:SHORT]})",
+        store_formats(state_dir, config_dir)[0],
+        source_formats(target),
+        rules(installed),
+        rules(target),
+    )
+
+
+def left_by_back(state_dir: Path, commit: str) -> str:
+    """When `bosun update --back` left the version at <commit>, as its record says, or "": the next update's
+    plan says it, going forward to that version again."""
+    state = update_state.read(state_dir)
+    if state is None or state.kind != update_state.BACK or state.from_commit != commit:
+        return ""
+    return update_back_plan.when(state.started_at) if state.step in update_state.PAST_CHECKS else ""

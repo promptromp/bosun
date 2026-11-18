@@ -526,28 +526,185 @@ def _with_kept(text: str, added: Collection[str]) -> tuple[str, list[str]]:
     return lead + "".join(lines), [f"{assignment(key, value)} added" for key, value in kept.items()]
 
 
+def written_config(text: str, added: Collection[str] = ()) -> tuple[str, list[str]]:
+    """What an update writes of <text>, a bosun.env: CONFIG_RENAMES applied (migrate_config), then each
+    key of <added> (its keys_added) with a kept value that the file does not set appended (CONFIG_ADDED);
+    and a line per key changed."""
+    renamed, said = migrate_config(text)
+    changed, added_said = _with_kept(renamed, added)
+    return changed, said + added_said
+
+
+def _rewrite(env: Path, data: bytes, copy: Path, was: bytes) -> None:
+    """<data> as bosun.env (<env>), <was> kept first as <copy>, once, with its mode; a bosun.env that is a
+    link (to my dotfiles) stays one, and its target is what changes."""
+    target = env.resolve()
+    mode = stat.S_IMODE(target.stat().st_mode)
+    journal.create_new(copy, was, mode)
+    _replace(target, data, mode)
+
+
 def write_config(config_dir: Path, now: datetime, added: Collection[str] = ()) -> list[str]:
-    """CONFIG_RENAMES applied to <config_dir>'s bosun.env (migrate_config), then each key of <added>
-    (the update's keys_added) with a kept value that it does not set appended (CONFIG_ADDED), and a
-    line per key changed. When anything changed, the file as it was is kept first, once, in
-    <config_dir> (config_copy), with its mode; a bosun.env that is a link (to my dotfiles) stays one,
-    and its target is what changes. Without a bosun.env nothing is written: the defaults apply."""
+    """written_config of <config_dir>'s bosun.env, and a line per key changed. When anything changed,
+    the file as it was is kept first, once, in <config_dir> (config_copy). Without a bosun.env nothing
+    is written: the defaults apply."""
     env = config_dir / CONFIG_FILE
     try:
         was = env.read_bytes()
     except FileNotFoundError:
         return []
     # bytes that are not UTF-8 go through as they were (the shell reads bytes)
-    renamed, said = migrate_config(was.decode("utf-8", "surrogateescape"))
-    changed, added_said = _with_kept(renamed, added)
-    said += added_said
+    changed, said = written_config(was.decode("utf-8", "surrogateescape"), added)
     if not said:
         return []
-    target = env.resolve()
-    mode = stat.S_IMODE(target.stat().st_mode)
-    journal.create_new(config_copy(config_dir, now), was, mode)
-    _replace(target, changed.encode("utf-8", "surrogateescape"), mode)
+    _rewrite(env, changed.encode("utf-8", "surrogateescape"), config_copy(config_dir, now), was)
     return said
+
+
+# ---- taking an update's changes to bosun.env back (bosun update --back) ---------------------------
+
+PUT_BACK = "# Put back by bosun update --back, as the version it went back to reads it\n"
+
+
+@dataclass(frozen=True)
+class Reverted:
+    """bosun.env with an update's changes taken back (revert_config): its text, each change taken back,
+    and each one left as it was, as the file was changed there since."""
+
+    text: str
+    said: tuple[str, ...]
+    left: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _Change:
+    """A line an update changed in bosun.env: <before> (None: it added the line) became <after> (None:
+    it removed the line), with the key that line sets; for a line it added, the comment it wrote above it."""
+
+    before: str | None
+    after: str | None
+    key: str
+    old: str = ""  # a renamed key's name before
+    comment: str = ""  # the comment above a kept value the update appended
+
+
+def _renames_made(before: str) -> list[_Change]:
+    """Each line of <before> that migrate_config renamed or removed."""
+    chains = _chains(CONFIG_RENAMES)
+    lines = before.splitlines(keepends=True)
+    found = [ASSIGNMENT.match(line) for line in lines]
+    setters = _setters(found, chains)
+    made = []
+    for line, match in zip(lines, found, strict=True):
+        after, change = _renamed(line, match, chains, setters)
+        if change and match is not None:
+            key = chains[match["key"]][-1] if after else match["key"]
+            made.append(_Change(line, after or None, key, old=match["key"]))
+    return made
+
+
+def _update_changes(before: str, added: Collection[str]) -> list[_Change]:
+    """The lines an update changed in <before>, a bosun.env, as written_config does with <added>: each
+    key renamed or removed, then each kept value appended under its comment."""
+    renamed, _ = migrate_config(before)
+    notes = {entry.key: entry.note for entry in CONFIG_ADDED}
+    appended = [
+        _Change(None, f"{assignment(key, value)}\n", key, comment=f"# Added by bosun update: {notes[key]}\n")
+        for key, value in kept_values(added, _assigned(renamed)).items()
+    ]
+    return [*_renames_made(before), *appended]
+
+
+def _at(lines: list[str], line: str) -> int | None:
+    """Where <line> is among <lines>, its line ending aside; None when it is not."""
+    wanted = line.rstrip("\n")
+    return next((i for i, there in enumerate(lines) if there.rstrip("\n") == wanted), None)
+
+
+def _said_of(change: _Change) -> str:
+    if change.after is None:
+        return f"{change.old} put back"
+    if change.before is None:
+        return f"{change.after.strip()} removed"
+    return f"{change.key} is {change.old} again"
+
+
+def _left_of(change: _Change) -> str:
+    reads = f"it reads {change.old}" if change.before is not None else "it does not read it"
+    return f"{change.key} was changed since the update: left as it is (the version gone back to: {reads})"
+
+
+def _ending(line: str) -> str:
+    """<line>'s own line ending ("" for a last line without one)."""
+    return line[len(line.rstrip("\n")) :]
+
+
+def _take_back(lines: list[str], change: _Change, put_back: list[str]) -> bool | None:
+    """<change> taken back in <lines> (a removed line kept for <put_back>, at the end): True when it was;
+    None when there was nothing to take back (a removed key the file sets again); False where the line the
+    update wrote is no longer there as it wrote it. A line given its old text keeps its own ending, so a
+    line written since after it is never glued to it; a kept value goes with the comment right above it,
+    which stays when the value was changed since."""
+    if change.after is None:  # a line removed, which was there before
+        if change.before is None or change.old in _assigned("".join([*lines, *put_back])):
+            return None
+        put_back.append(change.before.rstrip("\n") + "\n")
+        return True
+    at = _at(lines, change.after)
+    if at is None:
+        return False
+    if change.before is not None:
+        lines[at] = change.before.rstrip("\n") + _ending(lines[at])
+        return True
+    del lines[at]
+    if change.comment and at > 0 and lines[at - 1].rstrip("\n") == change.comment.rstrip("\n"):
+        del lines[at - 1]
+    return True
+
+
+def revert_config(now: str, before: str, added: Collection[str]) -> Reverted:
+    """<now>, a bosun.env that an update wrote from <before> (written_config, with its keys_added
+    <added>), with that update's changes taken back, each where it still reads as the update wrote it: a
+    renamed key gets its old name back, a removed key's line comes back (at the end, under PUT_BACK), and
+    a kept value goes with its comment. A line changed since is left as it is, and said. Changed nowhere
+    since, it is <before> itself."""
+    changes = _update_changes(before, added)
+    lines = now.splitlines(keepends=True)
+    put_back: list[str] = []
+    said: list[str] = []
+    left: list[str] = []
+    for change in changes:
+        taken = _take_back(lines, change, put_back)
+        if taken and change.key:
+            said.append(_said_of(change))
+        elif taken is False and change.key:
+            left.append(_left_of(change))
+    if now == written_config(before, added)[0]:
+        return Reverted(before, tuple(said), ())
+    text = "".join(lines)
+    if put_back:
+        text = (text if not text or text.endswith("\n") else text + "\n") + PUT_BACK + "".join(put_back)
+    return Reverted(text, tuple(said), tuple(left))
+
+
+def back_copy(config_dir: Path, now: datetime) -> Path:
+    """Where `bosun update --back` keeps bosun.env as it was before it took an update's changes back."""
+    return config_dir / f"{CONFIG_FILE}.pre-back-{now.astimezone(UTC):%Y%m%d-%H%M%S}"
+
+
+def revert_written_config(config_dir: Path, now: datetime, before: str, added: Collection[str]) -> Reverted:
+    """revert_config of <config_dir>'s bosun.env, written when it changes anything, the file as it was
+    kept first as back_copy (<now>). Without a bosun.env nothing is written, and nothing said."""
+    env = config_dir / CONFIG_FILE
+    try:
+        was = env.read_bytes()
+    except FileNotFoundError:
+        return Reverted("", (), ())
+    text = was.decode("utf-8", "surrogateescape")
+    reverted = revert_config(text, before, added)
+    if reverted.text != text:
+        _rewrite(env, reverted.text.encode("utf-8", "surrogateescape"), back_copy(config_dir, now), was)
+    return reverted
 
 
 def main(argv: Sequence[str]) -> int:

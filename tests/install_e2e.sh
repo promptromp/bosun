@@ -4,8 +4,8 @@
 # --background`, whose tmux server must not be its caller's child: `launchctl procinfo`), the console's job
 # (BOSUN_CONSOLE_ALWAYS=1: started by `bosun start`'s marker, stopped by `bosun quit`), `bosun quit` itself with
 # what the watchdog and the morning job do after it, `bosun update` from a release to the next one (on the
-# default `releases` channel, with an origin that carries release tags), the real pmset and plutil, and a clean
-# uninstall. Claude Code is a stand-in, since these machines have no login. It changes the machine it runs on, so it only runs on a GitHub macOS runner
+# default `releases` channel, with an origin that carries release tags) and `--branch` to a branch of that origin
+# and back to main, the real pmset and plutil, and a clean uninstall. Claude Code is a stand-in, since these machines have no login. It changes the machine it runs on, so it only runs on a GitHub macOS runner
 # (.github/workflows/install.yml) or in the throwaway Mac of tests/sandbox.sh mac.
 # Checks pass shell snippets to `bash -c '...' _ args`; their $ must not expand here.
 # shellcheck disable=SC2016
@@ -272,6 +272,35 @@ releases_for_real() {
   check "bosun doctor passes on the new version" bash -c '"$1" doctor >"$2" 2>&1 || { tail -20 "$2"; exit 1; }' _ "$bosun" "$OUT/doctor-after-update.txt"
 }
 
+# --branch, on the install the releases left at the next one (docs/updating.md, "Trying a branch"): a branch of the
+# local origin, one commit after main's head, followed and updated to; main again; then the releases again.
+branch_for_real() {
+  local bosun="$HOME/.local/bin/bosun" tree="$OUT/try" main_commit try_commit
+  echo "--branch: a branch of the origin followed, then main again, then the releases"
+  main_commit="$(git --git-dir="$HOME/origin.git" rev-parse main)"
+  rm -rf "$tree"
+  git clone -q --branch main "$HOME/origin.git" "$tree" && printf '\nOn try-x.\n' >>"$tree/README.md" &&
+    git -C "$tree" -c user.name=sandbox -c user.email=sandbox@example.com commit -qam "on try-x" &&
+    git -C "$tree" push -q origin HEAD:refs/heads/try-x
+  try_commit="$(git -C "$tree" rev-parse HEAD)"
+  check "a branch try-x in the origin, a commit after main's head" test -n "$try_commit" -a "$try_commit" != "$main_commit"
+  check "--branch to a branch the origin does not have is refused, and nothing changes" bash -c '
+    ! out="$("$1" update --branch nope --yes 2>&1)" && grep -q "has no branch nope: nothing changed" <<<"$out" &&
+      [ "$(git --git-dir="$2/bosun.git" config bosun.branch)" = main ] && grep -qx "BOSUN_UPDATE_CHANNEL=\"releases\"" "$3/bosun.env"' \
+    _ "$bosun" "$VERSIONS" "$CONFIG"
+  check "--branch try-x --yes (exit 0)" bash -c '"$1" update --branch try-x --yes >"$2" 2>&1 || { tail -25 "$2"; exit 1; }' _ "$bosun" "$OUT/branch.txt"
+  check "... says the install follows try-x from now on" grep -qx "bosun follows try-x from now on (bosun update --branch main follows main again)" "$OUT/branch.txt"
+  check "... bosun.branch is try-x, the channel main in bosun.env" bash -c '
+    [ "$(git --git-dir="$1/bosun.git" config bosun.branch)" = try-x ] && grep -qE "^BOSUN_UPDATE_CHANNEL=\"?main\"?$" "$2/bosun.env"' _ "$VERSIONS" "$CONFIG"
+  check "... and the head of try-x in use" test "$(version_in_use)" = "$try_commit"
+  check "bosun update --check: up to date with the head of try-x" bash -c '"$1" update --check | grep -q "up to date"' _ "$bosun"
+  check "--branch main --yes follows main again (exit 0)" bash -c '"$1" update --branch main --yes >"$2" 2>&1 || { tail -25 "$2"; exit 1; }' _ "$bosun" "$OUT/branch-main.txt"
+  check "... bosun.branch main, and main's head in use" bash -c '
+    [ "$(git --git-dir="$1/bosun.git" config bosun.branch)" = main ] && [ "$2" = "$3" ]' _ "$VERSIONS" "$(version_in_use)" "$main_commit"
+  check "the releases again (bosun settings set): --check says the release in use is the newest" bash -c '
+    "$1" settings set BOSUN_UPDATE_CHANNEL=releases >/dev/null && "$1" update --check --json | jq -e ".channel == \"releases\" and .available == false and .error == null"' _ "$bosun"
+}
+
 # Through a real terminal, with real launchd and pmset.
 uninstall() {
   local bosun="$HOME/.local/bin/bosun" state="$HOME/.local/state/bosun" out="$OUT/uninstall.txt"
@@ -322,7 +351,10 @@ now_job_for_real
 login_job_for_real
 quit_for_real
 # Only with an origin that has a release in it (tests/sandbox/mac.sh); a runner installs a branch's head.
-[ -z "${BOSUN_E2E_RELEASE:-}" ] || releases_for_real
+if [ -n "${BOSUN_E2E_RELEASE:-}" ]; then
+  releases_for_real
+  branch_for_real
+fi
 run_again
 app_tools
 uninstall

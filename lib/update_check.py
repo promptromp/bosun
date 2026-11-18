@@ -26,6 +26,7 @@ FIRST_REPEAT = 2  # a second release of a day is `.2`
 PEELED = "^{}"  # what `git ls-remote` appends to a tag's name for the commit an annotated tag points at
 TAGS_PREFIX = "refs/tags/"
 SHORT = 12  # as many characters of a commit as a version folder's name
+COMMIT_NAME = re.compile(rf"[0-9a-f]{{{SHORT}}}")  # a commit as the `main` channel names a version
 
 
 def release_key(tag: str) -> tuple[int, int, int, int] | None:
@@ -154,20 +155,28 @@ def _you_have(answer: Mapping[str, Any]) -> str:
     return installed["version"] or str(installed["commit"])[:SHORT]
 
 
-def describe(answer: Mapping[str, Any]) -> str:
-    """The check's answer as one line."""
+def skippable(version: str, channel: str) -> bool:
+    """Whether <version> is one `bosun update --skip` takes on <channel>: a release's tag; or on the `main`
+    channel a commit as it names its head (SHORT characters of it: what --check says as its version, and the
+    menu bar app passes to --skip). On `releases` a commit's name would only replace the release skipped."""
+    named = channel == "main" and COMMIT_NAME.fullmatch(version) is not None
+    return release_key(version) is not None or named
+
+
+def describe(answer: Mapping[str, Any], branch: str = "main") -> str:
+    """The check's answer as one line; on the `main` channel <branch> is the branch the install follows."""
     latest = answer["latest"]
     if answer["error"]:
         return f"bosun update --check: {answer['error']}"
     if latest is None:
         return f"bosun has no release yet (you have {_you_have(answer)})"
     if answer["ahead"]:
-        what = "the newest release" if answer["channel"] == "releases" else "the head of main"
+        what = "the newest release" if answer["channel"] == "releases" else f"the head of {branch}"
         return f"bosun is ahead of {what} ({latest['version']})"
     if not answer["available"]:
         return f"bosun is up to date ({_you_have(answer)})"
+    skipped = " (skipped)" if answer["skipped"] else ""
     if answer["channel"] == "main":
         count = count_notes(latest["notes"])
-        return f"{count} commit{'' if count == 1 else 's'} on main since yours"
-    skipped = " (skipped)" if answer["skipped"] else ""
+        return f"{count} commit{'' if count == 1 else 's'} on {branch} since yours{skipped}"
     return f"bosun {latest['version']} is available (you have {_you_have(answer)}){skipped}"

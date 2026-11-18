@@ -197,6 +197,7 @@ class PluginTest(unittest.TestCase):
             {
                 "tests/unit/test_docs_examples.py",
                 "tests/unit/test_update.py",
+                "tests/unit/test_update_back.py",  # it imports test_update
                 "tests/unit/test_update_facts.py",  # it imports test_update
                 "tests/unit/test_update_summary.py",
                 "tests/unit/test_impacted_rules.py",

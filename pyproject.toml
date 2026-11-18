@@ -105,6 +105,7 @@ impacted_map = [
     "bin/bosun=tests/unit/test_uninstall_plan.py",
     "bin/bosun=tests/unit/test_settings.py",
     "bin/bosun=tests/unit/test_update.py",
+    "bin/bosun=tests/unit/test_update_back.py",
     "bin/bosun=tests/unit/test_update_facts.py",
     "bin/bosun=tests/unit/test_update_gate.py",
     # What a test reads of bosun's programs to hold a constant to it (the watchdog job's interval).

@@ -5,7 +5,9 @@ Status: built and run in the macOS VM. The design is in `bosun update` (`lib/upd
 older `get.sh` made (`convert` in `lib/update.py`), and in the summary (`lib/update_summary.py`). What the
 runs on a real Mac showed, and what they changed, is under [Settled in the VM](#settled-in-the-vm); what
 was decided while building it, under "Settled while building it" and "Decided while building it". The
-plan: [docs/plans/update.md](../plans/update.md).
+plan: [docs/plans/update.md](../plans/update.md). Going back with a command (`bosun update --back`) and trying a
+branch (`bosun update --branch`) are under [Going back, and trying a branch](#going-back-and-trying-a-branch): built,
+with unit and smoke tests, and their VM runs still to come.
 
 ## Why
 
@@ -46,8 +48,11 @@ over to it.
 
 Not in the first version:
 
-- **A command to go back to an older version.** A failed update puts everything back itself. Going
-  back later is the manual path decided in sync.md, which the summary points to.
+- **A command to go back to an older version** (the first version: a failed update put everything back
+  itself, and going back later was the manual path decided in sync.md, which the summary pointed to).
+  `bosun update --back` came later, one step back ([Going back, and trying a
+  branch](#going-back-and-trying-a-branch)); the manual path stays, for when the newer version's own update is
+  what broke.
 - **Releases, tags or channels** (the first version: it updated to the head of the branch the install tracks,
   `main` or `BOSUN_BRANCH`, as `get.sh` did then; releases came with the menu bar app, see
   [Channels](#channels)). Each data format carries its own version, so migrations do not depend on release
@@ -219,10 +224,14 @@ check gets no protection from it, which is why the first update converts at a qu
 
    If any of these fails, restore the backup, switch the link back, release the locks, and report
    what failed.
-5. **Release.** Reload the launchd jobs whose plist changed, restart the check-in loop while the hold
+5. **Release.** Make sure the install leads to the new version (a no-op after the freeze switched it), reload
+   the launchd jobs whose plist changed and unload, deleting their plists, those the version updated from lists
+   and the new one does not (`job_labels`; each would run a command the new version lacks), restart the
+   check-in loop while the hold
    is still on (it stops at once, even mid-tick, and the hold keeps a tick from starting meanwhile),
    bring the menu bar app to the version the new one expects (`bosun app update` of the new version, which
-   goes by the app being there, not by `BOSUN_MENU_APP`, and does nothing with none; a refusal or failure is a
+   goes by the app being there, not by `BOSUN_MENU_APP`, and does nothing with none; never to an app older than
+   the one installed, which is left as it is; a refusal or failure is a
    finding in the summary and stops nothing), restart the
    console's launchd job if it is loaded and wanted (`console/wanted` is there; `launchctl kickstart -k`, so it
    serves the new code; a job that is not loaded is never started), lift the hold, delete the old backups and version folders, and run the new version's `bosun
@@ -257,7 +266,9 @@ write to take in. Measure before building that.
   `-2` after its name rather than failing. The backups folder has a row in `STATE_FILES`, of a class of its
   own (`BACKUPS`): `bosun uninstall` deletes it with either store, as each backup holds both.
 - **Restoring.** The update itself restores from a backup when its checks fail. In the first
-  version, restoring later is by hand; the summary and `docs/setup.md` say how.
+  version, restoring later was by hand; the summary and `docs/setup.md` said how. `bosun update --back`
+  restores what the older version cannot read ([below](#going-back-and-trying-a-branch)), and by hand
+  stays the fallback.
 - **A forget reaches them.** `kg forget` promises that nothing of the person is left, but a backup
   holds the whole knowledge base as it was, `forgotten.jsonl`, the journal and `secret.key`
   included. Restoring one from before the forget would bring the person back with no trace of the
@@ -428,7 +439,7 @@ Agents
   api           restarted; resumed: waiting on CI for PR 12
   web           kept running (nothing it was started with changed)
 Backup: ~/.local/state/bosun/backups/20261104-153207-95545b0-c41b186 (3.1 MB)
-Going back: docs/updating.md#going-back
+Going back: bosun update --back (docs/updating.md#going-back)
 ```
 
 Settled while building it:
@@ -590,6 +601,245 @@ Settled while building it:
   progress before the switch goes in a field, or the installed old code would refuse every write. A record that is there but cannot be read refuses every write in one
   line, since it may record a freeze: `bosun update` comes first (it resumes an update in progress and
   puts back one cut short), and the file is moved aside only if `bosun update` cannot read it either.
+
+### Going back, and trying a branch
+
+Designed 2026-11-18, for an install that follows `main` and takes every merge (the user's decision of that day
+is under [Decided by the user](#decided-my-calls-and-what-is-left-to-the-builder)), and built the same day
+(`lib/update_back.py`, the command; `lib/update_back_plan.py`, its decisions, pure; `migrations.revert_config`).
+
+`bosun update --back` returns to the version the last finished update came from, one step, never further.
+`bosun update --branch <name>` makes the install follow a branch of its origin and updates to its head. Both
+take `--dry-run`, `--yes` and `--json` as `bosun update` does: in a terminal they show their plan and ask
+first, without one they stop at the plan, and `--json` prints the update's one object. Run inside one of
+bosun's windows, both are refused as an update is, but for a dry run.
+
+**Going back is an update in reverse, run by the version installed.** That version knows the formats and
+rules its data is in, and holds the record of the update that brought it, so `--back` hands over to no
+other version: the wrapper fetches nothing and runs its own `lib/update_back.py`. It carries out an update
+from the version installed to the one the last update came from, through the update's own machinery:
+`update.lock` and the run marker, an update cut short carried on or put back first, the hold, the freeze
+only when it restores, the one-step switch, the put back of a failed freeze, the release, the windows
+brought along and the summary. Its record is `update.json`, at the update's own steps only, with a field
+`kind: "back"`: after the switch the older version is the installed one, and it reads the record (its
+write gate, its status, its `bosun doctor`), so a step it did not know would refuse every write ([The record
+only grows](#cut-short)). Every version since versions side by side knows the steps a back uses.
+
+**Which update it goes back over** (`lib/update_back_plan.py`, pure, from the record):
+
+- the record at `done`, or at `agents` with windows still waited for, which the back takes over, as the
+  next update does;
+- an update recorded `failed` or `restored` left bosun where it was, so the back goes back over the update
+  before it: each update's record now keeps the last finished one's from when it started (`previous`), so a
+  rehearsal that failed the day after never takes the way back away;
+- a back that failed or was put back: the update it tried to go back over (its own `previous`, which is that
+  update), so `--back` can be run again;
+- a back at `done` or `agents`: refused, so it never swings back and forth: "bosun already went back from
+  c41b186 to 95545b0 on 2026-11-18; bosun update goes forward again";
+- no record, or none that finished: refused, "no update has finished here: there is nothing to go back to".
+
+Refused too, before anything changes: the install not leading to the version that update installed (the
+link moved by hand: going back is then by hand), and a version to go back to that is a checkout from before
+versions (`legacy-*`, which has no hold or write gate: by hand, as [the guide](../updating.md#going-back)
+says).
+
+**Where the facts come from.** The record of the update gone over: both versions' folders and commits, its backup,
+its migrations (`migrated`) and what it wrote to `bosun.env` (`config_changed`, the plan's `renames` and `kept`).
+The backup's manifest, whose `from` and `to` must be the record's commits. Each version's stores' formats and
+rules versions, read from its source, as the plan reads the rules versions (`update_facts.source_formats`: no code
+of the older version runs in the back's process). The older version's folder stays until the next update; if it is
+gone, the back adds it again from `bosun.git` at its whole commit (`git worktree add --detach`, as the guide's
+path by hand does), fetching that commit from the origin first if `bosun.git` no longer has it (no terminal to ask
+in, a transfer slower than 1 KB/s for 30 seconds given up on, as the wrapper's fetch, and two minutes at the most,
+as `update.lock` is held). A dry run adds no folder: it reads that version's formats, rules, keys and prompts from
+`bosun.git` at its commit (`git show`, `update_facts.Committed`), and its plan's `unknown` says what it cannot tell
+until going back adds the folder (what each window gets, the jobs, what that version needs of this Mac); with the
+commit not in `bosun.git` either, it says that going back fetches it first, and that until then it cannot tell that
+version's formats and rules, so what is restored. A backup whose manifest names another update is said once, and
+only where something needs that backup.
+
+**What it restores, part by part.** What was written since the update stays wherever the older version can
+read it, each part decided on its own:
+
+- *A store* (the ledger, the knowledge base) is restored from the update's backup when its format on disk is
+  not the older version's (a migration ran) or its rules version differs (`RULES_VERSION`,
+  `KG_RULES_VERSION`). Nothing refuses a journal under newer rules: the older version's rebuild checks every
+  change under its own rules and keeps what they refuse as a conflict, unapplied
+  ([sync](sync.md#decisions-2026-11-04)), so items written since could rebuild otherwise; hence the restore.
+  It puts back what a failed freeze puts back of that store (`update_backups.FROZEN`: the ledger's files,
+  journal and `replica.json`; the knowledge folder), never the working files (the events queue, signals, the
+  Slack watcher's state), which stay as they are, as a failed freeze leaves them.
+- *`bosun.env`*, when the update wrote it (keys renamed, kept values added), has the update's own changes
+  taken back, line by line, where they still read as it wrote them: a renamed key gets its old name back, a
+  removed key's lines come back from the backup's copy, and a kept value goes with the comment above it.
+  A line changed since is left as it is, and the plan says what the older version reads instead. With
+  nothing changed since, the result is the backup's copy (a unit test holds that undoing what
+  `migrations.write_config` wrote gives back what it read). The file is kept first as
+  `bosun.env.pre-back-<time>`, as an update keeps `.pre-update-`. Keys added at their defaults need nothing:
+  the older version does not read them.
+- A part that needs neither is kept, with what was written since. With nothing to restore, a back only
+  switches versions and brings the windows along.
+
+**What the plan says before it asks.** A back's plan is made as an update's is, from the version installed
+to the older one (each window compared with the older version's `launch --fingerprint`, its jobs, its
+preflight, the prompts of both), with the data as it will be once restored, so no migration and no
+store-newer blocker. Its own part, `back`, says:
+
+- which update it goes back over ("the update of 2026-11-18 14:02, 95545b0 -> c41b186");
+- for each store and `bosun.env`, kept ("format 2 and rules 1 in both: kept, with what was written since"),
+  or restored and why ("format 2 -> 1: restored from that update's backup");
+- for each store restored, what restoring loses: how many changes were written since the backup (the
+  journal's position now against the backup's, file by file), the time of the last, and for the ledger the
+  items they touch ("12 changes since 14:02, the last at 15:40, to a12, a15, d3"; the knowledge base's as a
+  count only, as its changes can name people); or "nothing written since: restoring loses nothing". They
+  are not deleted: the back takes a backup first (below), but going forward again does not bring them back;
+- `bosun.env`'s lines taken back, and those left as they were changed;
+- what the update asked me to change in my own files, if anything: the older version reads them as before
+  that change, so undo it if I made it;
+- the windows, the jobs to reload and to unload, the prompts that differ, the console, the handed tasks and
+  what stops it, as an update's plan.
+
+**The steps.** An update's, with the data's part changed:
+
+1. The plan and the go-ahead ("Go back now? [y/N]").
+2. Rehearse: every file of the backup that a restore puts back checked against its manifest (as
+   `update_backups.restore` checks before it writes), and `bosun.env`'s change worked out; `rehearsed`.
+   Nothing is migrated, so no copy is made.
+3. Hold bosun's own background work (`holding`).
+4. With a part to restore, the freeze, under both stores' locks: `marked`; `backed-up`, a backup of the back's
+   own of everything a backup holds (`<time>-<newer>-<older>`), naming what a put back restores (the parts it
+   is about to change); `migrated`, each store restored from the update's backup and `bosun.env` taken back
+   (`restored` and `config_changed` in the record); `switched`, the link to the older version; `checked`
+   (the restore reads every file it put back against the update's manifest; the older version's `bosun
+   doctor` in the release checks the rest). A failure puts the back's own backup back and the link at the
+   newer version (`update_gate.put_back_held`, unchanged). `update.freeze` takes the steps it runs under the
+   locks: an update's migrate, or a back's restore.
+   With nothing to restore there is nothing to freeze, as both versions read the stores as they are: the back
+   records `checked`, and the release switches.
+5. The release, as an update's. Three of its parts came with the back and apply to every update ([the
+   steps](#the-steps), 5): it begins by making sure the install leads to the version updated to (a no-op after a
+   freeze switched it), so a back cut short anywhere from `checked` is carried on by the next `bosun update` like
+   an update; the launchd jobs that run a bosun command (`job_kinds`: `bosun`) which the version updated from lists
+   and the one updated to does not are unloaded and their plists deleted (a newer version's job would run a command
+   the older one lacks), never the menu bar app's Open at Login job (`app`: it runs the app's own binary, and no
+   reload makes it again), and none at all when either version cannot say what it lists; and the menu
+   bar app is brought along only when the version updated to wants an app at least as new as the one installed. So
+   a back leaves the app as it is: it reads only what `bosun ... --json` prints, whose fields only grow, and takes
+   one an older bosun does not send as its default (as it does `starting`); a menu item whose command the older
+   bosun lacks fails with that command's error, and the next update brings the app to what its version wants.
+6. Bring the windows along, as an update does, by its table: restarted once idle where the launch differs
+   from what the older version would launch, a re-read where only the orchestrator's prompts differ, taking
+   stock first where only background work runs, the ones waiting for me handed to the check-in loop, and the
+   next update taking over those still owed. The prompts are the update's, word for word ("bosun was updated
+   from c41b186 to 95545b0; ..."): a window restarted on the older version runs its policy, which knows them by
+   how they start.
+7. The summary.
+
+**The record, the summary and the next update.**
+
+- A back's record is `update.json` with `kind: "back"`, `previous` (the record gone over: every record keeps
+  the last finished one from when it started, as `carried` holds one, its own records left out), `restored`
+  (what each store restored, as the step learnt it) and the usual fields, from the newer version to the older.
+  A release's `unloaded` keeps the jobs it unloaded. All new fields are optional, and old code ignores them.
+- Its summary: "bosun went back: c41b186 -> 95545b0 in 31s, over the update of 2026-11-18 14:02"; Data, each
+  store kept or restored, with what restoring lost and the backup that keeps it; Config, `bosun.env` taken
+  back and its copy; the prompts that differ; the jobs reloaded and unloaded; Agents; what was found after
+  the switch; the backup; and "Going forward again: bosun update". It is saved as `back-summary.md`, never
+  `summary.md`: beside the back's own backup, or, when it restored nothing and took none, beside the backup of
+  the update it went back over. A back that leaves windows to the check-in loop (one waits for me) saves it
+  then too, with a line naming the windows still brought along, as that loop runs the installed version, the
+  older one, which may know no back: such a loop finishes the back as an update, and saves an update's summary
+  as `summary.md` in the back's own backup (an "updated" headline, the guide's way back), or none when the back
+  took no backup; neither replaces `back-summary.md`. A newer run that finishes it saves `back-summary.md` again,
+  whole. `bosun doctor` lists nothing for it: a back's record asks no change of my files and adds no key. An
+  update's summary ends "Going back: bosun update --back (docs/updating.md#going-back)".
+- Once the back is done it records the version it left as skipped (`update-skip.json`, as `--skip` does,
+  under the name `--check` gives it on the channel: its release tag, or on `main` its short commit), so
+  `--check` and the menu bar app no longer offer it, and offer a newer one as usual. The older version reads
+  that file as it is.
+- The next `bosun update` goes forward again, to the newest the channel has, which can be the version just
+  left: a skip never stops an update you run, and its plan says it in a line ("bosun update --back left this
+  version on 2026-11-18 15:42"), so going forward to it again is never a surprise.
+- To the menu bar app a back is an update like any other: "An update is running" while it runs, and its
+  record as the status's `update.last`.
+
+**`bosun update --branch <name>`**, in the wrapper of the version installed:
+
+1. The name checked (`git check-ref-format --branch`), then the origin asked (`git ls-remote --heads`): a
+   branch it does not have, or an origin it cannot reach, is refused before anything changes.
+2. As on the `main` channel: the head fetched into `bosun.git`, and its version folder made.
+3. The target checked against the data, before handing over. This is no branch's own: every update runs it, so a
+   revert on `main` that takes a format back is caught the same way. The target's stores' formats and rules
+   versions (from its source) are compared with the data's (its formats on disk, the installed version's rules
+   versions): a store the target would read in an older format, or under older rules, is refused, with nothing
+   changed but the folder (which a dry run makes too): "the head of try-x (abc1234) has the ledger at format 1,
+   and the data is at format 2: going back past a migration or a rules change is bosun update --back's, to the
+   version the last update came from". The target's own plan already stops on a store newer than it knows
+   (`update_plan.GOING_BACK`, in every version since the plan), but says "not supported" and knows nothing of
+   rules; this check says what to do. (`update_facts.older_than_data`, which the wrapper runs as
+   `lib/update_back.py target-check`.)
+4. Unless `--dry-run`: `bosun.branch` set in `bosun.git`, and, where the channel is not `main`,
+   `BOSUN_UPDATE_CHANNEL=main` written by `bosun settings set` (its writer and its `bosun.env.pre-init-<stamp>`
+   copy), said in a line: "bosun follows <branch> from now on (bosun update --branch main follows main
+   again)".
+5. Handed over to the branch's version, whose plan asks as any update's does. Said no to, or blocked, the
+   install still follows the branch, at the version it had.
+
+`--branch` with `--back`, `--check` or `--skip` is refused. A branch deleted on the origin once it merged:
+the next `bosun update` cannot fetch it, and says to run `bosun update --branch main`. Following a branch
+never changes the origin: a local branch not pushed is the install line's
+(`BOSUN_REPO=<path> BOSUN_BRANCH=<branch>`), which points `bosun.git`'s origin at that path until it is set
+again, and the guide says so.
+
+**The contract.** `--back --json` and `--branch --json` print the update's object (`contract` 1), which only
+grows: the plan gains `back` (null for an update), `unload` and `left_by_back`, the record `kind`, `previous`,
+`restored` and `unloaded`,
+the summary its back's part, and `tools/contract_samples.py` writes the fixtures again. The app runs neither,
+and `menu_status.CONTRACT` does not change.
+
+**What a back cannot make right**, accepted:
+
+- A window the back waits for (busy, or waiting for me) runs its hooks, which the newer version wrote, on
+  the older one until it restarts: a hook whose command line the older version does not take fails. No older
+  version can be taught a newer one's lines; the windows whose launch differs are the ones restarted.
+- A process of the newer version still running (a hook's detached child, a console started by hand) that
+  writes to a store the back restored finds it older than its code. The write gate runs it again through the
+  install link, as for a newer store, where the link leads to another version than the writer's own; it
+  refuses as before only where it does not (a checkout run on data not yet migrated). A write under the
+  newer rules into a store restored for its rules alone is kept, as a conflict if the older rules refuse it.
+- The working files written since (events, signals) are kept, and nothing versions them: the older version
+  reads what it can of them.
+- One store restored and the other kept can leave a fact written since that cites a ledger item now gone.
+- The older version's `bosun uninstall`, from before backs, does not know `bosun.env.pre-back-<time>` (its file
+  table lacks the row), so `--purge` leaves the config folder with that file in it, and says so as a file it does
+  not know; delete it by hand, or uninstall from a version that knows it.
+- A back finished by an older version's check-in loop (above) saves an update's summary of it as `summary.md`
+  in the back's own backup, which says "updated"; the back's own `back-summary.md` beside it is the one to read.
+
+**Testing.** Unit tests (`tests/unit/test_update_back_plan.py`, `test_update_back.py`, and the general changes
+in `test_update.py`, `test_update_gate.py`, `test_update_facts.py`, `test_update_lookup.py`, `test_migrations.py`):
+which update a back goes back over, for every shape of record; each refusal (nothing finished, a second back, the
+install led elsewhere, a `legacy-*` version, a restore whose backup is gone); each part's decision over format,
+rules and `bosun.env`; what restoring loses; `bosun.env` taken back with and without changes since; a back that
+keeps everything (no freeze), one that restores a store, one whose restore fails while writes are paused (put
+back) and one whose backup is found damaged (the rehearsal fails); the plan's and summary's text; the target
+checked against the data; the release's link, jobs to unload and app rule; the write gate both ways and for a
+checkout; a skipped head of `main`. Smoke sections, on installs of their own made from the `update` section's
+versions: `update-back` (over the format change from v1 to v2, v1's folder removed first, which the dry run does
+not add again and reads from `bosun.git`, and going back does: the ledger restored, the write made since in the
+back's own backup, `bosun.env` taken back, a second `--back` refused, the version left skipped, forward again with
+the plan's line; with the backup gone, blocked; over v2 to v3, which changes nothing the data is read by: a ledger
+and a knowledge write kept, no freeze and no backup, the summary beside the update's backup) and `update-branch`
+(an unknown branch and a bad name refused with nothing changed, `--json`'s object, a dry run that writes nothing,
+the plan said no to while the install follows the branch, the update to its head, a branch older in format and
+one older in rules refused pointing at `--back`, `--branch main`). A back cut short at each step is not killed in
+the smoke suite: what carries it on is the update's own (`resume`, and the release that leads the install), unit
+tested. In the VM, `tests/work_e2e.sh` keeps its path by hand (the fallback when the newer version's own update is
+what broke) and adds `bosun update --back` twice: over the update to the next version (format 2: the ledger
+restored, a ledger write made since in the back's backup, an ontology write kept), and over an update to the
+version after (`tests/sandbox/update_patch.sh --again`: the same format), which restores nothing and keeps both
+writes. `tests/install_e2e.sh` (`mac run`) does `--branch` to a branch it pushes to its local origin, `--branch
+main`, and the releases again.
 
 ## Testing
 
@@ -779,6 +1029,12 @@ Decided by the user:
 - a migration with each format change;
 - going back means installing the older version and restoring the backup, and is not supported to
   versions older than today;
+- going back keeps what was written since the update where it is safe (2026-11-18, refining the line
+  above): `bosun update --back` returns to the version the last finished update came from, one step, never
+  further, and restores the backup only for what that update changed that the older version cannot read (a
+  store's format or rules version, keys it added or renamed in `bosun.env`); otherwise it switches back and
+  keeps everything. Its plan says which, and what restoring would lose, before it asks. `--back` and
+  `--branch` take `--dry-run`, `--yes` and `--json` as `bosun update` does;
 - nothing lost during the update, and the agents check for anything they missed;
 - each agent continues what it was doing, its background work included;
 - a `kg forget` deletes the update backups taken before it, so it leaves nothing, at the cost of
@@ -812,7 +1068,9 @@ My calls, which the user can overturn:
 - every deletion of a person does it (`kg expire` and a removal outside the journal too), at the
   deletion's last step, so a deletion cut short finishes it;
 - the update stops while a `kg forget` is cut short;
-- restoring done by the update itself only, with no `--restore` command in the first version;
+- restoring done by the update itself only, with no `--restore` command in the first version (since:
+  `bosun update --back`, [Going back, and trying a branch](#going-back-and-trying-a-branch), whose own calls
+  are in that section);
 - updating to the head of the tracked branch (releases came later: [Channels](#channels));
 - the summary also saved next to the backup.
 

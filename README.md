@@ -131,7 +131,7 @@ The guides, design notes and roadmap are also a website, with search:
 |---|---|
 | [Setup](docs/setup.md) | What you need, the install, the first start, and what to do when stuck |
 | [The menu bar app](docs/menu-bar-app.md) | The icon, its menu, stopping and starting, starting at login, its Settings window |
-| [Updating and uninstalling](docs/updating.md) | Updating, update channels, going back, and taking bosun off |
+| [Updating and uninstalling](docs/updating.md) | Updating, update channels, trying a branch, going back, and taking bosun off |
 | [Configuration](docs/configuration.md) | Config files, model and effort, connectors, Codex and Antigravity windows, logins, where bosun keeps things |
 | [How a day runs](docs/day.md) | What runs when: the morning, check-ins, the watchdog, the evening, and how windows are resumed and refreshed |
 | [Commands](docs/commands.md) | Every `bosun` command |

@@ -1,5 +1,7 @@
 #!/bin/bash
 # Usage: bosun update [--dry-run] [--yes] [--json]
+#        bosun update --back [--dry-run] [--yes] [--json]
+#        bosun update --branch <name> [--dry-run] [--yes] [--json]
 #        bosun update --check [--json]
 #        bosun update --skip <version>
 #
@@ -51,7 +53,28 @@
 # An update cut short (Ctrl-C, a crash, a power cut) is carried on by the next `bosun update`: put back
 # if it stopped while writes were paused (the next write to a store does that too), finished if its
 # checks had passed. With nothing newer it says bosun is up to date; an install past the newest release
-# (it was on main, after the release) says it is ahead of it, and changes nothing.
+# (it was on main, after the release) says it is ahead of it, and changes nothing. Before it hands over to the
+# new version, the version installed checks it would not read the data older than it is (a store in an older
+# format, or under older rules: a revert, or a branch from before a migration), and refuses if it would,
+# pointing at --back.
+#   --back     go back to the version the last finished update came from, one step, never further (a second
+#              --back is refused: bosun update goes forward again), run by the version installed, with no
+#              fetch (but of the older version's commit, should its folder and bosun.git have lost it; a dry run
+#              adds no folder, and reads what it can of that version from bosun.git). It restores that update's backup only where the older version cannot read the data as
+#              it is now: a store whose format or rules version differs between the two, and bosun.env, whose
+#              changes by that update are taken back where they still read as it wrote them (the file kept
+#              as bosun.env.pre-back-<time>). Everything else is kept, with what was written since; the plan
+#              says which, and what restoring would lose (the changes written since, kept in the backup going
+#              back takes first). The windows come along as for an update, and the version it left is
+#              recorded as skipped, so --check and the menu bar app no longer offer it (bosun update still
+#              goes there). Refused with no finished update, after a back, or to a checkout from before
+#              versions (by hand: docs/updating.md#going-back)
+#   --branch <name>  follow the branch <name> of the origin from now on (bosun.branch in bosun.git, and
+#              BOSUN_UPDATE_CHANNEL=main written by bosun settings set if it is not), then update to its head
+#              as the main channel does. A branch the origin does not have is refused before anything
+#              changes. With --dry-run nothing is written; said no to, the install still follows the branch.
+#              bosun update --branch main follows main again. A local branch not pushed is the install
+#              line's (BOSUN_REPO=<path> BOSUN_BRANCH=<branch>)
 #   --dry-run  show the plan, and change nothing
 #   --yes      go ahead without asking
 #   --json     one JSON object on every path: `contract` 1, the plan (null when none was made: up to
@@ -69,8 +92,9 @@
 #              {version, commit, notes} or null, available, skipped, ahead, error}. Always exit 0: a problem,
 #              such as an origin that cannot be reached, is the object's "error" (Python too old to run the
 #              check is the one failure that exits 1, with that object and its error).
-#   --skip <version>  do not offer that release again: --check reports it as skipped (update-skip.json in the
-#              state folder); the next release is offered as usual. It does not stop an update you run.
+#   --skip <version>  do not offer that release again (or on the main channel that head, by the name --check
+#              gives it: its commit's first 12 characters): --check reports it as skipped (update-skip.json in the
+#              state folder); the next one is offered as usual. It does not stop an update you run.
 #
 # What the agents and the check-in loop run while it brings the windows along:
 #   bosun update note --window <w> --stock|--status
@@ -90,6 +114,8 @@ load_config
 # update's (update.json_object). The line it says goes to stderr as ever, and the exit status is the same.
 JSON=0
 CHECK=0
+BACK=0
+BRANCH=""
 json_text() { # <text>: as the inside of a JSON string, on one line (bash 3.2: no ${x@Q})
   local text="$1"
   text="${text//\\/\\\\}"
@@ -131,12 +157,17 @@ lookup() {
   BOSUN_STATE_DIR="$BOSUN_STATE_DIR" BOSUN_UPDATE_CHANNEL="$BOSUN_UPDATE_CHANNEL" python3 "$BOSUN_ROOT/lib/update_lookup.py" "$@"
 }
 
-# lib/update.py of this version, with the config's folders and session (load_config exports none).
-run_update() {
+# lib/<module>.py of this version run in this process's place (exec), with the config's folders, session
+# and channel (load_config exports none); in a subshell where the wrapper goes on after it.
+run_py() { # <module> <args...>
+  local module="$1"
+  shift
   need_python
   BOSUN_CONFIG_DIR="$BOSUN_CONFIG_DIR" BOSUN_STATE_DIR="$BOSUN_STATE_DIR" BOSUN_LOG_DIR="$BOSUN_LOG_DIR" \
-    BOSUN_SESSION_NAME="$BOSUN_SESSION_NAME" exec python3 "$BOSUN_ROOT/lib/update.py" "$@"
+    BOSUN_SESSION_NAME="$BOSUN_SESSION_NAME" BOSUN_UPDATE_CHANNEL="$BOSUN_UPDATE_CHANNEL" \
+    exec python3 "$BOSUN_ROOT/lib/$module.py" "$@"
 }
+run_update() { run_py update "$@"; }
 
 # What the agents and the check-in loop run, on the version installed now.
 case "${1:-}" in
@@ -159,6 +190,12 @@ read_arguments() {
         JSON=1
         ;;
       --check) CHECK=1 ;;
+      --back) BACK=1 ;;
+      --branch)
+        BRANCH="${2:-}"
+        [ -n "$BRANCH" ] || die_usage "--branch takes the name of a branch of the origin, such as main"
+        shift
+        ;;
       --skip)
         SKIP="${2:-}"
         [ -n "$SKIP" ] || die_usage "--skip takes the release version to skip, such as v2026.11.12"
@@ -175,6 +212,16 @@ read_arguments() {
   done
 }
 read_arguments "$@"
+
+# --back and --branch are an update's own: neither with the other, nor with --check or --skip.
+refuse_mixed() {
+  [ "$BACK" = 0 ] || [ -z "$BRANCH" ] || die_usage "--back and --branch are separate: go back, or follow a branch"
+  if [ "$CHECK" = 1 ] || [ -n "$SKIP" ]; then
+    [ "$BACK" = 0 ] && [ -z "$BRANCH" ] || die_usage "--check and --skip take no --back or --branch"
+  fi
+  [ -z "$FROM" ] || { [ "$BACK" = 0 ] && [ -z "$BRANCH" ]; } || die_usage "--from is the wrapper's own: it takes no --back or --branch"
+}
+refuse_mixed
 
 # Whether there is an update, and which release not to offer: read-only, on the version in use.
 check_or_skip() {
@@ -204,6 +251,13 @@ esac
 # The new version, handed over to: the update itself (lib/update.py).
 [ -z "$FROM" ] || run_update --from "$FROM" ${args[@]+"${args[@]}"}
 
+if [ "$BOSUN_INSTALL" = "$BOSUN_ROOT" ]; then
+  die "bosun update moves an install made by get.sh, with its versions side by side in <install>-versions; $BOSUN_ROOT is a checkout: update it with git (one an earlier get.sh made, at ~/.local/share/bosun: run get.sh again, which converts it)"
+fi
+
+# Going back is the version installed's own: nothing fetched, lib/update_back.py of this version.
+[ "$BACK" = 0 ] || run_py update_back ${args[@]+"${args[@]}"}
+
 # git for the versions' repository, with none of the user's hooks. No GIT_* variable from the caller
 # (a git hook, another repository's tooling) may send it elsewhere.
 for git_var in $(compgen -e | grep '^GIT_'); do unset "$git_var"; done
@@ -211,13 +265,24 @@ repo_git() { git -c core.hooksPath=/dev/null --git-dir="$REPO" "$@"; }
 
 VERSIONS="$(dirname "$BOSUN_ROOT")"
 REPO="$VERSIONS/bosun.git"
-if [ "$BOSUN_INSTALL" = "$BOSUN_ROOT" ]; then
-  die "bosun update moves an install made by get.sh, with its versions side by side in <install>-versions; $BOSUN_ROOT is a checkout: update it with git (one an earlier get.sh made, at ~/.local/share/bosun: run get.sh again, which converts it)"
-fi
+CHANNEL="$BOSUN_UPDATE_CHANNEL"
+
+# --branch <name>: a branch name git takes, which the origin has (asked before anything changes); the
+# update then follows the main channel's path to its head.
+branch_asked() {
+  local problem
+  case "$BRANCH" in -*) die_usage "--branch takes a branch's name, not $BRANCH" ;; esac
+  git check-ref-format --branch "$BRANCH" >/dev/null 2>&1 || die_usage "--branch: $BRANCH is not a branch's name"
+  problem="$(mktemp)"
+  lookup branch "$BRANCH" 2>"$problem" || fail_with_problem "$problem"
+  rm -f "$problem"
+  CHANNEL=main
+}
 # Sets commit to the one to install, in the versions' repository: the newest release's, or on the main
 # channel the head of the branch; and AHEAD to the newest release when the install is past it.
 AHEAD=""
 commit=""
+WHAT="" # what the update moves to, as a refusal names it: the release, or the branch
 # `lookup target` failed, and said why in <file>: that goes to stderr as it said it, and with --json its
 # last line is the object's error.
 fail_with_problem() { # <file>
@@ -230,28 +295,37 @@ fail_with_problem() { # <file>
 }
 newest_commit() {
   local branch found problem
-  case "$BOSUN_UPDATE_CHANNEL" in
+  case "$CHANNEL" in
     releases)
       problem="$(mktemp)"
       found="$(lookup target 2>"$problem")" || fail_with_problem "$problem"
       rm -f "$problem"
       case "$found" in
         "ahead "*) AHEAD="${found#ahead }" ;;
-        "commit "*) commit="$(cut -d' ' -f2 <<<"$found")" ;;
+        "commit "*)
+          commit="$(cut -d' ' -f2 <<<"$found")"
+          WHAT="$(cut -d' ' -f3 <<<"$found")"
+          ;;
         *) die "bosun update could not tell which release to install ($found)" ;;
       esac
       ;;
-    main)
-      branch="$(repo_git config bosun.branch)" || branch=main
-      # A transfer slower than 1 KB/s for 30 seconds is given up on, never waited for without end.
-      repo_git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 fetch --quiet --no-tags origin "+refs/heads/$branch:refs/remotes/origin/$branch" ||
-        die "could not fetch $branch from $(url_without_credentials "$(repo_git config remote.origin.url)")"
-      commit="$(repo_git rev-parse --verify --quiet "refs/remotes/origin/$branch^{commit}")" ||
-        die "no commit at the head of $branch"
-      ;;
+    main) branch_head ;;
     *) die "BOSUN_UPDATE_CHANNEL is \"$BOSUN_UPDATE_CHANNEL\": it is releases or main" ;;
   esac
 }
+# The head of the branch the install follows (bosun.branch, main by default), or the one --branch names.
+branch_head() {
+  local branch="$BRANCH" hint=""
+  [ -n "$branch" ] || branch="$(repo_git config bosun.branch)" || branch=main
+  [ "$branch" = main ] || [ -n "$BRANCH" ] || hint=" (this install follows $branch: bosun update --branch main follows main again)"
+  # A transfer slower than 1 KB/s for 30 seconds is given up on, never waited for without end.
+  repo_git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 fetch --quiet --no-tags origin "+refs/heads/$branch:refs/remotes/origin/$branch" ||
+    die "could not fetch $branch from $(url_without_credentials "$(repo_git config remote.origin.url)")$hint"
+  commit="$(repo_git rev-parse --verify --quiet "refs/remotes/origin/$branch^{commit}")" ||
+    die "no commit at the head of $branch"
+  WHAT="the head of $branch"
+}
+[ -z "$BRANCH" ] || branch_asked
 newest_commit
 # An install past the newest release: nothing to move to. The version in use takes it from here (it carries
 # on an update cut short first), and says it is ahead instead of up to date.
@@ -266,4 +340,40 @@ if [ ! -d "$folder" ]; then
 fi
 [ "$(git -C "$folder" rev-parse HEAD 2>/dev/null)" = "$commit" ] ||
   die "$folder is not a checkout of $commit; move it aside and run bosun update again"
+
+# The version handed over to must not read the data older than it is (a store in an older format, or under
+# older rules), which the version installed checks: refused, nothing changed but the folder a dry run makes too.
+target_fits() { # <folder> <what>
+  local problem
+  problem="$(mktemp)"
+  (run_py update_back target-check "$1" "$2") 2>"$problem" || fail_with_problem "$problem"
+  rm -f "$problem"
+}
+target_fits "$folder" "${WHAT:-the new version}"
+
+# --branch, but for a dry run: what the install follows from now on, said, before the new version asks. The
+# channel first, through bosun settings set, which may refuse (another settings set, bosun init): then nothing
+# is set at all. The new version's plan, said no to, says the install follows the branch (BOSUN_UPDATE_FOLLOWS).
+say() { if [ "$JSON" = 1 ]; then echo "$*" >&2; else echo "$*"; fi; }
+follow_branch() {
+  if [ "$BOSUN_UPDATE_CHANNEL" != main ]; then
+    "$BOSUN_ROOT/bin/bosun" settings set BOSUN_UPDATE_CHANNEL=main >&2 ||
+      die "could not set BOSUN_UPDATE_CHANNEL=main (bosun settings set); nothing changed: the install follows what it did"
+  fi
+  repo_git config bosun.branch "$BRANCH" 2>/dev/null || branch_not_set
+  export BOSUN_UPDATE_FOLLOWS="$BRANCH"
+  say "bosun follows $BRANCH from now on (bosun update --branch main follows main again)"
+}
+# bosun.branch could not be set after the channel was: the channel put back as it was, and said exactly.
+branch_not_set() {
+  local was="$BOSUN_UPDATE_CHANNEL"
+  [ "$was" != main ] || die "could not set bosun.branch in $REPO; nothing changed: the install follows what it did"
+  "$BOSUN_ROOT/bin/bosun" settings set "BOSUN_UPDATE_CHANNEL=$was" >&2 ||
+    die "could not set bosun.branch in $REPO, and BOSUN_UPDATE_CHANNEL is main now: bosun settings set BOSUN_UPDATE_CHANNEL=$was puts it back"
+  die "could not set bosun.branch in $REPO; BOSUN_UPDATE_CHANNEL put back to $was: nothing changed"
+}
+case " ${args[*]-} " in
+  *" --dry-run "*) ;;
+  *) [ -z "$BRANCH" ] || follow_branch ;;
+esac
 exec "$folder/bin/bosun" update --from "$BOSUN_ROOT" ${args[@]+"${args[@]}"}

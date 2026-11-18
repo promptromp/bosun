@@ -5929,7 +5929,7 @@ PY
       grep -qx "Prompts changed: 1 (policy.md)" "$1" && grep -qx "Jobs reloaded: morning, watchdog, now, login" "$1" &&
       ! grep -q "^  FAIL: " "$1" && grep -qE "^  [0-9]+ already failing before the update$" "$1" &&
       grep -qE "^  [0-9]+ warnings?: run bosun doctor$" "$1" &&
-      grep -qxE "Backup: $2 \([0-9.]+ (bytes|KB|MB|GB)\)" "$1" && [ "$(tail -1 "$1")" = "Going back: docs/updating.md#going-back" ] || {
+      grep -qxE "Backup: $2 \([0-9.]+ (bytes|KB|MB|GB)\)" "$1" && [ "$(tail -1 "$1")" = "Going back: bosun update --back (docs/updating.md#going-back)" ] || {
       cat "$1"
       return 1
     }
@@ -6038,7 +6038,7 @@ migrations.run(migrations.Context(pathlib.Path(sys.argv[2]), pathlib.Path(sys.ar
   out="$(cat "$U/carried.err")"
   check "an update that stopped after its checks passed: the next bosun update carries it on" contains "$out" "carried on to the end"
   check "... says its summary, from a record laid out as an earlier bosun kept it (no plan: no Data), and in --json's object the backup's path whole" bash -c '
-    grep -qx "Going back: docs/updating.md#going-back" <<<"$1" &&
+    grep -qx "Going back: bosun update --back (docs/updating.md#going-back)" <<<"$1" &&
       jq -e --arg to "$3" --arg backup "$(jq -r .backup "$4/update.json")" ".summary.to_commit == \$to and .summary.backup == \$backup and .summary.data == {} and (\$backup | startswith(\"/\"))" <<<"$2" >/dev/null' \
     _ "$out" "$json" "$U_V2_COMMIT" "$U_STATE"
   check "... then says bosun is up to date" contains "$out" "bosun is up to date (${U_V2_COMMIT:0:7})"
@@ -6197,7 +6197,7 @@ HAND
   check "... then the summary, the busy window and the one at a prompt still waited for, the shell one's restart after taking stock" bash -c '
     grep -qE "^  u-busy +nothing yet; still waited for$" "$1" && grep -qE "^  u-waiting +nothing yet; still waited for$" "$1" &&
       grep -qE "^  u-shell +asked to take stock, restarted; resumed after the update$" "$1" &&
-      [ "$(tail -1 "$1")" = "Going back: docs/updating.md#going-back" ] && [ ! -e "$(jq -r .backup "$2/update.json")/summary.md" ]' _ "$U/agents.out" "$U_STATE"
+      [ "$(tail -1 "$1")" = "Going back: bosun update --back (docs/updating.md#going-back)" ] && [ ! -e "$(jq -r .backup "$2/update.json")/summary.md" ]' _ "$U/agents.out" "$U_STATE"
   check "... with the link at v2" u_at "$U_V2"
   check "the windows bosun did not start were left as they are: their panes, the Claude in one, nothing pasted, no bosun launch" bash -c '
     [ "$1" = "$2" ] && kill -0 "$3" && [ ! -e "$4/pasted.u-hand" ] &&
@@ -6347,8 +6347,205 @@ HAND
   check "... its jobs loaded on the link" bash -c 'grep -qF "exec \"$2/bin/bosun\" " "$1/Library/LaunchAgents/com.bosun.convert-test.watchdog.plist"' _ "$HOME" "$C_LINK"
   check "... and it ends with where the checkout is, and the summary" bash -c '
     grep -qF "The checkout is kept as $2 until the next update" "$1" && grep -q "^bosun updated: ${3:0:7} -> ${4:0:7}" "$1" &&
-      [ "$(tail -1 "$1")" = "Going back: docs/updating.md#going-back" ]' _ "$C/convert.out" "$C_LEGACY" "$U_V1_COMMIT" "$U_V2_COMMIT"
+      [ "$(tail -1 "$1")" = "Going back: bosun update --back (docs/updating.md#going-back)" ]' _ "$C/convert.out" "$C_LEGACY" "$U_V1_COMMIT" "$U_V2_COMMIT"
   check "an update after it is one between versions: from v2, up to date" contains "$("${C_ENV[@]}" "$C_V2/bin/bosun" update --from "$C_V2" --dry-run 2>&1)" "bosun is up to date (${U_V2_COMMIT:0:7})"
+
+  section update-back "bosun update --back: one step back, what it restores and what it keeps (fake launchctl)" needs update covers 'lib/update_back*.py,lib/update.py,lib/update_state.py,lib/update_backups.py,lib/update_summary.py,lib/update_lookup.py,lib/migrations.py,libexec/bosun-update'
+  # An install of its own at the update section's v1 (its ledger at format 1, its common.sh without the
+  # connector keys), following upstream's branch b-main: at v2 first (the ledger's format 2, and the kept keys
+  # the update writes to bosun.env), then at v3 (a line of the readme: nothing a version reads the data by).
+  mkdir -p "$WORK/b/share" "$WORK/b/state" "$WORK/b/config"
+  B="$(cd "$WORK/b" && pwd -P)" # as the update names its folders
+  B_LINK="$B/share/bosun"
+  B_VERSIONS="$B/share/bosun-versions"
+  B_STATE="$B/state"
+  B_CONFIG="$B/config"
+  ug branch -f b-main "$U_V2_COMMIT"
+  git -c core.hooksPath=/dev/null clone -q --bare "$U_UP" "$B_VERSIONS/bosun.git"
+  git --git-dir="$B_VERSIONS/bosun.git" config bosun.managed true
+  git --git-dir="$B_VERSIONS/bosun.git" config bosun.branch b-main
+  git --git-dir="$B_VERSIONS/bosun.git" -c core.hooksPath=/dev/null worktree add -q --detach "$B_VERSIONS/${U_V1_COMMIT:0:12}" "$U_V1_COMMIT"
+  ln -s "bosun-versions/${U_V1_COMMIT:0:12}" "$B_LINK"
+  B_V1="$B_VERSIONS/${U_V1_COMMIT:0:12}"
+  B_V2="$B_VERSIONS/${U_V2_COMMIT:0:12}"
+  printf '# acme: an install from before connectors\n' >"$B_CONFIG/bosun.env"
+  B_ENV=(env BOSUN_STATE_DIR="$B_STATE" BOSUN_LOG_DIR="$B_STATE/logs" BOSUN_CONFIG_DIR="$B_CONFIG"
+    BOSUN_SESSION_NAME=back-test BOSUN_LAUNCHD_LABEL=com.bosun.back-test BOSUN_SKIP_PREFLIGHT=1 BOSUN_KNOWLEDGE_GIT=0
+    BOSUN_CLAUDE_BIN="$U/quiet-claude" BOSUN_UPDATE_CHANNEL=main)
+  bb() { "${B_ENV[@]}" "$B_LINK/bin/bosun" "$@"; }
+  b_at() { [ "$(cd "$B_LINK" && pwd -P)" = "$1" ]; }
+  b_has() { jq -e --arg id "$1" '.items | has($id)' "$B_STATE/ledger.json" >/dev/null; } # <item>
+  bb ledger upsert 'review:acme/api#31' --kind review-request --title "Written on v1" >/dev/null
+  bb kg import "$KG_FIXTURE" --apply --auto-confirm >/dev/null 2>&1
+  b_env_before="$(cat "$B_CONFIG/bosun.env")"
+  check "with no update finished, --back is refused: there is nothing to go back to" fails_with "no update has finished here" bb update --back --dry-run
+  check "--back takes no --branch" fails_with "--back and --branch are separate" bb update --back --branch b-main
+  check "... nor --check" fails_with "--check and --skip take no --back or --branch" bb update --back --check
+  bb update --yes >"$B/forward.out" 2>&1
+  rc=$?
+  check "an update to v2 first (exit 0): the ledger migrated, the kept keys written to bosun.env" bash -c '
+    [ "$1" = 0 ] && [ "$(jq -r .version "$2/ledger.json")" = 2 ] && grep -q "^BOSUN_ORCHESTRATOR_CONNECTORS=\"all\"" "$3/bosun.env"' _ "$rc" "$B_STATE" "$B_CONFIG"
+  B_V1="$(cd "$B_V1" && pwd -P)"
+  B_V2="$(cd "$B_V2" && pwd -P)"
+  b_over_id="$(jq -r .id "$B_STATE/update.json")"
+  b_over_backup="$(jq -r .backup "$B_STATE/update.json")"
+  bb ledger upsert 'review:acme/api#32' --kind review-request --title "Written on v2, since the update" >/dev/null
+  # v1's folder gone (deleted by hand, or pruned): its commit is still in bosun.git.
+  git --git-dir="$B_VERSIONS/bosun.git" worktree remove --force "$B_V1"
+  out="$(bb update --back --dry-run 2>&1)"
+  check "--back --dry-run with v1's folder gone adds no folder, and reads v1 from bosun.git: what it cannot tell yet, said" bash -c '
+    [ ! -e "$2" ] && grep -qF "$2 is not there: going back adds it again from bosun.git, at ${3:0:7}" <<<"$1" &&
+      grep -q "^Not known in this dry run:" <<<"$1"' _ "$out" "$B_V1" "$U_V1_COMMIT"
+  check "--back --dry-run: its plan goes back over that update, restores the ledger (format 2 -> 1) and says what that loses" bash -c '
+    grep -q "^Go back ${2:0:7} -> ${3:0:7}, over the update of " <<<"$1" &&
+      grep -q "ledger: format 2 -> 1: restored from that update.s backup; loses 1 change written since (the last at .*), to review:acme/api#32" <<<"$1"' _ "$out" "$U_V2_COMMIT" "$U_V1_COMMIT"
+  check "... keeps the knowledge base, which both versions read alike" contains "$out" "knowledge: kept, with what was written since (format 1, rules 1 in both)"
+  check "... takes back what the update wrote to bosun.env" contains "$out" 'bosun.env: BOSUN_ORCHESTRATOR_CONNECTORS="all" removed'
+  check "... and changes nothing" bash -c '[ "$(cd "$1" && pwd -P)" = "$2" ] && jq -e ".kind == \"\" and .step == \"done\"" "$3/update.json" >/dev/null' _ "$B_LINK" "$B_V2" "$B_STATE"
+  bb update --back --yes >"$B/back.out" 2>&1
+  rc=$?
+  check "--back --yes goes back (exit 0): the link at v1" bash -c '[ "$1" = 0 ] && [ "$(cd "$2" && pwd -P)" = "$3" ] || { tail -15 "$4"; exit 1; }' _ "$rc" "$B_LINK" "$B_V1" "$B/back.out"
+  check "... v1's folder added again from bosun.git, at its commit, said" bash -c '
+    [ "$(git -C "$2" rev-parse HEAD)" = "$3" ] && grep -qF "Added $2 again, the version the last update came from" "$1"' _ "$B/back.out" "$B_V1" "$U_V1_COMMIT"
+  check "... the ledger restored from that update's backup: format 1, without what was written since" bash -c '
+    [ "$(jq -r .version "$1/ledger.json")" = 1 ] && jq -e ".items | has(\"review:acme/api#31\") and (has(\"review:acme/api#32\") | not)" "$1/ledger.json" >/dev/null' _ "$B_STATE"
+  check "... and valid against its journal, as v1 reads it" test "$(bb ledger validate --journal 2>&1)" = "ledger is valid"
+  check "... what was written since kept in the backup going back took first" bash -c '
+    own="$(jq -r .backup "$1/update.json")" && [ "$own" != "$2" ] && jq -e ".items | has(\"review:acme/api#32\")" "$own/state/ledger.json" >/dev/null' _ "$B_STATE" "$b_over_backup"
+  check "... bosun.env as it was before the update, kept first as it was before going back" bash -c '
+    [ "$(cat "$1/bosun.env")" = "$2" ] && grep -q "^BOSUN_ORCHESTRATOR_CONNECTORS=\"all\"" "$1"/bosun.env.pre-back-*' _ "$B_CONFIG" "$b_env_before"
+  check "... the record: a back, done, over that update, with what it restored" jq -e --arg id "$b_over_id" '
+    .kind == "back" and .step == "done" and .previous.id == $id and (.restored | length == 1) and (.config_changed | length == 1)' "$B_STATE/update.json"
+  check "... its summary says so, and is saved beside its own backup" bash -c '
+    grep -q "^bosun went back: ${2:0:7} -> ${3:0:7} in .*, over the update of " "$1" && [ "$(tail -1 "$1")" = "Going forward again: bosun update" ] &&
+      grep -q "^bosun went back" "$(jq -r .backup "$4/update.json")/back-summary.md"' _ "$B/back.out" "$U_V2_COMMIT" "$U_V1_COMMIT" "$B_STATE"
+  check "... and the version it left is skipped: --check no longer offers it" jq -e --arg v "${U_V2_COMMIT:0:12}" '.skipped == true and .latest.version == $v' <<<"$(bb update --check --json)"
+  check "a second --back is refused: one step back, never further" fails_with "bosun already went back from ${U_V2_COMMIT:0:7} to ${U_V1_COMMIT:0:7}" bb update --back --dry-run
+  out="$(bb update --dry-run 2>&1)"
+  check "bosun update goes forward again, its plan saying --back left that version" bash -c '
+    grep -q "^Update $3 -> $2" <<<"$1" && grep -q "^bosun update --back left this version on " <<<"$1"' _ "$out" "$U_V2_COMMIT" "$U_V1_COMMIT"
+  bb update --yes >"$B/forward2.out" 2>&1
+  rc=$?
+  check "... and does (exit 0), migrating the ledger again" bash -c '[ "$1" = 0 ] && [ "$(jq -r .version "$2/ledger.json")" = 2 ] || { tail -15 "$3"; exit 1; }' _ "$rc" "$B_STATE" "$B/forward2.out"
+  mv "$B_STATE/backups" "$B/backups.aside"
+  check "with the backup a restore needs gone (a kg forget deletes them all), --back is blocked, saying so" \
+    fails_with "the ledger needs the backup that update took (format 2 -> 1), which is gone" bb update --back --dry-run
+  mv "$B/backups.aside" "$B_STATE/backups"
+
+  # Over an update that changes nothing a version reads the data by: everything written since is kept.
+  ug branch -f b-main "$U_V3_COMMIT"
+  bb update --yes >"$B/forward3.out" 2>&1
+  rc=$?
+  check "an update to v3, which changes nothing a version reads the data by (exit 0)" u_ended_well "$rc" "$B/forward3.out"
+  b_over_backup="$(jq -r .backup "$B_STATE/update.json")"
+  bb ledger upsert 'review:acme/api#33' --kind review-request --title "Written on v3, since the update" >/dev/null
+  bb kg add-entity repo/acme-billing --name "acme billing" >/dev/null 2>&1
+  b_backups="$(find "$B_STATE/backups" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')"
+  out="$(bb update --back --dry-run 2>&1)"
+  check "--back over it keeps both stores, with what was written since" bash -c '
+    grep -q "ledger: kept, with what was written since (format 2, rules 1 in both)" <<<"$1" && grep -q "knowledge: kept" <<<"$1" && ! grep -q "restored" <<<"$1"' _ "$out"
+  bb update --back --yes >"$B/back2.out" 2>&1
+  rc=$?
+  check "--back --yes (exit 0): the link at v2, nothing frozen, no backup taken" bash -c '
+    [ "$1" = 0 ] && [ "$(cd "$2" && pwd -P)" = "$3" ] && [ "$(find "$4/backups" -mindepth 1 -maxdepth 1 | wc -l | tr -d " ")" = "$5" ] &&
+      jq -e ".kind == \"back\" and .step == \"done\" and .backup == \"\" and .freeze_ms == 0" "$4/update.json" >/dev/null || { tail -15 "$6"; exit 1; }' \
+    _ "$rc" "$B_LINK" "$B_V2" "$B_STATE" "$b_backups" "$B/back2.out"
+  check "... the ledger write and the knowledge write made since are both there" bash -c '
+    jq -e ".items | has(\"review:acme/api#33\")" "$1/ledger.json" >/dev/null && grep -q "repo/acme-billing" "$2/knowledge/entities.jsonl"' _ "$B_STATE" "$B_CONFIG"
+  check "... and its summary is saved beside the backup of the update it went back over" grep -q "^bosun went back: ${U_V3_COMMIT:0:7} -> ${U_V2_COMMIT:0:7}" "$b_over_backup/back-summary.md"
+  check "the data passes its checks on v2 after it" test "$(bb ledger validate --journal 2>&1)" = "ledger is valid"
+
+  section update-branch "bosun update --branch: following a branch of the origin, and main again (fake launchctl)" needs update covers 'libexec/bosun-update,libexec/bosun-settings,lib/update_back*.py,lib/update_facts.py,lib/update_lookup.py,lib/update_check.py,lib/settings.py'
+  # An install of its own at v2, on the releases channel (bosun.env says so), its data v2's (the ledger at
+  # format 2, rules 1). Upstream's branches: try-x at v3, old-x at v1 (the ledger at format 1, older than the
+  # data), and rules-up: v3 with the ledger's rules at 2.
+  mkdir -p "$WORK/r/share" "$WORK/r/state" "$WORK/r/config"
+  R="$(cd "$WORK/r" && pwd -P)"
+  R_LINK="$R/share/bosun"
+  R_VERSIONS="$R/share/bosun-versions"
+  R_STATE="$R/state"
+  R_CONFIG="$R/config"
+  ug branch -f try-x "$U_V3_COMMIT"
+  ug branch -f old-x "$U_V1_COMMIT"
+  git -C "$U_UP" -c core.hooksPath=/dev/null worktree add -q --detach "$WORK/r-up" "$U_V3_COMMIT"
+  sed -i.bak 's/^RULES_VERSION = 1$/RULES_VERSION = 2/' "$WORK/r-up/lib/ledger.py" && rm "$WORK/r-up/lib/ledger.py.bak"
+  git -C "$WORK/r-up" -c core.hooksPath=/dev/null -c commit.gpgsign=false -c user.name=acme -c user.email=dev@example.com commit -qam "the ledger's rules at 2"
+  ug branch -f rules-up "$(git -C "$WORK/r-up" rev-parse HEAD)"
+  git -C "$U_UP" worktree remove --force "$WORK/r-up"
+  git -c core.hooksPath=/dev/null clone -q --bare "$U_UP" "$R_VERSIONS/bosun.git"
+  git --git-dir="$R_VERSIONS/bosun.git" config bosun.managed true
+  git --git-dir="$R_VERSIONS/bosun.git" -c core.hooksPath=/dev/null worktree add -q --detach "$R_VERSIONS/${U_V2_COMMIT:0:12}" "$U_V2_COMMIT"
+  ln -s "bosun-versions/${U_V2_COMMIT:0:12}" "$R_LINK"
+  R_V2="$(cd "$R_VERSIONS/${U_V2_COMMIT:0:12}" && pwd -P)"
+  printf 'BOSUN_UPDATE_CHANNEL="releases"\n' >"$R_CONFIG/bosun.env"
+  R_ENV=(env BOSUN_STATE_DIR="$R_STATE" BOSUN_LOG_DIR="$R_STATE/logs" BOSUN_CONFIG_DIR="$R_CONFIG"
+    BOSUN_SESSION_NAME=branch-test BOSUN_LAUNCHD_LABEL=com.bosun.branch-test BOSUN_SKIP_PREFLIGHT=1 BOSUN_KNOWLEDGE_GIT=0
+    BOSUN_CLAUDE_BIN="$U/quiet-claude")
+  rb() { "${R_ENV[@]}" "$R_LINK/bin/bosun" "$@"; }
+  r_branch() { git --git-dir="$R_VERSIONS/bosun.git" config bosun.branch; }
+  rb ledger upsert 'review:acme/api#41' --kind review-request --title "Written on v2" >/dev/null
+  r_env="$(cat "$R_CONFIG/bosun.env")"
+  check "--branch to a branch the origin does not have is refused, and nothing changes" fails_with "has no branch nope: nothing changed" rb update --branch nope
+  check "... nothing: no branch followed, bosun.env as it was, no version folder" bash -c '
+    ! git --git-dir="$1/bosun.git" config bosun.branch && [ "$(cat "$2/bosun.env")" = "$3" ] && [ "$(find "$1" -mindepth 1 -maxdepth 1 | wc -l | tr -d " ")" = 2 ]' _ "$R_VERSIONS" "$R_CONFIG" "$r_env"
+  check "... with --json, the one object with the error" bash -c '
+    out="$("$@" update --branch nope --json 2>/dev/null)"; [ $? = 1 ] && jq -e ".contract == 1 and .plan == null and (.error | endswith(\"has no branch nope: nothing changed\"))" <<<"$out" >/dev/null' _ "${R_ENV[@]}" "$R_LINK/bin/bosun"
+  check "a name git does not take as a branch's is a usage error" fails_with "is not a branch's name" rb update --branch "a..b"
+  check "... and changes nothing: no branch followed, bosun.env as it was" bash -c '
+    ! git --git-dir="$1/bosun.git" config bosun.branch && [ "$(cat "$2/bosun.env")" = "$3" ]' _ "$R_VERSIONS" "$R_CONFIG" "$r_env"
+  # Another bosun settings set (or bosun init) holding its lock: settings set refuses, and --branch sets nothing.
+  python3 -c 'import fcntl, sys, time; f = open(sys.argv[1], "a"); fcntl.flock(f, fcntl.LOCK_EX); print("held", flush=True); time.sleep(120)' \
+    "$R_STATE/init.lock" >"$R/held.out" &
+  r_holder=$!
+  wait_for 10 grep -q held "$R/held.out"
+  check "--branch whose channel cannot be set (bosun settings set refuses) sets nothing at all" bash -c '
+    out="$("${@:4}" update --branch try-x </dev/null 2>&1)"; [ $? = 1 ] && grep -q "nothing changed: the install follows what it did" <<<"$out" &&
+      ! git --git-dir="$1/bosun.git" config bosun.branch && [ "$(cat "$2/bosun.env")" = "$3" ]' _ "$R_VERSIONS" "$R_CONFIG" "$r_env" "${R_ENV[@]}" "$R_LINK/bin/bosun"
+  kill "$r_holder" 2>/dev/null
+  wait "$r_holder" 2>/dev/null
+  # bosun.branch that cannot be set (a config.lock left in bosun.git) once the channel was: it is put back.
+  mkdir "$R_VERSIONS/bosun.git/config.lock"
+  check "--branch whose bosun.branch cannot be set puts the channel back, and says so" bash -c '
+    out="$("${@:4}" update --branch try-x </dev/null 2>&1)"; [ $? = 1 ] &&
+      grep -q "could not set bosun.branch in .*; BOSUN_UPDATE_CHANNEL put back to releases: nothing changed" <<<"$out" &&
+      grep -q "^BOSUN_UPDATE_CHANNEL=\"\{0,1\}releases\"\{0,1\}$" "$2/bosun.env" && ! git --git-dir="$1/bosun.git" config bosun.branch' \
+    _ "$R_VERSIONS" "$R_CONFIG" "$r_env" "${R_ENV[@]}" "$R_LINK/bin/bosun"
+  rmdir "$R_VERSIONS/bosun.git/config.lock"
+  r_env="$(cat "$R_CONFIG/bosun.env")" # as bosun settings set wrote it back
+  out="$(rb update --branch try-x --dry-run 2>&1)"
+  check "--branch --dry-run shows the plan to the branch's head, and writes nothing" bash -c '
+    grep -q "^Update $2 -> $3" <<<"$1" && ! git --git-dir="$4/bosun.git" config bosun.branch && [ "$(cat "$5/bosun.env")" = "$6" ]' \
+    _ "$out" "$U_V2_COMMIT" "$U_V3_COMMIT" "$R_VERSIONS" "$R_CONFIG" "$r_env"
+  rb update --branch try-x </dev/null >"$R/declined.out" 2>&1
+  rc=$?
+  check "--branch said no to (no terminal: the plan alone): the install follows the branch from now on, and says so" bash -c '
+    [ "$1" = 0 ] && grep -qx "bosun follows try-x from now on (bosun update --branch main follows main again)" "$2" &&
+      grep -q "^bosun now follows try-x; nothing else changed: in a terminal it asks first" "$2" && ! grep -q "Nothing has changed" "$2"' _ "$rc" "$R/declined.out"
+  check "... bosun.branch is try-x, the channel main in bosun.env (its copy kept), the version as it was" bash -c '
+    [ "$(git --git-dir="$1/bosun.git" config bosun.branch)" = try-x ] && grep -q "^BOSUN_UPDATE_CHANNEL=\"\{0,1\}main\"\{0,1\}" "$2/bosun.env" &&
+      ls "$2"/bosun.env.pre-init-* >/dev/null && [ "$(cd "$3" && pwd -P)" = "$4" ]' _ "$R_VERSIONS" "$R_CONFIG" "$R_LINK" "$R_V2"
+  rb update --yes >"$R/try.out" 2>&1
+  rc=$?
+  check "... so bosun update moves to the branch's head (exit 0)" bash -c '[ "$1" = 0 ] && [ "$(cd "$2" && pwd -P)" = "$3" ] || { tail -15 "$4"; exit 1; }' \
+    _ "$rc" "$R_LINK" "$(cd "$R_VERSIONS/${U_V3_COMMIT:0:12}" 2>/dev/null && pwd -P)" "$R/try.out"
+  check "--branch to a branch whose code is older in a store's format than the data is refused, pointing at --back" bash -c '
+    out="$("$@" update --branch old-x 2>&1)"; [ $? = 1 ] && grep -q "has the ledger at format 1, and the data is at format 2" <<<"$out" &&
+      grep -q "bosun update --back" <<<"$out"' _ "${R_ENV[@]}" "$R_LINK/bin/bosun"
+  check "... nothing changed: still following try-x, bosun.env as it was, the version as it was" bash -c '
+    [ "$(git --git-dir="$1/bosun.git" config bosun.branch)" = try-x ] && [ "$(cat "$2/bosun.env")" = "$3" ] && [ "$(cd "$4" && pwd -P)" = "$5" ]' \
+    _ "$R_VERSIONS" "$R_CONFIG" "$(cat "$R_CONFIG/bosun.env")" "$R_LINK" "$(cd "$R_VERSIONS/${U_V3_COMMIT:0:12}" && pwd -P)"
+  rb update --branch main </dev/null >"$R/main.out" 2>&1
+  rc=$?
+  check "--branch main follows main again, and says so; main's head (the update section's v4, its launchd templates broken) is blocked at its plan (exit 1)" bash -c '
+    [ "$1" = 1 ] && [ "$(git --git-dir="$2/bosun.git" config bosun.branch)" = main ] &&
+      grep -qx "bosun follows main from now on (bosun update --branch main follows main again)" "$3" && grep -q "The update is blocked." "$3"' _ "$rc" "$R_VERSIONS" "$R/main.out"
+  rb update --branch rules-up --yes >"$R/rules.out" 2>&1
+  rc=$?
+  check "--branch rules-up --yes follows it and moves to its head (exit 0), the ledger's rules at 2 from then on" bash -c '
+    [ "$1" = 0 ] && [ "$(git --git-dir="$2/bosun.git" config bosun.branch)" = rules-up ] || { tail -15 "$3"; exit 1; }' _ "$rc" "$R_VERSIONS" "$R/rules.out"
+  check "--branch to a branch whose code is older in a store's rules than the data is refused, pointing at --back" bash -c '
+    out="$("$@" update --branch try-x --dry-run 2>&1)"; [ $? = 1 ] && grep -q "reads the ledger under rules 1, and the data is under rules 2" <<<"$out" &&
+      grep -q "bosun update --back" <<<"$out"' _ "${R_ENV[@]}" "$R_LINK/bin/bosun"
   always_run
 else
   fail_check "fake launchctl/pmset are not first on PATH; skipped install tests"

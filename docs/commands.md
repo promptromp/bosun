@@ -62,7 +62,7 @@ commands print JSON for it, as described there.
 
 | Command | What it does |
 |---|---|
-| `bosun update [--dry-run] [--yes] [--json]` / `update --check [--json]` / `update --skip <version>` / `update note --window <w> --stock\|--status` / `update advance` | Update bosun to the newest release (or, on the `main` channel, the head of its branch) while the agents keep working, without losing a write: it shows its plan and asks, backs up and migrates your data, switches versions, and brings the windows along. It ends with a short summary, saved as `summary.md` in the backup's folder. `--check` says whether there is an update and changes nothing; `--skip` stops a release being offered; `--json` prints one object with the plan, the update's record and the summary (`null` unless an update ended in that run). See [Updating](updating.md) and [details](#bosun-update) |
+| `bosun update [--dry-run] [--yes] [--json]` / `update --back [...]` / `update --branch <name> [...]` / `update --check [--json]` / `update --skip <version>` / `update note --window <w> --stock\|--status` / `update advance` | Update bosun to the newest release (or, on the `main` channel, the head of its branch) while the agents keep working, without losing a write: it shows its plan and asks, backs up and migrates your data, switches versions, and brings the windows along. It ends with a short summary, saved as `summary.md` in the backup's folder. `--back` goes back to the version the last update came from, keeping what was written since wherever the older version can read it; `--branch` follows a branch of the origin from now on and updates to its head. `--check` says whether there is an update and changes nothing; `--skip` stops a release (or a head of `main`) being offered; `--json` prints one object with the plan, the update's record and the summary (`null` unless an update ended in that run). See [Updating](updating.md) and [details](#bosun-update) |
 | `bosun uninstall [--dry-run] [--yes] [--delete-ledger] [--delete-knowledge] [--purge]` | Take bosun off this Mac, the menu bar app and its Open at Login job too. It says what goes and what stays, asks whether you are sure and whether to keep your ledger and ontology, and changes nothing until you have answered. See [Uninstall](updating.md#uninstall) |
 
 ## Run by bosun and its agents
@@ -317,8 +317,27 @@ How to use it: [Updating](updating.md). What each part does:
   ls-remote`, fetches its tag to resolve the commit it points at, reads its notes from the tag's message, and prints
   one line, or with `--json` one object. It exits 0 whatever it finds; a problem, such as an origin that cannot be
   reached, is its `error`.
-- **`--skip <version>`** records a release not to be offered again (`update-skip.json` in the state folder):
-  `--check` then reports it as `skipped`, and the next release as usual. It does not stop an update you run.
+- **`--skip <version>`** records a release not to be offered again (`update-skip.json` in the state folder), or on
+  the `main` channel a head, by the name `--check` gives it (its commit's first 12 characters): `--check` then
+  reports it as `skipped`, and the next one as usual. It does not stop an update you run.
+- **`--back`** goes back to the version the last finished update came from, one step, never further: a second
+  `--back` is refused (`bosun update` goes forward again), and so is one with no finished update, or to a checkout
+  from before versions (by hand: [Going back](updating.md#going-back)). The version installed runs it and fetches
+  nothing; the older version's folder is added again from `bosun.git` if it is gone (never by a dry run, which reads
+  what it can of that version there and says what it cannot tell). It restores that update's
+  backup only for what the older version cannot read: a store whose format or rules version differs between the two
+  (the changes written since then go, kept in a backup it takes first), and `bosun.env`, whose changes by that update
+  are taken back where they still read as it wrote them (the file kept as `bosun.env.pre-back-<time>`). Everything
+  else stays, with what was written since; with nothing to restore it only switches back. The plan says which, and
+  what restoring loses, before it asks. The windows come along as for an update, its summary says "bosun went
+  back", and the version it left is recorded as skipped, so `--check` and the menu bar app no longer offer it.
+- **`--branch <name>`** follows the branch `<name>` of the origin from now on (`bosun.branch` in `bosun.git`, and
+  `BOSUN_UPDATE_CHANNEL=main` through `bosun settings set` if it is not), then updates to its head. A branch the
+  origin does not have is refused before anything changes; `--dry-run` writes nothing; said no to, the install still
+  follows the branch. `--branch main` follows `main` again.
+- **A target older than the data.** Before it hands over to the new version, the version installed checks that it
+  would not read the data in an older format, or under older rules, than the data is in (a branch from before a
+  migration, a revert on `main`), and refuses, pointing at `--back`.
 - **The plan** lists the commits, the stores' migrations, the prompts that changed, what each window gets, the
   launchd jobs to reload, a console to restart, and what stops it (something the new version needs and this Mac
   lacks, a store it cannot read, a link a backup cannot copy, a `kg forget` cut short). In a terminal it asks first;
@@ -327,9 +346,10 @@ How to use it: [Updating](updating.md). What each part does:
   work and pauses writes briefly: it backs the data up (`backups/` in the state folder, the last 3 kept), migrates
   it, switches the install link to the new version and checks each store, and on any failure puts everything back
   as it was.
-- **After the switch** it reloads the launchd jobs whose plist changed, restarts the check-in loop, runs the new
-  version's `bosun app update`, restarts the console's job when it is loaded and wanted, lifts the hold, and keeps
-  what `bosun doctor` finds. Then it brings the windows along, each as the plan says but decided again from what it
+- **After the switch** it makes sure the install leads to the new version, reloads the launchd jobs whose plist
+  changed and unloads those the new version has none of, restarts the check-in loop, runs the new version's `bosun
+  app update` (never to an app older than the one installed), restarts the console's job when it is loaded and
+  wanted, lifts the hold, and keeps what `bosun doctor` finds. Then it brings the windows along, each as the plan says but decided again from what it
   is doing now ([After an update](orchestrator.md#after-an-update-the-windows-brought-along)).
 - **The summary** lists the commits and how long it took, each store's migrations and version bumps, the config it
   changed and its new keys, what to change by hand in your own files, how many prompts changed, the jobs reloaded,

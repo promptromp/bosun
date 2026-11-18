@@ -10,7 +10,10 @@ anything, so it may run while an update does. Run by libexec/bosun-update, in th
     update_lookup.py check [--json]   the answer, as one line or as JSON; always exit 0 (a problem is the
                                       answer's "error")
     update_lookup.py skip <version>   record a release not to be offered (update-skip.json in the
-                                      state folder)
+                                      state folder), or on the `main` channel a head, by the name
+                                      --check gives it (its commit's first 12 characters)
+    update_lookup.py branch <name>    whether the origin has the branch <name> (`bosun update --branch`):
+                                      exit 0, or 1 with a line on stderr
     update_lookup.py target           the commit `bosun update` installs on the `releases` channel: a line
                                       "commit <sha> <tag>", or "ahead <tag>" when the install descends from
                                       the newest release (nothing to update to); exit 1 with a line on stderr
@@ -40,8 +43,6 @@ SKIP_FILE = "update-skip.json"
 GIT_SECONDS = 120  # the most any one git call over the network may take
 LOCAL_SECONDS = 30
 USAGE = 2  # the exit status of a command line that makes no sense
-# A transfer slower than 1 KB/s for 30 seconds is given up on, as the update's own fetch does.
-SLOW = ("-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=30")
 # Where the release looked at is fetched to: a remote ref, one that each fetch overwrites, never
 # refs/tags. Uninstall (lib/checkout_work.py) counts what a branch or tag of the versions' repository
 # holds that no remote ref does as work of yours, and would keep the versions folder for a tag.
@@ -57,7 +58,7 @@ def _git(repo: Path, *args: str, network: str | None = None, why: bool = False) 
     network (with <why>, and git's last line of complaint, credentials taken off), else git's own words."""
     try:
         done = versions.git(
-            *(SLOW if network else ()),
+            *(versions.SLOW if network else ()),
             "--git-dir",
             str(repo),
             *args,
@@ -248,15 +249,18 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("check").add_argument("--json", action="store_true")
     commands.add_parser("skip").add_argument("version")
+    commands.add_parser("branch").add_argument("name")
     commands.add_parser("target")
     return parser
 
 
-def _skip(version: str) -> int:
+def _skip(version: str, channel: str) -> int:
     state_dir = _state_dir()
-    if update_check.release_key(version) is None:
+    if not update_check.skippable(version, channel):
         print(
-            f"bosun update: --skip takes a release version, such as v2026.11.12 (not {version!r})",
+            "bosun update: --skip takes a release version, such as v2026.11.12, or on the main channel "
+            f"the head's commit as --check names it ({update_check.SHORT} characters; not {version!r} on the "
+            f"{channel} channel)",
             file=sys.stderr,
         )
         return USAGE
@@ -265,9 +269,56 @@ def _skip(version: str) -> int:
     write_skip(state_dir, version)
     print(
         f"bosun will not offer {version} again: `bosun update --check` reports it as skipped, "
-        "and a newer release as usual"
+        "and a newer one as usual"
     )
     return 0
+
+
+def has_branch(name: str) -> None:
+    """Whether the origin has the branch <name>, asked with `git ls-remote --heads`; LookupFailed, saying
+    so, when it has not or cannot be reached (`bosun update --branch` asks before anything changes)."""
+    repo = _repo()
+    out = _git(
+        repo,
+        "ls-remote",
+        "--heads",
+        "origin",
+        f"refs/heads/{name}",
+        network=f"could not reach {origin_url(repo)}",
+        why=True,
+    )
+    if not any(line.endswith(f"\trefs/heads/{name}") for line in out.splitlines()):
+        raise LookupFailed(f"{origin_url(repo)} has no branch {name}: nothing changed")
+
+
+def name_on(channel: str, commit: str) -> str | None:
+    """The name `bosun update --check` gives the version at <commit> on <channel>: on `main` its first
+    SHORT characters; on `releases` the release's tag, if one names it (asked of the origin; None when it
+    cannot be, or none does)."""
+    if channel == "main":
+        return commit[: update_check.SHORT]
+    try:
+        return update_check.version_at(commit, _remote_tags(_repo()))
+    except LookupFailed:
+        return None
+
+
+def skip_left(state_dir: Path, channel: str, commit: str) -> str | None:
+    """The version at <commit>, which `bosun update --back` left, recorded as skipped (write_skip), by the
+    name --check gives it on <channel> (name_on): the name, or None when it has none to skip by."""
+    name = name_on(channel, commit)
+    if name is not None:
+        write_skip(state_dir, name)
+    return name
+
+
+def branch_followed() -> str:
+    """The branch the install follows on the `main` channel (bosun.git's bosun.branch); main for an install
+    that is no version, whose check says so itself."""
+    try:
+        return _branch(_repo())
+    except LookupFailed:
+        return "main"
 
 
 def main(argv: Sequence[str]) -> int:
@@ -277,10 +328,15 @@ def main(argv: Sequence[str]) -> int:
     try:
         if args.command == "check":
             found = answer(channel, _state_dir())
-            print(json.dumps(found, indent=2) if args.json else update_check.describe(found))
+            print(
+                json.dumps(found, indent=2) if args.json else update_check.describe(found, branch_followed())
+            )
             return 0
         if args.command == "skip":
-            return _skip(args.version)
+            return _skip(args.version, channel)
+        if args.command == "branch":
+            has_branch(args.name)
+            return 0
         _channel(channel)
         if channel != "releases":
             raise LookupFailed("the main channel's target is the wrapper's")

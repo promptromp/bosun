@@ -29,7 +29,12 @@ of truth, so don't copy rules into this file.
   version folder, no lock) and
   `lib/update_facts.py` (the facts the plan is made from, and what stops it there) and `lib/update.py`
   (the command: the rehearsal, the hold, the freeze and its put-back, the release, an update cut
-  short carried on; `update note` and `update advance`), `lib/update_agents.py` (the decisions, its
+  short carried on; `update note` and `update advance`), `lib/update_back.py` (`bosun update --back`: back to
+  the version the last update came from, an update in reverse run by the version installed through `lib/update.py`'s
+  own steps and record, `kind` back; and `target-check`, which the wrapper runs before it hands over to any version)
+  with `lib/update_back_plan.py` (pure: which update it goes back over, what each store and bosun.env need, what
+  restoring loses, its texts, and whether a version would read the data older than it is) and
+  `migrations.revert_config` (an update's changes to bosun.env taken back), `lib/update_agents.py` (the decisions, its
   only file the update's record: what each window gets turn by turn, the take-stock and update prompts,
   what came of each, and the takeover of the windows the last update still waits for: `taken_or_left`,
   `take_over`, the record's `carried` and `taken_over`), `lib/update_windows.py` (carrying them out: bosun's commands, the update's wait

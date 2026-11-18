@@ -37,16 +37,18 @@ _AT_FDCWD = -100
 
 
 def git(
-    *args: str, cwd: Path | None = None, timeout: float | None = None
+    *args: str, cwd: Path | None = None, timeout: float | None = None, env: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
-    """git with no inherited GIT_* variables (a git hook's, another repository's tooling) and none of
-    the user's hooks; its output kept, decoded tolerantly. bosun update's git goes through it too.
-    Past <timeout> seconds it raises subprocess.TimeoutExpired."""
-    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    """git with no inherited GIT_* variables (a git hook's, another repository's tooling) but <env>'s, none
+    of the user's hooks, and no terminal as its input (it never waits on one); its output kept, decoded
+    tolerantly. bosun update's git goes through it too. Past <timeout> seconds it raises
+    subprocess.TimeoutExpired."""
+    clean = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     return subprocess.run(
         ["git", "-c", "core.hooksPath=/dev/null", *args],
         cwd=cwd,
-        env=env,
+        env={**clean, **(env or {})},
+        stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
         errors="replace",
@@ -61,6 +63,53 @@ def commit_of(root: Path) -> str:
     if done.returncode != 0:
         raise RuntimeError(f"cannot read the commit of {root}: {done.stderr.strip()}")
     return done.stdout.strip()
+
+
+LOCAL_SECONDS = 30  # the most a git call that stays on this Mac may take
+# A transfer slower than 1 KB/s for 30 seconds is given up on, never waited for without end: what every git
+# call over the network takes (bosun update's lookups, a back's fetch of the older version's commit), as the
+# wrapper's own fetch does.
+SLOW = ("-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=30")
+
+
+def has_commit(repo: Path, commit: str) -> bool:
+    """Whether the git directory <repo> holds the commit <commit>."""
+    try:
+        return (
+            git(
+                "--git-dir", str(repo), "cat-file", "-e", f"{commit}^{{commit}}", timeout=LOCAL_SECONDS
+            ).returncode
+            == 0
+        )
+    except subprocess.TimeoutExpired:
+        return False
+
+
+def show(repo: Path, commit: str, path: str) -> bytes | None:
+    """<path> as the commit <commit> of the git directory <repo> holds it, byte for byte; None when it holds
+    no such file (or git cannot say in time). Nothing is checked out."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    try:
+        done = subprocess.run(
+            ["git", "-c", "core.hooksPath=/dev/null", "--git-dir", str(repo), "show", f"{commit}:{path}"],
+            env=env,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            check=False,
+            timeout=LOCAL_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def tree(repo: Path, commit: str) -> list[str]:
+    """Every file's path in the commit <commit> of the git directory <repo>; none when git cannot say."""
+    try:
+        done = git("--git-dir", str(repo), "ls-tree", "-r", "--name-only", commit, timeout=LOCAL_SECONDS)
+    except subprocess.TimeoutExpired:
+        return []
+    return done.stdout.splitlines() if done.returncode == 0 else []
 
 
 def folder_for(versions: Path, commit: str) -> Path:

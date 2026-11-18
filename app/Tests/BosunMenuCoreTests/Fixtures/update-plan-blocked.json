@@ -2,6 +2,7 @@
   "contract": 1,
   "error": null,
   "plan": {
+    "back": null,
     "blockers": [
       "a migration of the knowledge store is missing"
     ],
@@ -67,6 +68,7 @@
         "repo"
       ]
     ],
+    "left_by_back": "",
     "migrations": [
       [
         "ledger",
@@ -85,6 +87,8 @@
     "rules": [],
     "stopped": [],
     "to_commit": "2222222222222222222222222222222222222222",
+    "unknown": [],
+    "unload": [],
     "unwritten": [],
     "user_changes": [
       "sessions.yml: add connectors: to the exporter entry"

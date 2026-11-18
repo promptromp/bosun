@@ -68,6 +68,9 @@ HOLD_STEPS = STEPS[STEPS.index("holding") : STEPS.index("released")]
 # An update that ended with bosun as it was: cut short before anything changed, or put back.
 PUT_BACK = ("failed", "restored")
 BEFORE_FREEZE = ("planned", "rehearsed", "holding")  # nothing had changed but the hold
+# Past its checks: switched for good (what is left of it rolls forward), or ended with its windows.
+PAST_CHECKS = ("checked", "released", "agents", "done")
+BACK = "back"  # the kind of a back's record (`bosun update --back`)
 # Who holds update.lock, each in a file of its own in UPDATE_DIR naming its pid and update id (marking): an
 # update, from before it waits for the lock until it ends, and the check-in loop's turn at the windows an
 # update left. A marker is live only while its owner holds an exclusive lock on its lock file beside it
@@ -163,6 +166,17 @@ class UpdateState:
     # Which of the carried record's windows this update took over (update_agents.take_over): the others
     # had closed, or neither update gives them anything; an older record has none.
     taken_over: tuple[str, ...] = ()
+    # What this record is: "" an update (every record before `bosun update --back` too), BACK a back
+    # (lib/update_back.py), which goes from the version installed to the one the last update came from.
+    kind: str = ""
+    # The last finished record when this one started (last_finished, as `write` writes one, its own
+    # records left out): a back after this update failed still finds the update to go back over, and a
+    # back's is the update it goes back over. An older record has none.
+    previous: Mapping[str, Any] = dataclasses.field(default_factory=dict)
+    # A back's: what each store restored, a line each, as the step learnt it (the summary's).
+    restored: tuple[str, ...] = ()
+    # The launchd jobs the release unloaded, as the version updated to has none of them.
+    unloaded: tuple[str, ...] = ()
 
 
 _TUPLES = (
@@ -176,9 +190,11 @@ _TUPLES = (
     "reloaded",
     "doctor_before",
     "taken_over",
+    "restored",
+    "unloaded",
 )
 _MAPPINGS = ("windows",)  # of window names to lists of strings
-_OBJECTS = ("plan", "carried")  # JSON objects, read as they are (their reader checks their parts)
+_OBJECTS = ("plan", "carried", "previous")  # JSON objects, read as they are (their reader checks their parts)
 
 
 _INTS = ("hold_until", "freeze_ms")
@@ -396,6 +412,25 @@ def owing(state: UpdateState | None, abandoned: bool = False) -> UpdateState | N
     if ended and state.carried:
         return owing(from_object(state.carried))
     return None
+
+
+def last_finished(state: UpdateState | None) -> UpdateState | None:
+    """The last record that changed the version, as <state> tells it: <state> itself once past its checks
+    (PAST_CHECKS: what is left of it rolls forward); else, for one that ended with bosun as it was or will
+    be put back (before its checks), the one before it (`previous`); None when there is none."""
+    if state is None:
+        return None
+    if state.step in PAST_CHECKS:
+        return state
+    return from_object(state.previous) if state.previous else None
+
+
+def bare(state: UpdateState | None) -> dict[str, Any]:
+    """<state> as `write` writes it, without the records it keeps (`carried`, `previous`): what another
+    record keeps of it, so records never nest; {} for None."""
+    if state is None:
+        return {}
+    return as_object(dataclasses.replace(state, carried={}, previous={}))
 
 
 def carried_back(state_dir: Path) -> UpdateState | None:

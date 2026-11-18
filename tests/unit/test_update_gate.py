@@ -282,7 +282,10 @@ class RerunTest(World):
         self.assertIn("format 3", err)
         self.assertIn("too", err)
 
-    def test_an_older_store_is_refused_in_one_line(self) -> None:
+    def test_an_older_store_of_the_version_installed_is_refused_in_one_line(self) -> None:
+        """The install leads to this very version: data not yet migrated, which bosun update migrates."""
+        versions.point(self.install, self.old)
+
         def run(argv: list[str]) -> int:
             raise update_gate.StoreOlder("ledger", 1, 2)
 
@@ -292,6 +295,65 @@ class RerunTest(World):
         self.assertEqual(len(err.splitlines()), 1)
         self.assertIn("format 1", err)
         self.assertIn("run bosun update to migrate it", err)
+
+    def test_an_older_store_in_a_checkout_is_refused_in_one_line(self) -> None:
+        """A checkout is its own install: nothing elsewhere writes for it."""
+        checkout = self.state.parent / "checkout"
+        (checkout / "bin").mkdir(parents=True)
+        with mock.patch.object(update_gate, "ROOT", checkout):
+
+            def run(argv: list[str]) -> int:
+                raise update_gate.StoreOlder("ledger", 1, 2)
+
+            code, err = self.guarded(run, ["upsert"])
+        self.assertEqual(code, 1)
+        self.assertIsNone(self.ran())
+        self.assertIn("run bosun update to migrate it", err)
+
+    def test_an_older_store_runs_again_on_the_version_the_link_leads_to(self) -> None:
+        """A back restored the store for the older version the link now leads to, and this process, of the
+        newer one, started before: the installed version writes it, with the same arguments and stdin."""
+        versions.point(self.install, self.old)
+        with mock.patch.object(update_gate, "ROOT", self.new):  # this runs the newer version
+
+            def run(argv: list[str]) -> int:
+                sys.stdin.read()
+                raise update_gate.StoreOlder("ledger", 1, 2)
+
+            code, err = self.guarded(run, ["said", "--window", "api"], b"payload")
+        self.assertEqual((code, err), (3, ""))
+        ran = self.ran()
+        assert ran is not None
+        self.assertEqual((ran["version"], ran["rerun"], ran["stdin"]), (FROM[:12], "1", b"payload"))
+        self.assertEqual(ran["args"], ["ledger", "said", "--window", "api"])
+
+    def test_a_newer_store_still_runs_again_on_the_version_the_link_leads_to(self) -> None:
+        """The other way: an update moved the store on, and this process, of the older version, started
+        before (the link at the newer one, as World sets it)."""
+
+        def run(argv: list[str]) -> int:
+            raise update_gate.StoreNewer("ledger", 2, 1)
+
+        self.assertEqual(self.guarded(run, ["upsert"]), (3, ""))
+        ran = self.ran()
+        assert ran is not None
+        self.assertEqual(ran["version"], TO[:12])
+
+    def test_an_older_store_refused_again_says_so_in_one_line(self) -> None:
+        versions.point(self.install, self.old)
+        with (
+            mock.patch.object(update_gate, "ROOT", self.new),
+            mock.patch.dict(os.environ, {update_gate.RERUN_ENV: "1"}),
+        ):
+
+            def run(argv: list[str]) -> int:
+                raise update_gate.StoreOlder("ledger", 1, 3)
+
+            code, err = self.guarded(run, ["upsert"])
+        self.assertEqual(code, 1)
+        self.assertIsNone(self.ran())
+        self.assertEqual(len(err.splitlines()), 1, err)
+        self.assertIn("older than the installed bosun's 3 too", err)
 
     def check_the_gate(self, argv: list[str]) -> int:
         sys.stdin.read()

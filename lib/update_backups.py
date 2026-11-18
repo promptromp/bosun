@@ -50,16 +50,21 @@ IN_FLIGHT = (
     "agent-changes.json",
     *(name for agent in agent_state.AGENTS.values() for name in agent.PROFILE.state_files),
 )
+# Each store's part of a backup, what its lock covers: what a failed freeze puts back of it, and what
+# `bosun update --back` restores of a store the older version cannot read (lib/update_back.py).
+STORE_PARTS: dict[str, tuple[str, ...]] = {
+    "ledger": (
+        "state/ledger.json",
+        "state/ledger.json.bak",
+        "state/ledger.md",
+        "state/journal",
+        "state/replica.json",
+    ),
+    "knowledge": ("config/knowledge",),
+}
 # What the freeze's locks cover, so what a failed freeze puts back (an event queued meanwhile is
 # never undone).
-FROZEN = (
-    "state/ledger.json",
-    "state/ledger.json.bak",
-    "state/ledger.md",
-    "state/journal",
-    "state/replica.json",
-    "config/knowledge",
-)
+FROZEN = tuple(part for parts in STORE_PARTS.values() for part in parts)
 _KEPT_KINDS = (LEDGER, KNOWLEDGE, SETTINGS)
 _NEVER = (BACKUPS_DIR, "logs", "dry-runs", "update")
 _CHUNK = 1 << 20
@@ -361,6 +366,14 @@ def _verify(manifest: Manifest, backup: Path, only: Sequence[str]) -> None:
         source = backup / relative
         if source.is_symlink() or not source.is_file() or digest(source) != expected:
             raise BackupError(f"{source} is not as the manifest has it: nothing was restored")
+
+
+def check(backup: Path, only: Sequence[str]) -> Manifest:
+    """<backup>'s manifest, once every file of it under <only> was found as the manifest has it, as
+    restore checks before it writes (a back's rehearsal); BackupError naming what is not."""
+    manifest = read_manifest(backup)
+    _verify(manifest, backup, _normalised(only))
+    return manifest
 
 
 def _put_back_all(

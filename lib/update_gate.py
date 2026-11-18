@@ -13,14 +13,17 @@ anything is journaled, checks two things in this order, and nothing is written w
   know (UpdateNewer: a newer bosun wrote it, which the installed code knows), or is there but cannot
   be read (UpdateUnreadable: it may be a freeze, so the write fails closed);
 - check_format, on the format the store's file records, before its shape is checked: the store is
-  newer than this code (StoreNewer), or older (StoreOlder, which `bosun update` migrates; format 0
-  is no store yet, made in this code's format).
+  newer than this code (StoreNewer), or older (StoreOlder, which `bosun update` migrates, or which a
+  back restored for the version the install link now leads to; format 0 is no store yet, made in this
+  code's format).
 
 The commands that write run under guarded, which does what each refusal calls for, outside every
-store lock: a newer store or a newer bosun's record runs the command again through the install
+store lock: a newer store, an older one while the install link leads to another version than this
+process's (installed_elsewhere), or a newer bosun's record runs the command again through the install
 link, with the same arguments and stdin; a freeze cut short is put back first (recover), then the
 same; a busy freeze is waited out (WAIT_SECONDS; put back if its update stopped inside it), then the
-same; an older store, or a record that cannot be read, is refused in one line (run_again False). A
+same; an older store the installed version is (a checkout run on data not yet migrated), or a record
+that cannot be read, is refused in one line (run_again False). A
 run again is never run again (RERUN_ENV). Writers that are not commands (bosun's own background
 work) catch WriteRefused and report a failed run.
 
@@ -81,8 +84,19 @@ class StoreNewer(FormatRefused):
         super().__init__(f"the {store} is format {found}, newer than this bosun's {mine}", store, found, mine)
 
 
+def installed_elsewhere() -> bool:
+    """Whether the install link leads to another version than this process's own: what the store is in
+    is then the installed version's to write (a back restored a store to its older format, or an update
+    moved it on), never this one's."""
+    current = versions.current(install_paths.install_path(ROOT))
+    return current is not None and current.resolve() != ROOT.resolve()
+
+
 class StoreOlder(FormatRefused):
-    run_again = False
+    """A store older than this code. Where the install link leads to another version (installed_elsewhere:
+    `bosun update --back` restored it for the older version, and this process started before), that
+    version writes it: run again through the link, as for a newer store. Else (a checkout, or the version
+    installed, run on data not yet migrated) refused in one line."""
 
     def __init__(self, store: str, found: int, mine: int) -> None:
         super().__init__(
@@ -92,6 +106,7 @@ class StoreOlder(FormatRefused):
             found,
             mine,
         )
+        self.run_again = installed_elsewhere()
 
 
 class UpdateCutShort(WriteRefused):
@@ -364,9 +379,10 @@ def _waited_out(state_dir: Path, seconds: float) -> bool:
 
 def _again(refused: WriteRefused) -> str:
     """Why a run again was refused too."""
-    if isinstance(refused, StoreNewer):
+    if isinstance(refused, FormatRefused):
+        than = "newer" if isinstance(refused, StoreNewer) else "older"
         return (
-            f"the {refused.store} is format {refused.found}, newer than the installed bosun's "
+            f"the {refused.store} is format {refused.found}, {than} than the installed bosun's "
             f"{refused.mine} too; nothing was written"
         )
     if isinstance(refused, UpdateNewer):

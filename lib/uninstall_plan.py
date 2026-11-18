@@ -65,6 +65,8 @@ STATE_FILES = (
     ("learn", LEDGER),  # what learning found and what you decided, which a later run goes by
     # The update's backups (lib/update_backups.py): each holds the whole ledger and knowledge base, so they
     # go when either is deleted (wanted_gone). A deletion of a person deletes them all.
+    # A back's own backup is one of them, and so is the summary it saves beside the update it went back over
+    # (back-summary.md, in that update's backup folder).
     ("backups", BACKUPS),
     ("ledger.json.tmp", WORKING),  # what a write cut short left
     (".replica.json.*.tmp", WORKING),  # what making replica.json left when it was cut short
@@ -129,6 +131,7 @@ CONFIG_FILES = (
     ("workstreams.json", SETTINGS),
     ("*.pre-init-*", SETTINGS),  # what `bosun init` backed up
     ("bosun.env.pre-update-*", SETTINGS),  # what `bosun update` backed up
+    ("bosun.env.pre-back-*", SETTINGS),  # what `bosun update --back` kept before it took changes back
     (".bosun.env.*.tmp", WORKING),  # what `bosun update` was writing, cut short (bosun.env, its copy)
     (".*.restoring", WORKING),  # what an update's restore was writing, cut short (lib/update_backups.py)
     ("forbidden-terms.txt", OURS_TO_LEAVE),  # guards commits to this repo; bosun runs without it

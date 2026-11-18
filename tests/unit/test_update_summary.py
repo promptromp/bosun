@@ -20,6 +20,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import migrations
 import update_agents
+import update_back_plan
 import update_plan
 import update_state
 import update_summary
@@ -244,7 +245,7 @@ class TextTest(unittest.TestCase):
             "\nBackup: deleted by a kg forget since; going back past it is no longer possible\n", text
         )
         self.assertNotIn("backups/", text)
-        self.assertTrue(text.endswith("Going back: docs/updating.md#going-back\n"))
+        self.assertTrue(text.endswith("Going back: bosun update --back (docs/updating.md#going-back)\n"))
 
     def test_handed_items_and_my_files_are_named(self) -> None:
         record = a_record(user_changes=("sessions.yml: rename `model:` to `agent_model:`",))
@@ -451,6 +452,68 @@ class TextTest(unittest.TestCase):
         self.assertEqual(said["jobs"], ["com.bosun.morning.watchdog"])  # the label, whole
 
 
+class BackTest(unittest.TestCase):
+    """A back's summary (`bosun update --back`): it says it went back, each store restored or kept, and how
+    to go forward again."""
+
+    def summary(self, backup: str = "") -> str:
+        back = update_back_plan.BackPart(
+            "20261104-153000-95545b0-c41b186",
+            "2026-11-04T15:30:00+00:00",
+            BACKUP,
+            (
+                update_back_plan.StorePart("ledger", 2, 1, 1, 1, 1),
+                update_back_plan.StorePart("knowledge", 1, 1, 1, 1, 1),
+            ),
+        )
+        plan = a_plan(from_commit=TO, to_commit=FROM, back=back.as_record())
+        state = a_record(
+            from_commit=TO,
+            to_commit=FROM,
+            kind=update_state.BACK,
+            backup=backup,
+            plan=update_plan.as_record(plan),
+            restored=(
+                (
+                    "ledger: restored from the update's backup (format 2 -> 1); 3 changes written since went "
+                    "with it, kept in the backup going back took"
+                ),
+            ),
+            config_changed=(
+                "bosun.env: BOSUN_NEW is BOSUN_OLD again (before: bosun.env.pre-back-20261104-160000)",
+            ),
+            unloaded=(f"{LABEL}.now",),
+        )
+        return rendered(update_summary.of_record(state, (("api", "restarted"),), bool(backup), 2000, 31))
+
+    def test_it_says_it_went_back_and_how_to_go_forward(self) -> None:
+        text = self.summary(f"{HOME}/.local/state/bosun/backups/20261104-160000-c41b186-95545b0")
+        lines = text.splitlines()
+        self.assertEqual(
+            lines[0], "bosun went back: c41b186 -> 95545b0 in 31s, over the update of 2026-11-04 15:30 UTC"
+        )
+        restored = "restored from the update's backup (format 2 -> 1); 3 changes written since went with it"
+        self.assertIn(f"  ledger      {restored}", text)
+        self.assertIn("  knowledge   kept, with what was written since", text)
+        self.assertIn(
+            "  bosun.env   BOSUN_NEW is BOSUN_OLD again (before: bosun.env.pre-back-20261104-160000)", text
+        )
+        self.assertIn("Jobs unloaded: now", text)
+        self.assertIn("Backup: ~/.local/state/bosun/backups/20261104-160000-c41b186-95545b0 (2.0 KB)", text)
+        self.assertEqual(lines[-1], "Going forward again: bosun update")
+
+    def test_one_that_restored_nothing_names_no_backup(self) -> None:
+        text = self.summary()
+        self.assertNotIn("Backup:", text)
+        self.assertNotIn(update_summary.BACKUP_GONE, text)
+
+    def test_an_update_s_summary_ends_with_the_way_back(self) -> None:
+        self.assertEqual(
+            rendered(built()).splitlines()[-1],
+            "Going back: bosun update --back (docs/updating.md#going-back)",
+        )
+
+
 class FoundTest(unittest.TestCase):
     """What the update found after the switch, for the summary: what bosun doctor fails at that
     it did not before the update (each FAIL with its detail), how many already failed, and how many
@@ -580,7 +643,7 @@ class RecordTest(unittest.TestCase):
             text,
             "bosun updated: 95545b0 -> c41b186 in 2m 41s\n"
             "Backup: ~/.local/state/bosun/backups/20261104-153207-95545b0-c41b186 (3.1 MB)\n"
-            "Going back: docs/updating.md#going-back\n",
+            "Going back: bosun update --back (docs/updating.md#going-back)\n",
         )
 
     def test_an_update_that_took_no_backup_names_none(self) -> None:
