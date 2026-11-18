@@ -263,6 +263,10 @@ def profile_line(harness: str, profile: Profile) -> str:
 
 
 def cmd_profiles(_args: list[str]) -> int:
+    """What lib/agent_profiles.tsv holds, which the shell reads (lib/agents.sh) instead of starting Python
+    for it in every command: a change to a profile or to AGENTS writes it again,
+    `python3 lib/agent_state.py profiles >lib/agent_profiles.tsv` (tests/unit/test_agent_profiles.py
+    checks)."""
     print("\n".join(profile_line(harness, agent.PROFILE) for harness, agent in AGENTS.items()))
     return 0
 

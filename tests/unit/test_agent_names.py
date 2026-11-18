@@ -18,7 +18,9 @@ from agent_state import AGENTS
 ROOT = Path(__file__).resolve().parents[2]
 
 
-# The agents' own modules, and the table that lists them, may name them.
+# The agents' own modules, and the table that lists them, may name them. (lib/agent_profiles.tsv, the shell's
+# copy of the profiles, names them too: it is written from AGENTS, `python3 lib/agent_state.py profiles
+# >lib/agent_profiles.tsv`, again for a new agent, and is neither Python nor shell, so no scan here reads it.)
 OWN_MODULES = {
     "agent_state.py",
     *(f"{cast(ModuleType, agent).__name__}.py" for agent in AGENTS.values()),

@@ -182,7 +182,8 @@ of truth, so don't copy rules into this file.
 - Agents (design: `docs/design/harnesses.md`): an adapter per agent, `lib/claude_state.py`,
   `lib/codex_state.py` and `lib/agy_state.py`, each a module with the functions of `Agent` in `lib/agent_state.py`, whose `AGENTS`
   table is the one place that lists them (each module's `PROFILE`, a `Profile` in `lib/agent_files.py`, says
-  what it is and can do; `lib/agent_state.py profiles` prints them for the shell) and whose `record` the
+  what it is and can do; `lib/agent_state.py profiles` prints them for the shell, checked in as `lib/agent_profiles.tsv`, which
+  `lib/agents.sh` reads without starting Python: written again after a change to a profile or to `AGENTS`) and whose `record` the
   watchdog, ledger and events use. They share `lib/agent_files.py`, and neither imports the other.
   `lib/agents.sh` is the shell side: `agent_state`, `window_harness`, `harnesses_in_use`, `agent_*`.
   `libexec/bosun-launch` holds the flow, and `lib/launch/<harness>.sh` what differs in it

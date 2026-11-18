@@ -25,7 +25,7 @@ Shared code never asks which agent it has. Each layer has one place per agent, a
 | Checking a machine | `lib/preflight.sh`, the flow | `lib/harnesses/<harness>.sh`, a profile |
 | Starting a window | `libexec/bosun-launch`, the flow: resolve the session, refuse a second copy, start or resume | `lib/launch/<harness>.sh`: `build_agent_args`, `first_prompt`, `run_new`, `run_resumed` |
 | A running session | `lib/agent_state.py`: the `Agent` interface and the `AGENTS` table. `lib/agents.sh` is its shell side | `lib/claude_state.py`, `lib/codex_state.py`, `lib/agy_state.py`, each a module with `Agent`'s functions (`mypy` checks they match) |
-| What an agent is and can do | `lib/agent_state.py profiles` prints one tab-separated line per agent, which `lib/agents.sh` reads (`profile_field`, `known_harnesses`, `agent_bin_env`, `harness_bin`, `harness_default_model`) | A `Profile` in each adapter (`PROFILE`, `lib/agent_files.py`): its config keys, whether its name for a session comes from the agent, which statuses it reports, Remote Control, autocompact, per-task subagents, its state files, and how `bosun init` shows it |
+| What an agent is and can do | `lib/agent_state.py profiles` prints one tab-separated line per agent, checked in as `lib/agent_profiles.tsv` (written again with `python3 lib/agent_state.py profiles >lib/agent_profiles.tsv`; `tests/unit/test_agent_profiles.py` fails while it differs), which `lib/agents.sh` reads with no Python started (`profile_field`, `known_harnesses`, `agent_bin_env`, `harness_bin`, `harness_default_model`) | A `Profile` in each adapter (`PROFILE`, `lib/agent_files.py`): its config keys, whether its name for a session comes from the agent, which statuses it reports, Remote Control, autocompact, per-task subagents, its state files, and how `bosun init` shows it |
 | Reading a screen | `lib/pane_input.py` asks the `AGENTS` table; `lib/screen_text.py` has the helpers readers share | A `Screen` in its profile: `typed`, `question`, `rejected` (`lib/agent_files.py`) |
 | Holding a window to its connectors | `lib/connectors.py`: reading a list, the report's helpers, and `doctor`, which imports the module the window's profile names | `lib/connectors_<harness>.py`, named by `Profile.connectors`: `main` (its launch command line) and `doctor_line` |
 | Which of my plugins a window loads | `lib/plugins.py`: the list, the doctor's words, Claude Code's plan, and `doctor`, which imports the module the window's profile names | The module named by `Profile.plugins` (`lib/plugins_claude.py`, or the agent's connectors module): `plugins_doctor_line`; its launch limits plugins per plugin, switches them all off, or refuses a list ([connectors](connectors.md#plugins)) |
@@ -149,7 +149,8 @@ with the facts and their reasons in [the design note](antigravity.md#part-2-agy-
    checks it has every function).
 2. A `lib/<harness>_state.py` with the functions of `Agent` and a `PROFILE` (`Profile` in `lib/agent_files.py`:
    say what the agent is and can do, with a `Screen` and, if it reports its turns, a `TurnEnd`), and a line in
-   `AGENTS` (`lib/agent_state.py`). `mypy` checks it has them all.
+   `AGENTS` (`lib/agent_state.py`). `mypy` checks it has them all. Then write the shell's table again,
+   `python3 lib/agent_state.py profiles >lib/agent_profiles.tsv` (as after any change to a profile's columns).
 3. `lib/launch/<harness>.sh`, with the functions of `lib/launch/codex.sh`.
    Its `lib/connectors_<harness>.py` (`main`, `doctor_line`; `Profile.connectors` names it) holds a window to
    its list of connectors, and the module `Profile.plugins` names (`plugins_doctor_line`) says what it does with

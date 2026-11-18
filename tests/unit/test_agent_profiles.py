@@ -102,6 +102,17 @@ class AgentProfileTest(unittest.TestCase):
             "agy\tBOSUN_AGY_BIN\tBOSUN_AGY_FLAGS\tBOSUN_AGY_MODEL\tno\tyes\tno\tno\tidle,busy,shell,waiting\tupdate\tno",
         ]
 
+    def test_the_shells_table_is_what_the_profiles_command_prints(self) -> None:
+        table = Path(__file__).resolve().parents[2] / "lib" / "agent_profiles.tsv"
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured):
+            assert agent_state.main(["profiles"]) == 0
+        self.assertEqual(
+            table.read_text(encoding="utf-8"),
+            captured.getvalue(),
+            "lib/agent_profiles.tsv is stale: python3 lib/agent_state.py profiles >lib/agent_profiles.tsv",
+        )
+
     def test_profiles_print_update_args(self) -> None:
         verifies = {"claude": "yes", "codex": "no"}
         for harness in ("claude", "codex"):

@@ -1010,16 +1010,19 @@ check "known_harnesses lists the agents in the order of AGENTS" test "$(fn known
 check "profile_field reads a column by its name" test "$(fn profile_field codex flags_key)" = BOSUN_CODEX_FLAGS
 check "find_window finds an early match in a long listing, exit 0 under pipefail" bash -c 'set -o pipefail; source "$1/lib/common.sh"; tmux_cmd() { printf "w1\t42 @1\n"; awk "BEGIN { for (i = 0; i < 300000; i++) print \"x\t1 @2\" }"; }; out="$(find_window w1)"; rc=$?; [ "$out" = "42 @1" ] && [ "$rc" = 0 ]' _ "$ROOT"
 check "window_harness finds an early match in a long window list, as it does under pipefail" bash -c 'set -o pipefail; source "$1/lib/common.sh"; load_config; window_specs() { printf "w1\t\t\t\t\tcodex\n"; awk "BEGIN { for (i = 0; i < 300000; i++) print \"x\" }"; }; out="$(window_harness w1)"; rc=$?; [ "$out" = codex ] && [ "$rc" = 0 ]' _ "$ROOT"
+# The profiles are a table the shell reads (lib/agent_profiles.tsv), so what can fail is the table: missing or empty
+# stops the command, saying so. BOSUN_ROOT is set after common.sh, so only the table's folder moves.
+mkdir -p "$WORK/no-profiles/lib" "$WORK/empty-profiles/lib"
+: >"$WORK/empty-profiles/lib/agent_profiles.tsv"
+for table_root in no-profiles empty-profiles; do
+  check "profiles that cannot be read stop the command, saying so ($table_root)" fails_with "could not read the agents' profiles: $WORK/$table_root/lib/agent_profiles.tsv is missing" bash -c 'source "$1/lib/common.sh"; BOSUN_ROOT="$2"; harness_bin claude' _ "$ROOT" "$WORK/$table_root"
+done
 mkdir -p "$WORK/broken-python"
 printf '#!/bin/sh\necho "python is broken" >&2\nexit 1\n' >"$WORK/broken-python/python3"
 chmod +x "$WORK/broken-python/python3"
-check "profiles that cannot be read stop the command, saying so" fails_with "could not read the agents' profiles" bash -c 'source "$1/lib/common.sh"; PATH="$2:$PATH"; harness_bin claude' _ "$ROOT" "$WORK/broken-python"
-mkdir -p "$WORK/chatty-python"
-printf '#!/bin/sh\necho "acme warning: something deprecated" >&2\nexec "%s" "$@"\n' "$(command -v python3)" >"$WORK/chatty-python/python3"
-chmod +x "$WORK/chatty-python/python3"
-check "a python3 that warns on stderr leaves the profiles alone" test "$(bash -c 'source "$1/lib/common.sh"; PATH="$2:$PATH"; known_harnesses' _ "$ROOT" "$WORK/chatty-python" 2>/dev/null)" = "claude codex agy"
+check "reading the profiles starts no python3: a broken one leaves them alone" test "$(bash -c 'source "$1/lib/common.sh"; PATH="$2:$PATH"; known_harnesses' _ "$ROOT" "$WORK/broken-python" 2>&1)" = "claude codex agy"
 for shell_bin in /bin/bash bash; do
-  check "... and agent_bin_env works under $shell_bin" test "$(BOSUN_CODEX_BIN=acme-codex "$shell_bin" -c 'source "$1/lib/common.sh"; load_config; PATH="$2:$PATH"; agent_bin_env; printf "%s\n" "${agent_bin_assignments[@]}"' _ "$ROOT" "$WORK/chatty-python" 2>/dev/null | tr '\n' ' ')" = "BOSUN_CLAUDE_BIN=claude BOSUN_CODEX_BIN=acme-codex BOSUN_AGY_BIN=agy "
+  check "... and agent_bin_env works under $shell_bin" test "$(BOSUN_CODEX_BIN=acme-codex "$shell_bin" -c 'source "$1/lib/common.sh"; load_config; PATH="$2:$PATH"; agent_bin_env; printf "%s\n" "${agent_bin_assignments[@]}"' _ "$ROOT" "$WORK/broken-python" 2>/dev/null | tr '\n' ' ')" = "BOSUN_CLAUDE_BIN=claude BOSUN_CODEX_BIN=acme-codex BOSUN_AGY_BIN=agy "
 done
 cat >"$WORK/specs-agents.yml" <<YML
 sessions:

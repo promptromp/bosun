@@ -1,0 +1,3 @@
+claude	BOSUN_CLAUDE_BIN	BOSUN_CLAUDE_FLAGS	BOSUN_MODEL	yes	yes	yes	yes	idle,busy,shell,waiting	-	yes
+codex	BOSUN_CODEX_BIN	BOSUN_CODEX_FLAGS	BOSUN_CODEX_MODEL	no	no	no	no	idle,busy	-	no
+agy	BOSUN_AGY_BIN	BOSUN_AGY_FLAGS	BOSUN_AGY_MODEL	no	yes	no	no	idle,busy,shell,waiting	update	no
