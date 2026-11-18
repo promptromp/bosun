@@ -360,24 +360,84 @@ class ProbeTest(unittest.TestCase):
         self.assertEqual(probe.outcome, "unknown")
 
     def test_the_request_is_small_and_isolated(self) -> None:
-        command = claude_state.probe_command("claude")
+        command = claude_state.probe_command("claude", {})
         for flag in ("--no-session-persistence", "--strict-mcp-config", "--max-budget-usd", "--tools"):
             self.assertIn(flag, command)
         self.assertEqual(command[command.index("--model") + 1], claude_state.PROBE_MODEL)
+        self.assertEqual(command[command.index("--setting-sources") + 1], "")
+        self.assertNotIn("--settings", command)
 
-    def test_an_api_key_helper_is_the_one_setting_it_keeps(self) -> None:
+
+class LoginProbeTest(unittest.TestCase):
+    """login.probe: the login check request with the API key helper it signs in with and none of my plugins,
+    in a folder of its own. Claude Code's files are in a scratch home; the request is never made."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        home = Path(tmp.name) / "home" / ".claude"
+        self.settings = home / "settings.json"
+        self.installed = home / "plugins" / "installed_plugins.json"
+        self.installed.parent.mkdir(parents=True)
+        for name, value in (
+            ("SETTINGS_FILE", self.settings),
+            ("INSTALLED_PLUGINS", self.installed),
+            ("MANAGED_DIR", Path(tmp.name) / "managed"),
+        ):
+            patch = mock.patch.object(claude_state, name, value)
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.calls: list[tuple[list[str], str]] = []
+
+    def run_probe(self) -> tuple[claude_state.ProbeResult, list[str]]:
+        def fake_run(command: list[str], **kwargs: Any) -> Any:
+            self.calls.append((command, kwargs["cwd"]))
+            return mock.Mock(stdout="\n".join(stream(reply(0, "OK"), result(False))))
+
+        with mock.patch("subprocess.run", fake_run):
+            outcome = login.probe("claude")
+        return outcome, self.calls[-1][0] if self.calls else []
+
+    def settings_of(self, command: list[str]) -> dict[str, Any]:
+        self.assertEqual(command.count("--settings"), 1, command)
+        settings: dict[str, Any] = json.loads(command[command.index("--settings") + 1])
+        return settings
+
+    def test_an_api_key_helper_is_the_one_setting_of_mine_it_keeps(self) -> None:
         # No settings files, so no allow rules or hooks of mine; but a helper that signs Claude Code in
         # with an API key is how it authenticates: without it the check said a working sign-in needs a
         # login. The helper is a command that prints a key, not a key.
         helper = {"apiKeyHelper": "cat ~/.key"}  # pragma: allowlist secret gitleaks:allow
-        with tempfile.TemporaryDirectory() as tmp:
-            settings = Path(tmp) / "settings.json"
-            with unittest.mock.patch.object(claude_state, "SETTINGS_FILE", settings):
-                self.assertNotIn("--settings", claude_state.probe_command("claude"))
-                settings.write_text(json.dumps({**helper, "hooks": {"Stop": []}}))
-                command = claude_state.probe_command("claude")
+        self.settings.write_text(json.dumps({**helper, "hooks": {"Stop": []}}))
+        outcome, command = self.run_probe()
+        self.assertEqual(outcome.outcome, "ok")
         self.assertEqual(command[command.index("--setting-sources") + 1], "")
-        self.assertEqual(json.loads(command[command.index("--settings") + 1]), helper)
+        self.assertEqual(self.settings_of(command), {**helper, "enabledPlugins": {}})
+
+    def test_it_loads_none_of_my_plugins(self) -> None:
+        """A `false` for a plugin my settings enable and for one installed that no scope names: with no
+        settings file read, an installed plugin can still be on, and its hook could answer for the check."""
+        self.settings.write_text(json.dumps({"enabledPlugins": {"probe@local": True}}))
+        self.installed.write_text(json.dumps({"plugins": {"acme-helper@acme-market": [{"scope": "user"}]}}))
+        _outcome, command = self.run_probe()
+        self.assertEqual(
+            self.settings_of(command),
+            {"enabledPlugins": {"acme-helper@acme-market": False, "probe@local": False}},
+        )
+        self.assertTrue(Path(self.calls[-1][1]).name.startswith("bosun-login-"), "in a folder of its own")
+
+    def test_an_installed_plugins_file_that_does_not_parse_makes_no_request_and_says_why(self) -> None:
+        self.installed.write_text("{not json")
+        outcome, _command = self.run_probe()
+        self.assertEqual(self.calls, [])
+        self.assertEqual(
+            (outcome.outcome, outcome.code),
+            ("unknown", f"{self.installed} does not parse, so bosun cannot tell which plugins to switch off"),
+        )
+        made = login.Probe(datetime.now(UTC), outcome.outcome, code=outcome.code)
+        verdict = login.global_verdict(claude_state.AuthStatus(True, "claude.ai"), made, fresh=True)
+        self.assertEqual(verdict.state, login.UNKNOWN)
+        self.assertIn("does not parse, so bosun cannot tell which plugins to switch off", verdict.detail)
 
 
 class FakeClaude:

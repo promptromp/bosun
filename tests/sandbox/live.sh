@@ -23,7 +23,8 @@
 #             on Claude Code a repo whose own settings allow more keeps it from starting until the list
 #             names that, and whether `claude mcp list` writes ~/.claude.json; then plugins: a local plugin
 #             with a SessionStart hook runs in a repo window's start and in a plain `claude -p`, and not in the
-#             orchestrator's, nor in a real learning analysis or the Slack watcher's call (a local server)
+#             orchestrator's, nor in a real learning analysis, the Slack watcher's call (a local server) or a
+#             login check
 #             On Claude Code, right after the hand-over (before the update, whose end uninstalls bosun, and before the
 #             connectors, whose list would limit the windows): the ontology end to end, below
 #   ontology  claude only: the install and the real windows, then the ontology step alone (`go` runs it too)
@@ -945,9 +946,9 @@ no_hook_under() { # <folder>: the hook ran in no session started in it or below 
     return 1
   }
 }
-no_hook_in_watch_calls() { # the hook ran in no session started in a folder of a watcher's dry run (slack-watch-dry-*)
-  ! awk '{ cwd = substr($0, index($0, " ") + 1) } cwd ~ /\/slack-watch-dry-[^\/]*$/ { found = 1 } END { exit !found }' \
-    "$PLUGIN_STARTS" 2>/dev/null || {
+no_hook_in_folders_named() { # <prefix>: the hook ran in no session started in a folder named <prefix>* (a temp folder)
+  ! awk -v prefix="/$1" '{ cwd = substr($0, index($0, " ") + 1); n = split(cwd, parts, "/") }
+    index("/" parts[n], prefix) == 1 { found = 1 } END { exit !found }' "$PLUGIN_STARTS" 2>/dev/null || {
     echo "the hook's lines: $(tr "\n" " " <"$PLUGIN_STARTS")"
     return 1
   }
@@ -955,7 +956,9 @@ no_hook_in_watch_calls() { # the hook ran in no session started in a folder of a
 # A real learning analysis: a dry run (no proposals, no state) on haiku over the last half hour, its digest capped
 # small, about a cent. The Slack watcher's call against a local stdio server standing for Slack's (BOSUN_SLACK_WATCH_
 # MCP_CONFIG, a dry run that queues nothing): its server's `watch initialize` says the call started; whether it found
-# anything is only a note, as there is no Slack to search.
+# anything is only a note, as there is no Slack to search. A login check request, as the morning's setup step makes
+# it (lib/login.py global --probe, a fraction of a cent), in a bosun-login-* folder. `bosun alert`'s Slack DM is left
+# to the smoke suite: it needs a real Slack to send to.
 headless_calls_load_none() {
   local plain="$OUT/headless-plain" learn_out="$OUT/learn-headless" watch_mcp="$OUT/watch-mcp.json"
   mkdir -p "$plain"
@@ -971,7 +974,11 @@ headless_calls_load_none() {
   BOSUN_SLACK_WATCH_MCP_CONFIG="$watch_mcp" bosun slack-watch --dry-run >"$OUT/slack-watch-dry.txt" 2>&1
   echo "  note  the watcher's dry run said: $(tail -4 "$OUT/slack-watch-dry.txt" | tr '\n' ' ' | cut -c1-300)"
   check "the Slack watcher's call starts, against a local server standing for Slack's" started_only watch
-  check "... and the plugin's hook ran in none of its calls" no_hook_in_watch_calls
+  check "... and the plugin's hook ran in none of its calls" no_hook_in_folders_named slack-watch-dry-
+  check "a real login check request works (lib/login.py global --probe)" bash -c '
+    BOSUN_STATE_DIR="$1" python3 "$2/lib/login.py" global --probe >"$3" 2>&1 &&
+      grep -q "last login check .*: ok" "$3" || { cat "$3"; exit 1; }' _ "$STATE" "$(version_folder)" "$OUT/login-check.txt"
+  check "... and the plugin's hook ran in none of bosun's login checks" no_hook_in_folders_named bosun-login-
 }
 plugins_of_mine() {
   echo "plugins: repo windows keep mine, the orchestrator and bosun's headless calls load none of them"

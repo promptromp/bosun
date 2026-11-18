@@ -17,7 +17,11 @@ outside them is held: a prompt left open overnight alerts when your hours begin.
 <summary>How the DM is sent, and adding another destination</summary>
 
 Alerts go through `bosun alert`. The DM goes through a one-shot `claude -p` that may use only ToolSearch and Slack's
-send-message tool, in `dontAsk` mode with `--permission-prompts none`, so it cannot itself get stuck at a prompt.
+send-message tool, in `dontAsk` mode with `--permission-prompts none`, so it cannot itself get stuck at a prompt,
+and that loads none of your plugins but the Slack plugin (a plugin's hook or skill could stop it before it sends).
+With an `installed_plugins.json` that does not parse, nothing can tell which plugins to switch off: the notification
+has already gone out, and the DM is still tried with your plugins (its two-minute timeout bounds one that holds it
+up), with a warning in the log saying why.
 Another destination is one more sink in `lib/watchdog.py` (`SINKS`).
 
 </details>

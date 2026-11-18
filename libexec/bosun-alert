@@ -5,7 +5,8 @@
 # is set, a Slack DM to myself. The DM goes through a one-shot headless Claude (claude -p) that may
 # use only ToolSearch and Slack's send-message tool, in --permission-mode dontAsk with
 # --permission-prompts none: anything else is refused at once, so it never waits for an approval
-# (the thing that is stuck may be the orchestrator itself). Exits 1 if the DM was not delivered.
+# (the thing that is stuck may be the orchestrator itself). It loads none of your plugins but the
+# Slack plugin, whose server it may send with. Exits 1 if the DM was not delivered.
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
 load_config
@@ -14,6 +15,7 @@ ALERT_TIMEOUT_SECONDS=120
 ALERT_TITLE="bosun"
 # The Slack plugin's tool and the claude.ai connector's; either may be the one that is loaded.
 SLACK_SEND_TOOLS="mcp__plugin_slack_slack__slack_send_message mcp__claude_ai_Slack__slack_send_message"
+SLACK_PLUGIN="slack" # the plugin of the first: the one plugin of mine the DM keeps on
 
 DRY_RUN=0
 MESSAGE=""
@@ -50,6 +52,19 @@ fi
 result_dir="$BOSUN_STATE_DIR/alerts"
 mkdir -p "$result_dir"
 result="$result_dir/last.json"
+# It reads my settings (my Slack plugin, or my claude.ai login's connector), so it would load every plugin of
+# mine, whose hook or skill could stop it before it sends: a `false` for each but the Slack plugin
+# (lib/plugins_claude.py --headless). An installed_plugins.json that does not parse cannot say which: the
+# notification above has gone out, and the DM is still tried as before (its timeout bounds a plugin that holds
+# it up, and Claude Code reads such a file as no plugins), with a line in the log saying why.
+plugin_settings=()
+if limit="$(python3 "$BOSUN_ROOT/lib/plugins_claude.py" --headless "bosun alert" --keep "$SLACK_PLUGIN" \
+  --cwd "$BOSUN_STATE_DIR" 2>"$result_dir/plugins.err")" && plugin_settings_valid "" "$limit"; then
+  plugin_settings=(--settings "$limit")
+  while IFS= read -r line; do log "$line"; done <"$result_dir/plugins.err" >&2
+else
+  log "warning: the Slack DM loads your plugins: $(tail -n 1 "$result_dir/plugins.err")" >&2
+fi
 prompt="Load a slack_send_message tool with ToolSearch, then call it once with channel_id \"$BOSUN_ALERT_SLACK_USER\" and this exact message text, unchanged (given here as a JSON string): $(jq -Rn --arg m "$TEXT" '$m'). Then reply with only the message link."
 # shellcheck disable=SC2086  # SLACK_SEND_TOOLS is a list of tool names
 (cd "$BOSUN_STATE_DIR" &&
@@ -57,6 +72,7 @@ prompt="Load a slack_send_message tool with ToolSearch, then call it once with c
     --model "$BOSUN_ALERT_MODEL" \
     --permission-mode dontAsk --permission-prompts none \
     --tools ToolSearch --allowedTools ToolSearch $SLACK_SEND_TOOLS \
+    ${plugin_settings[@]+"${plugin_settings[@]}"} \
     --no-session-persistence --output-format json \
     -- "$prompt") >"$result" 2>"$result_dir/last.err"
 rc=$?

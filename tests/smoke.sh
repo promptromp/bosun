@@ -698,7 +698,8 @@ status_has() { # <python condition over d, the object bosun status --json printe
 # whole day, which is only safe away from midnight, where the morning is not yet due.
 awake_outside() { BOSUN_DAYS=MTWRFSU BOSUN_START_TIME="$(date -v+3H +%H:%M)" BOSUN_AWAKE_UNTIL="$(date -v+5H +%H:%M)" "$@"; }
 awake_all_day() { BOSUN_DAYS=MTWRFSU BOSUN_START_TIME=00:00 BOSUN_AWAKE_UNTIL=23:59 "$@"; }
-# auth status says $FAKE_AUTH (in or out); the login check request gets $FAKE_PROBE (ok or auth).
+# auth status says $FAKE_AUTH (in or out); the login check request gets $FAKE_PROBE (ok or auth), and its
+# arguments go to login-probe.args.
 cat >"$WORK/login-claude" <<FAKE
 #!/bin/bash
 case "\$1" in
@@ -710,6 +711,7 @@ case "\$1" in
     ;;
   -p)
     echo probe >>"$WORK/login-probes.log"
+    printf '%s\n' "\$@" >"$WORK/login-probe.args"
     if [ "\${FAKE_PROBE:-ok}" = ok ]; then
       echo '{"type": "result", "is_error": false, "result": "OK", "total_cost_usd": 0.001}'
     else
@@ -2625,6 +2627,23 @@ claude_record "$orch_pid" waiting 7200
 check "once the watchdog agent is installed, the loop leaves alerts to it" bash -c '! grep -q "watchdog\|would notify" <<<"$1"' _ "$("$BOSUN" checkin --dry-run 2>&1)"
 rm "$HOME/Library/LaunchAgents/com.bosun.morning.watchdog.plist"
 check "a refused DM is reported" fails_with "not delivered on Slack" env BOSUN_CLAUDE_BIN="$WORK/alert-claude" ALERT_FAKE_REPLY='{"result":"blocked","permission_denials":[{"tool_name":"x"}]}' "$BOSUN" alert hi
+# My plugins: one my settings enable, and the Slack plugin installed. The DM loads none of them but the Slack plugin,
+# whose server it may send with; with an installed_plugins.json that does not parse, it still tries, and says why.
+mkdir -p "$HOME/.claude/plugins"
+echo '{"enabledPlugins": {"probe@local": true, "slack@acme-market": true}}' >"$HOME/.claude/settings.json"
+echo '{"plugins": {"slack@acme-market": [{"scope": "user"}], "acme-helper@acme-market": [{"scope": "user"}]}}' >"$HOME/.claude/plugins/installed_plugins.json"
+BOSUN_CLAUDE_BIN="$WORK/alert-claude" "$BOSUN" alert "plugins check" >/dev/null 2>&1
+check "the DM switches off each plugin of mine but the Slack plugin, in one --settings" bash -c '
+  [ "$(grep -cx -- --settings "$1")" = 1 ] &&
+    [ "$(grep -m1 -A1 -x -- --settings "$1" | tail -1 | jq -c .)" = "{\"enabledPlugins\":{\"acme-helper@acme-market\":false,\"probe@local\":false}}" ]' \
+  _ "$WORK/alert-claude.args"
+echo '[not an object]' >"$HOME/.claude/plugins/installed_plugins.json"
+out="$(BOSUN_CLAUDE_BIN="$WORK/alert-claude" "$BOSUN" alert "plugins check" 2>&1)"
+check "with an installed_plugins.json that does not parse, the DM is still sent" contains "$out" "alert sent as a Slack DM"
+check "... saying in the log why it loads my plugins" contains "$out" \
+  "warning: the Slack DM loads your plugins: plugins: $HOME/.claude/plugins/installed_plugins.json does not parse, so bosun cannot tell which plugins to switch off"
+check "... and without a --settings" bash -c '! grep -qx -- --settings "$1"' _ "$WORK/alert-claude.args"
+rm -rf "$HOME/.claude/settings.json" "$HOME/.claude/plugins"
 check "a bad member id is refused" fails_with "must be a Slack member id" env BOSUN_ALERT_SLACK_USER='U1"; x' "$BOSUN" alert hi
 check "without a member id, only a notification" contains "$(BOSUN_ALERT_SLACK_USER='' "$BOSUN" alert hi 2>&1)" "notification only"
 check "send dry-run only logs" contains "$(BOSUN_SEND_DRY_RUN=1 "$BOSUN" send orch hello 2>&1)" "dry-run: would deliver to smoke:orch: hello"
@@ -3322,10 +3341,26 @@ rm -f "$WORK/login-probes.log"
 check "setup --dry-run makes no request" bash -c 'grep -q "dry-run: would make one login check request" <<<"$1" && grep -q "ok: Claude Code login works" <<<"$1" && [ ! -e "$2" ]' _ "$(LS --dry-run)" "$WORK/login-probes.log"
 check "ensure_claude_login passes when the login check request works" bash -c 'grep -q "ok: Claude Code login works: logged in (claude.ai)" <<<"$1"' _ "$(LS)"
 check "... after one request" test "$(probes)" = 1
+# My plugins: one my settings enable, and one installed that no scope names. The request loads none of them, though
+# it reads no settings file; with an installed_plugins.json that does not parse it makes none, and says why.
+mkdir -p "$HOME/.claude/plugins"
+echo '{"enabledPlugins": {"probe@local": true}}' >"$HOME/.claude/settings.json"
+echo '{"plugins": {"acme-helper@acme-market": [{"scope": "user"}]}}' >"$HOME/.claude/plugins/installed_plugins.json"
+LS >/dev/null
+check "the request switches off each plugin of mine, in one --settings, with no settings files" bash -c '
+  [ "$(grep -cx -- --settings "$1")" = 1 ] && grep -qx -- --setting-sources "$1" &&
+    [ "$(grep -m1 -A1 -x -- --settings "$1" | tail -1 | jq -c .)" = "{\"enabledPlugins\":{\"acme-helper@acme-market\":false,\"probe@local\":false}}" ]' \
+  _ "$WORK/login-probe.args"
+echo '[not an object]' >"$HOME/.claude/plugins/installed_plugins.json"
+out="$(LS)"
+check "with an installed_plugins.json that does not parse, no request, and the step says why" bash -c '
+  grep -qF "warning: could not confirm the Claude Code login: the login check could not tell: unknown ($2 does not parse, so bosun cannot tell which plugins to switch off)" <<<"$1" &&
+    [ "$3" = 2 ]' _ "$out" "$HOME/.claude/plugins/installed_plugins.json" "$(probes)"
+rm -rf "$HOME/.claude/settings.json" "$HOME/.claude/plugins"
 out="$(FAKE_PROBE=auth LS)"
 check "a revoked login fails the step loudly, for the morning-failed alert" bash -c 'grep -q "FAIL: Claude Code login: the login check at .* got a login error (authentication_failed/401); run /login" <<<"$1" && grep -q "setup finished with 1 failed step" <<<"$1"' _ "$out"
 out="$(FAKE_AUTH=out LS)"
-check "logged out fails without a request" bash -c 'grep -q "FAIL: Claude Code login: claude auth status: not logged in" <<<"$1" && [ "$2" = 2 ]' _ "$out" "$(probes)"
+check "logged out fails without a request" bash -c 'grep -q "FAIL: Claude Code login: claude auth status: not logged in" <<<"$1" && [ "$2" = 3 ]' _ "$out" "$(probes)"
 
 section morning-dry-run "morning (dry run)" needs setup-steps covers 'libexec/bosun-morning'
 out="$(BOSUN_CONFIG_DIR="$SETUP_CFG" BOSUN_NETWORK_PROBE_URL=file:///dev/null "$BOSUN" morning --dry-run --awake-minutes 5 2>&1)"

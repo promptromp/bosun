@@ -224,9 +224,45 @@ class HeadlessTest(PluginsCase):
             ),
         )
 
+    def test_a_name_it_keeps_that_no_plugin_has_is_not_said(self) -> None:
+        """bosun's own rule finding nothing (the alert keeps the Slack plugin, which may not be installed)."""
+        self.switches(self.home_settings, {PROBE: True})
+        self.assertEqual(self.settings(("slack",)), ({"enabledPlugins": {PROBE: False}}, ""))
+
+    def test_the_command_line_for_the_alert(self) -> None:
+        self.switches(self.home_settings, {PROBE: True, SLACK: True})
+        code, out, err = connector_fakes.capture(
+            plugins_claude.main,
+            "--headless",
+            "the DM",
+            "--keep=acme-slack, acme-gone",
+            "--cwd",
+            str(self.repo),
+        )
+        self.assertEqual((code, json.loads(out), err), (0, {"enabledPlugins": {PROBE: False}}, ""))
+        code, out, _ = connector_fakes.capture(
+            plugins_claude.main, "--headless", "the DM", "--cwd", str(self.repo)
+        )
+        self.assertEqual(json.loads(out), {"enabledPlugins": {PROBE: False, SLACK: False}})
+
+    def test_the_command_line_refuses_all_as_a_keep_and_a_window_without_its_lists(self) -> None:
+        code, out, err = connector_fakes.capture(
+            plugins_claude.main, "--headless", "the DM", "--keep=all", "--cwd", str(self.repo)
+        )
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("`all` is no such list", err)
+        code, out, err = connector_fakes.capture(plugins_claude.main, "--plugins=", "--cwd", str(self.repo))
+        self.assertEqual(
+            (code, out, err), (2, "", "plugins: give --plugins and --connectors, or --headless\n")
+        )
+
     def test_an_installed_plugins_file_that_does_not_parse_refuses(self) -> None:
         self.installed.parent.mkdir(parents=True)
         self.installed.write_text("{not json")
+        code, out, _ = connector_fakes.capture(
+            plugins_claude.main, "--headless", "the DM", "--cwd", str(self.repo)
+        )
+        self.assertEqual((code, out), (2, ""))
         with self.assertRaises(ConnectorsError) as caught:
             self.settings()
         self.assertEqual(

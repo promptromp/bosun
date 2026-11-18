@@ -321,9 +321,6 @@ class CommandTest(WatchTestCase):
             {**helper, "permissions": {"allow": ["Bash"]}, "enabledPlugins": {PLUGIN: True}},
         )
         self.assertEqual(self.call_settings(self.command()), {**helper, "enabledPlugins": {PLUGIN: False}})
-        self.assertEqual(
-            claude_state.credential_settings(), ["--settings", json.dumps(helper)], "the login check's"
-        )
 
     def test_it_loads_none_of_my_plugins_but_the_slack_plugin_its_server_comes_from(self) -> None:
         """A `false` for a plugin my settings enable and for one installed that no scope names (no settings

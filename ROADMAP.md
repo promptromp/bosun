@@ -360,9 +360,9 @@ Code window loaded all of my plugins, their hooks, skills and commands, so one w
 reply could stop the orchestrator's unattended chores at a question. Now the orchestrator loads none of mine unless
 `BOSUN_ORCHESTRATOR_PLUGINS` names them (an older install keeps `all`), repo windows keep them (`BOSUN_PLUGINS`,
 `plugins:` per window), a plugin a window's connectors need stays on, and `bosun doctor` says what each loads. Run
-in the macOS VM with real Claude Code and a local plugin's hook. bosun's own headless calls, learning's analysis and
-the Slack watcher's call, load none of my plugins either, whatever the lists say (the watcher keeps the Slack plugin
-its server comes from; 2026-11-18). Design note:
+in the macOS VM with real Claude Code and a local plugin's hook. Every headless call bosun makes, learning's analysis,
+the Slack watcher's call, the login check and the alert's Slack DM, loads none of my plugins either, whatever the
+lists say (the watcher and the alert keep the Slack plugin; 2026-11-18). Design note:
 [docs/design/connectors.md](docs/design/connectors.md).
 
 **Done (2026-11-10): a hardening round.** Gaps an inventory of the adversarial cases turned up, each now

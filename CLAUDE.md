@@ -77,7 +77,7 @@ of truth, so don't copy rules into this file.
   module (`check_connectors`). Which of my own plugins a window loads, the same way: `lib/plugins.py` (the list,
   the plan of which plugin ids go off and why, doctor's words, `plugins.py doctor`), turned into the launch by
   the module its `Profile.plugins` names (`lib/plugins_claude.py`: the `enabledPlugins` launch settings, and
-  `headless_settings`, learning's and the Slack watcher's calls, which load none; Codex's
+  `headless_settings`, every headless call bosun makes, which loads none; Codex's
   and agy's in their connectors modules); the shell side is `window_list` (both lists' reader), `window_plugins`,
   `set_plugin_settings` and `require_plugin_limit` (`lib/common.sh`).
   `lib/delegate.py`: task rendering. `lib/guard.py`: the orchestrator's PreToolUse permission hook

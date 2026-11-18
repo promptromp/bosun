@@ -9,10 +9,11 @@ best first (everything Claude Code-specific is read through lib/claude_state.py)
    (authentication_failed, HTTP 401: the login). Exact and free, but only once a prompt failed.
 2. `claude auth status --json`: free, and tells a missing login apart from a stored one, but it
    makes no request, so a token the server revoked still shows as logged in.
-3. The login check request (claude_state.probe): one tiny real request, a fraction of a cent. The
-   morning setup step (ensure_claude_login) makes one; the check-in loop makes one while a window
-   or the last check reports a login error, at most every PROBE_EVERY_MINUTES, to learn whether
-   the login works again (a /login is not written to any transcript).
+3. The login check request (probe, below: claude_state.probe with none of my plugins): one tiny
+   real request, a fraction of a cent. The morning setup step (ensure_claude_login) makes one; the
+   check-in loop makes one while a window or the last check reports a login error, at most every
+   PROBE_EVERY_MINUTES, to learn whether the login works again (a /login is not written to any
+   transcript).
 4. Fallback: a loose reading of the reply's text (or, without a transcript, of the window's last
    lines), only where no structured field exists. Verdicts from it say "pattern fallback".
 
@@ -65,7 +66,9 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import claude_state
+import plugins_claude
 from claude_state import ApiError, AuthStatus, ProbeResult
+from connectors import ConnectorsError
 
 
 OK = "ok"
@@ -380,13 +383,28 @@ def probe_due(probe: Probe | None, now: datetime) -> bool:
 # ---- what the commands do ----------------------------------------------------------------------
 
 
+def probe(claude_bin: str) -> ProbeResult:
+    """The login check request (claude_state.probe), loading none of my plugins (a `false` for each that a
+    call in its folder would load: plugins_claude.headless_settings), whose hooks could hold it up or answer
+    in its place. An installed_plugins.json that does not parse makes no request: the check could not tell,
+    saying why (unknown, as for a request that could not start)."""
+
+    def none_of_mine(folder: Path) -> dict[str, Any]:
+        return plugins_claude.headless_settings(folder, who="the login check")
+
+    try:
+        return claude_state.probe(claude_bin, none_of_mine)
+    except ConnectorsError as exc:
+        return ProbeResult(claude_state.PROBE_UNKNOWN, code=str(exc))
+
+
 @dataclass(frozen=True)
 class Env:
     state_dir: Path
     claude_bin: str
     now: Callable[[], datetime] = now_utc
     auth_status: Callable[[str], AuthStatus] = claude_state.auth_status
-    probe: Callable[[str], ProbeResult] = claude_state.probe
+    probe: Callable[[str], ProbeResult] = probe
     record: Callable[[int | str], dict[str, Any] | None] = claude_state.record
     sleep: Callable[[float], None] = time.sleep
 

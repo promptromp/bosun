@@ -4,9 +4,9 @@ sessions.yml) turned into the `enabledPlugins` of its launch settings: a `false`
 settings scopes would load that the list leaves out, unless its connectors need it or the orchestrator's own
 settings file enables it. Claude Code ranks the launch's `--settings` above my local, project and user
 settings, merging `enabledPlugins` key by key, so that `false` wins; only managed settings rank above it. The
-plan is lib/plugins.py's; what Claude Code's files say, lib/claude_state.py's. bosun's own headless calls
-(learning's analysis, the Slack watcher's) take the empty list's settings from headless_settings, whatever the
-lists say. Design: docs/design/connectors.md, "Plugins".
+plan is lib/plugins.py's; what Claude Code's files say, lib/claude_state.py's. Every headless call bosun
+makes (learning's analysis, the Slack watcher's call, the login check, the alert's Slack DM) takes the empty
+list's settings from headless_settings, whatever the lists say. Design: docs/design/connectors.md, "Plugins".
 
 Usage: plugins_claude.py --plugins <value> --connectors <value> --cwd <dir> [--settings-file <file>]
            Claude Code's settings, always a JSON object: {} for `all`, else {"enabledPlugins": {...}} with a
@@ -16,6 +16,11 @@ Usage: plugins_claude.py --plugins <value> --connectors <value> --cwd <dir> [--s
            per plugin managed settings force on, and per settings scope that does not parse (what it says
            of plugins is not read; the installed plugins still get their `false`). Reads files only: never
            `claude`.
+       plugins_claude.py --headless <who> [--keep <value>] --cwd <dir>
+           The settings of one of bosun's own headless calls, <who> (`bosun alert`'s Slack DM): always
+           {"enabledPlugins": {...}}, with a `false` per plugin a call in <dir> would load but those <value>
+           names (comma-separated: an id, or a bare name from any marketplace). A line on stderr per plugin
+           managed settings force on and per settings scope that does not parse.
 
 Exit codes: 0 done, 2 a list or command line that cannot be read, or an installed_plugins.json that is there
 but does not parse (nothing can tell which plugins to switch off); anything else (and no output) is a failure
@@ -28,6 +33,7 @@ import argparse
 import json
 import sys
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -77,15 +83,16 @@ def launch_settings(plan: plugins.PluginPlan) -> dict[str, Any]:
 
 
 def headless_settings(cwd: Path, keep: Sequence[str] = (), who: str = "this call") -> dict[str, Any]:
-    """Claude Code's settings for one of bosun's own headless calls (learning's analysis, the Slack
-    watcher's), which load none of my plugins: an `enabledPlugins` with a `false` for each plugin a call
-    started in <cwd> would load, but those <keep> names (a plugin id, or a bare name from any marketplace):
-    the empty list's plan, with no connectors; an empty one when there is none. A plugin managed settings
-    force on stays on, as no setting can switch it off; that, a name of <keep> no plugin has and a settings
-    scope that does not parse are said on stderr, of <who>. ConnectorsError when installed_plugins.json is
-    there but does not parse."""
+    """Claude Code's settings for one of bosun's own headless calls (learning's analysis, the Slack watcher's
+    call, the login check, the alert's Slack DM), which load none of my plugins: an `enabledPlugins` with a
+    `false` for each plugin a call started in <cwd> would load, but those <keep> names (a plugin id, or a bare
+    name from any marketplace): the empty list's plan, with no connectors; an empty one when there is none. A
+    plugin managed settings force on stays on, as no setting can switch it off; that, and a settings scope
+    that does not parse, are said on stderr, of <who>. A name of <keep> that no plugin has is bosun's own
+    rule finding nothing (the alert keeps the Slack plugin, whose server may come from a connector instead),
+    so it is not said. ConnectorsError when installed_plugins.json is there but does not parse."""
     plan = plugins.plan(Allowed(tuple(keep)), Allowed(), facts(cwd))
-    say_plan(plan, who)
+    say_plan(replace(plan, not_found=()), who)
     return launch_settings(plan)
 
 
@@ -109,7 +116,19 @@ def say_plan(plan: plugins.PluginPlan, who: str = "this window") -> None:
         say(f"{path} does not parse, so what it says of plugins is not read")
 
 
+def cmd_headless(args: argparse.Namespace) -> int:
+    keep = plugins.parse(args.keep or "")
+    if keep.everything:
+        raise ConnectorsError("--keep names the plugins a headless call keeps; `all` is no such list")
+    print(json.dumps(headless_settings(args.cwd, keep.names, args.headless), separators=(",", ":")))
+    return 0
+
+
 def cmd_plugins(args: argparse.Namespace) -> int:
+    if args.headless is not None:
+        return cmd_headless(args)
+    if args.plugins is None or args.connectors is None:
+        raise ConnectorsError("give --plugins and --connectors, or --headless")
     plugin_list = plugins.parse(args.plugins)
     if plugin_list.everything:
         print("{}")
@@ -124,10 +143,12 @@ def parser() -> argparse.ArgumentParser:
     top = argparse.ArgumentParser(
         prog="plugins_claude.py", description="Claude Code's enabledPlugins settings."
     )
-    top.add_argument("--plugins", required=True)
-    top.add_argument("--connectors", required=True)
+    top.add_argument("--plugins")  # a window's list; with --connectors, unless --headless
+    top.add_argument("--connectors")
     top.add_argument("--cwd", required=True, type=Path)
     top.add_argument("--settings-file", type=Path)  # the orchestrator's (BOSUN_ORCHESTRATOR_SETTINGS)
+    top.add_argument("--headless")  # one of bosun's own headless calls: who it is, for its lines
+    top.add_argument("--keep")  # what that call keeps on
     top.set_defaults(run=cmd_plugins)
     return top
 
