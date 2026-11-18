@@ -189,36 +189,56 @@ answer_screen() { # <session>
   fi
 }
 
+# Claude Code's input box, empty, between its two rules (a line of ─ above and below `❯`): it is past every screen
+# it shows at its start and waits for a prompt. A menu's cursor (`❯ 1. Yes`) has text after it, so it is no box.
+input_box_shows() { # <session>
+  tmux -L person capture-pane -p -t "$1" 2>/dev/null | python3 -c '
+import sys
+lines = [line.replace("\u00a0", " ").rstrip() for line in sys.stdin.buffer.read().decode("utf-8", "replace").splitlines()]
+rule = lambda line: line.startswith("\u2500" * 10)
+sys.exit(0 if any(rule(a) and b == "\u276f" and rule(c) for a, b, c in zip(lines, lines[1:], lines[2:])) else 1)'
+}
+onboarding_done() { # <session>
+  onboarded hasCompletedOnboarding
+}
+# Claude in Chrome's screen confirmed, or Claude Code at its input box without one (2.1.308 shows none and records
+# nothing): either is the end of it, seen as it happens rather than waited out.
+chrome_screen_done() { # <session>
+  onboarded hasCompletedClaudeInChromeOnboarding || input_box_shows "$1"
+}
+
 # A screen as a person goes through it, in a folder of its own (what it trusts is that folder, never the home
-# folder): the answers above every few seconds, until Claude Code records it as done (<flag> in ~/.claude.json),
-# for up to 90 seconds; a first start can take a while.
-through_screen() { # <session> <flag> <claude args...>
-  local session="$1" flag="$2" deadline=$((SECONDS + 90))
+# folder): the answers above every few seconds, until <done> (a test given the session) says it is over, for up to
+# 90 seconds; a first start can take a while.
+through_screen() { # <session> <done> <claude args...>
+  local session="$1" done="$2" deadline=$((SECONDS + 90))
   shift 2
   mkdir -p "$HOME/first-run"
   # Kept on the screen when it ends, with how it ended, so that a run that gives up can show it.
   tmux -L person new-session -d -s "$session" -x 110 -y 40 -c "$HOME/first-run" \
     bash -c '"$@"; echo "(it exited with $?)"; sleep 600' _ "$@"
-  until onboarded "$flag" || [ "$SECONDS" -ge "$deadline" ]; do
+  until "$done" "$session" || [ "$SECONDS" -ge "$deadline" ]; do
     sleep 4
-    answer_screen "$session"
+    "$done" "$session" || answer_screen "$session"
   done
-  sleep 2
-  if ! onboarded "$flag"; then # what it showed instead, for whoever reads the run
-    echo "  $flag was not recorded in 90 seconds; the screen showed:"
+  local over=0
+  "$done" "$session" || { # what it showed instead, for whoever reads the run
+    over=1
+    echo "  $session: $done did not say it was over in 90 seconds; the screen showed:"
     tmux -L person capture-pane -p -t "$session" 2>/dev/null | grep -v '^[[:space:]]*$' | tail -20 | sed 's/^/    | /'
-  fi
+  }
   tmux -L person kill-server 2>/dev/null
-  onboarded "$flag"
+  return "$over"
 }
 
 first_run_screens() { # [--no-chrome]: as a person goes through them, until each is recorded as done
-  through_screen first hasCompletedOnboarding claude || return 1
+  through_screen first onboarding_done claude || return 1
   [ "${1:-}" != "--no-chrome" ] || return 0
   # Then Claude in Chrome's screen, which windows started with --chrome showed once (Enter confirms it), where this
-  # Claude Code still shows it: 2.1.308 shows none and records nothing, so not seeing it is no failure.
-  through_screen chrome hasCompletedClaudeInChromeOnboarding claude --chrome ||
-    echo "  (no Claude in Chrome screen recorded: this Claude Code shows none)"
+  # Claude Code still shows it; one that shows none goes straight to its input box, and that is no failure.
+  through_screen chrome chrome_screen_done claude --chrome
+  onboarded hasCompletedClaudeInChromeOnboarding ||
+    echo "  (no Claude in Chrome screen recorded: this Claude Code went to its input box without one)"
   return 0
 }
 
