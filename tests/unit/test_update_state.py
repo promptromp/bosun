@@ -244,6 +244,50 @@ class RecordTest(unittest.TestCase):
         self.assertIsNone(update_state.from_object({"id": "u1"}))
 
 
+class BackFieldsTest(unittest.TestCase):
+    """What `bosun update --back` added to the record: its kind, the last finished record, what it restored
+    and the jobs a release unloaded; all optional, so an older record reads as an update's."""
+
+    def test_they_read_back_and_an_older_record_has_none(self) -> None:
+        last = state("done")
+        back = dataclasses.replace(
+            state("done"),
+            kind=update_state.BACK,
+            previous=update_state.bare(last),
+            restored=("ledger: restored",),
+            unloaded=("com.bosun.morning.now",),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            update_state.write(Path(tmp), back)
+            self.assertEqual(update_state.load(Path(tmp)), back)
+        older = {
+            k: v
+            for k, v in update_state.as_object(state("done")).items()
+            if k not in ("kind", "previous", "restored", "unloaded")
+        }
+        read = update_state.from_object(older)
+        assert read is not None
+        self.assertEqual((read.kind, read.previous, read.restored, read.unloaded), ("", {}, (), ()))
+
+    def test_the_last_finished_record_is_one_past_its_checks_or_the_one_before(self) -> None:
+        finished = state("done")
+        for step in update_state.PAST_CHECKS:
+            with self.subTest(step=step):
+                self.assertEqual(update_state.last_finished(state(step)), state(step))
+        for step in ("failed", "restored", "planned", "migrated"):
+            with self.subTest(step=step):
+                ended = dataclasses.replace(state(step), previous=update_state.bare(finished))
+                self.assertEqual(update_state.last_finished(ended), finished)
+                self.assertIsNone(update_state.last_finished(state(step)))
+        self.assertIsNone(update_state.last_finished(None))
+
+    def test_a_record_kept_in_another_keeps_none_of_its_own(self) -> None:
+        nested = dataclasses.replace(state("done"), carried={"id": "x"}, previous={"id": "y"})
+        bare = update_state.bare(nested)
+        self.assertEqual((bare["carried"], bare["previous"]), ({}, {}))
+        self.assertEqual(update_state.bare(None), {})
+
+
 class LockTest(unittest.TestCase):
     def setUp(self) -> None:
         tmp = tempfile.TemporaryDirectory()

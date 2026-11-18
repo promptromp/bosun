@@ -68,4 +68,6 @@ agy-windows 16
 get-sh 3
 update 128
 update-convert 10
+update-back 61
+update-branch 29
 uninstall-files 1

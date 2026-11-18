@@ -1,5 +1,5 @@
 #!/bin/bash
-# Usage: tests/sandbox/update_patch.sh [--failing] <copy of bosun>
+# Usage: tests/sandbox/update_patch.sh [--failing | --again] <copy of bosun>
 #
 # Makes "the next version" of bosun out of a copy of it, for the update's tests (tests/smoke.sh,
 # "bosun update"): the ledger's format goes to 2, with the migration that takes it there, one line
@@ -14,14 +14,25 @@
 # while writes are paused.
 #   --failing  the migration changes ledger.json, then fails, on the real data only (the rehearsal's
 #              copy passes): a failure inside the freeze, which the update puts back
+#   --again    the version after the next one: all of the next one (the ledger's format 2 among it), and
+#              another line of policy.md changed, so that it is a version of its own that reads the data as
+#              the next one does: an update to it changes nothing a version reads the data by, and going back
+#              over it restores nothing (bosun update --back)
 set -euo pipefail
 
 usage() { awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"; }
 FAILING=0
-if [ "${1:-}" = "--failing" ]; then
-  FAILING=1
-  shift
-fi
+AGAIN=0
+case "${1:-}" in
+  --failing)
+    FAILING=1
+    shift
+    ;;
+  --again)
+    AGAIN=1
+    shift
+    ;;
+esac
 case "${1:-}" in
   -h | --help)
     usage
@@ -38,11 +49,11 @@ TREE="$1"
   exit 2
 }
 
-python3 - "$TREE" "$FAILING" <<'PY'
+python3 - "$TREE" "$FAILING" "$AGAIN" <<'PY'
 import sys
 from pathlib import Path
 
-tree, failing = Path(sys.argv[1]), sys.argv[2] == "1"
+tree, failing, again = Path(sys.argv[1]), sys.argv[2] == "1", sys.argv[3] == "1"
 
 
 def replace_once(path: Path, old: str, new: str) -> None:
@@ -90,7 +101,7 @@ replace_once(
 
 policy = tree / "orchestrator" / "policy.md"
 lines = policy.read_text().splitlines(keepends=True)
-lines[0] = lines[0].rstrip("\n") + " (the next version)\n"
+lines[0] = lines[0].rstrip("\n") + (" (the version after the next one)\n" if again else " (the next version)\n")
 policy.write_text("".join(lines))
 
 sys.path.insert(0, str(tree / "lib"))

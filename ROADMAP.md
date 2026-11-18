@@ -337,7 +337,12 @@ year of data, and a restore put back 28 files and deleted 124 in 198 ms. The run
 read access to the install and uninstall's wait for what its stopped windows started. Next: the migrations
 of kept stores on a fresh install (`init`, with a backup), and a Codex window's background work, which
 bosun cannot see, so one whose launch changed is restarted without taking stock. Design note:
-[docs/design/update.md](docs/design/update.md).
+[docs/design/update.md](docs/design/update.md). Since then (2026-11-18), for an install that follows `main`
+and takes every merge: `bosun update --back` returns to the version the last update came from, restoring
+that update's backup only for what the older version cannot read (a store's format or rules, the keys it
+wrote to `bosun.env`) and keeping everything else written since; `bosun update --branch <name>` follows a
+branch of the origin (a pull request's) and `--branch main` comes back; and every update checks first that
+the version it moves to would not read the data older than it is.
 
 **Done (2026-11-09): what a window may reach, and what setup grants.** Every window bosun started got
 every MCP server and connector the agent had on the Mac (mail, files, calendars), the recommended setup

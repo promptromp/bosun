@@ -111,6 +111,30 @@ class CheckTest(unittest.TestCase):
         ahead = update_check.check(NEW, None, (OLD[:12], OLD), None, True, channel="main")
         self.assertEqual(update_check.describe(ahead), f"bosun is ahead of the head of main ({OLD[:12]})")
 
+    def test_a_skipped_head_of_main_is_said_and_a_newer_one_offered(self) -> None:
+        """--skip, or a back, records the head as --check names it; the menu bar app offers it again only
+        when asked by hand (UpdateFlow), and a newer head as usual."""
+        skipped = update_check.check(
+            OLD, None, (NEW[:12], NEW), NEW[:12], False, channel="main", notes="- One\n"
+        )
+        self.assertTrue(skipped["skipped"] and skipped["available"])
+        self.assertEqual(update_check.describe(skipped), "1 commit on main since yours (skipped)")
+        newer = update_check.check(
+            OLD, None, ("c" * 12, "c" * 40), NEW[:12], False, channel="main", notes="- Two\n"
+        )
+        self.assertFalse(newer["skipped"])
+        self.assertTrue(update_check.skippable(NEW[:12]))
+        self.assertTrue(update_check.skippable("v2026.11.12.2"))
+        self.assertFalse(update_check.skippable(NEW[:7]))
+
+    def test_the_main_channel_names_the_branch_the_install_follows(self) -> None:
+        answer = update_check.check(OLD, None, (NEW[:12], NEW), None, False, channel="main", notes="- One\n")
+        self.assertEqual(update_check.describe(answer, "try-x"), "1 commit on try-x since yours")
+        ahead = update_check.check(NEW, None, (OLD[:12], OLD), None, True, channel="main")
+        self.assertEqual(
+            update_check.describe(ahead, "try-x"), f"bosun is ahead of the head of try-x ({OLD[:12]})"
+        )
+
     def test_a_problem_is_the_error_and_nothing_else(self) -> None:
         answer = update_check.failed("releases", OLD, "could not reach https://example.com/acme/bosun.git")
         self.assertFalse(answer["available"])

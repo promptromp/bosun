@@ -1884,6 +1884,29 @@ stop_own_jobs() {
   return "$status"
 }
 
+# Each launchd job <label> that is loaded or has its plist installed, unloaded and its plist deleted, its
+# label said once it is (with --dry-run, said only): what an update's release does to the jobs the version
+# it updates to has none of (lib/update.py, _unload_jobs), as each would run a command that version lacks.
+unload_jobs() { # [--dry-run] <label...>
+  local dry=0 label plist status=0
+  if [ "${1:-}" = "--dry-run" ]; then
+    dry=1
+    shift
+  fi
+  for label in "$@"; do
+    plist="$HOME/Library/LaunchAgents/$label.plist"
+    job_loaded "$label" || [ -e "$plist" ] || continue
+    if [ "$dry" = 0 ] && job_loaded "$label" && ! launchctl bootout "gui/$(id -u)/$label" 2>/dev/null; then
+      log "ERROR: could not unload $label" >&2
+      status=1
+      continue
+    fi
+    [ "$dry" = 1 ] || rm -f "$plist"
+    echo "$label"
+  done
+  return "$status"
+}
+
 # Each launchd job <label> that is not loaded, loaded again from its plist as it is on disk: what a
 # conversion put back loads of what it stopped (nothing rendered, so the code the install path leads to
 # runs under the plists it had). One already loaded is left as it is.

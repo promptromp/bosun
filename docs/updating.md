@@ -1,7 +1,7 @@
 # Updating and uninstalling
 
-How to move bosun to a newer version while your agents keep working, how to go back to the version before, and
-how to take bosun off your Mac again. An install that [`get.sh`](../get.sh) made updates with `bosun update`; a
+How to move bosun to a newer version while your agents keep working, how to try a branch, how to go back to the
+version before, and how to take bosun off your Mac again. An install that [`get.sh`](../get.sh) made updates with `bosun update`; a
 checkout of your own updates with `git pull`.
 
 ## Updating
@@ -11,6 +11,8 @@ bosun update --check     # is there a newer release? Changes nothing
 bosun update             # shows the plan, and asks
 bosun update --dry-run   # only shows the plan
 bosun update --yes       # goes ahead without asking
+bosun update --back      # back to the version the last update came from
+bosun update --branch x  # follow the branch x from now on, and update to its head
 ```
 
 Running the install line again does the same as `bosun update`. The menu bar app's Check for Updates... runs the
@@ -29,6 +31,10 @@ branch) while your agents keep working:
    3 kept), migrates them, switches `~/.local/share/bosun` to the new version and checks each store. Writes that
    arrive meanwhile wait, and land on the new version.
 5. If any of that fails, it puts everything back as it was and says what failed.
+
+Before it hands over to the new version, the version you run checks that the new one would not read your data in an
+older format, or under older rules, than your data is in (a revert on `main`, or a branch from before a migration),
+and refuses if it would: going back past a migration is [`bosun update --back`](#going-back)'s.
 
 How it works: [design note](design/update.md).
 
@@ -84,8 +90,8 @@ Tasks already handed to a repo window keep the text they had. The summary lists 
 It ends with a summary: the commits, the migrations, the config it changed and its new keys, anything you have
 to change by hand in your own files, the prompts that changed, the jobs reloaded, what came of each window,
 anything that fails now that did not before, and where the backup is. The summary is saved as `summary.md` in the
-backup's folder, and its last line points to [Going back](#going-back). `bosun doctor` lists what the last update
-left for you to do.
+backup's folder, and its last line is how to go back (`bosun update --back`, [Going back](#going-back)). `bosun doctor`
+lists what the last update left for you to do.
 
 An update cut short (Ctrl-C, a crash, a power cut) is put back, or finished, by the next `bosun update`.
 
@@ -131,6 +137,27 @@ list, or remove them from that file, then `bosun refresh <window>`.
 
 The Settings window's "Updates from" sets it, and so does `bosun settings set BOSUN_UPDATE_CHANNEL=main`.
 
+**Trying a branch** (a pull request's, before it merges):
+
+```bash
+bosun update --branch try-x            # follow try-x from now on, and update to its head
+bosun update --branch try-x --dry-run  # only show the plan; nothing is written
+bosun update --branch main             # follow main again
+```
+
+`--branch` checks first that the origin has the branch, and changes nothing if it has not. Then it sets what the
+install follows (`bosun.branch` in `~/.local/share/bosun-versions/bosun.git`) and, if the channel is not `main` yet,
+sets `BOSUN_UPDATE_CHANNEL=main` (through `bosun settings set`, which keeps a copy of `bosun.env`), and updates to the
+branch's head as any update does: it shows the plan and asks. Say no, and the install still follows the branch, at the
+version it has; the next `bosun update` goes to the branch's head. Once the branch has merged and its origin deleted
+it, `bosun update` cannot fetch it and says to run `bosun update --branch main`. A branch whose code is older than
+your data (one made before a migration your data went through) is refused, pointing at `--back`. To follow the
+releases again: `bosun settings set BOSUN_UPDATE_CHANNEL=releases`.
+
+A local branch you have not pushed is the install line's: `curl ... | BOSUN_REPO=<path to your checkout>
+BOSUN_BRANCH=<branch> sh`. That points `bosun.git`'s origin at your checkout until you run the install line again
+with `BOSUN_REPO` set back (the address the README's install line uses).
+
 ### The first update of an older install
 
 An install from before versions side by side is a checkout in `~/.local/share/bosun`, and its bosun has no
@@ -151,8 +178,41 @@ step: [design/update.md](design/update.md#getsh-on-an-existing-install).
 
 ## Going back
 
-There is no command for it yet. A failed update puts everything back by itself; going back later is by hand. You
-need the version the update came from and the backup it took, both named in its summary:
+```bash
+bosun update --back            # shows the plan, and asks
+bosun update --back --dry-run  # only shows the plan
+bosun update --back --yes      # goes back without asking
+```
+
+It goes back to the version the last finished update came from: one step, never further. A second `--back` is
+refused; `bosun update` goes forward again. The version you run now does it (it knows what its update changed), and
+fetches nothing; if the older version's folder is gone, it adds it again from `bosun.git`.
+
+What you wrote since the update stays wherever the older version can read it. Each part is decided on its own:
+
+| Part | Kept | Restored from the update's backup |
+|---|---|---|
+| The ledger, the ontology | When both versions read it alike (the same format and rules version) | When its format or rules version differs: a migration ran, or the rules changed. What was written to it since is not in the backup; going back takes a backup of its own first, which keeps it |
+| `bosun.env` | When the update did not write it | The update's own changes are taken back (a renamed key gets its old name back, a value it added goes), where they still read as it wrote them; a line you changed since stays as you made it, and the plan says so. The file is kept first as `bosun.env.pre-back-<time>` |
+| Everything else (the events queue, signals, your own files) | Always | Never |
+
+The plan says which applies, and what restoring would lose (how many changes were written since, when the last was,
+and the ledger items they touch), before it asks. With nothing to restore it only switches back, and writes never
+pause. The windows come along as for an update ([What happens to the windows](#what-happens-to-the-windows)), and it
+ends with a summary ("bosun went back: ..."), saved beside its backup (or, when it took none, as `back-summary.md`
+beside the backup of the update it went back over). The version it left is recorded as skipped, so `bosun update
+--check` and the menu bar app no longer offer it; a newer one is offered as usual, and `bosun update` still goes to it
+if you ask, its plan saying `--back` left it.
+
+It is refused when no update has finished, after a back, or when the version before is the checkout an older `get.sh`
+made (go back by hand, below). A restore needs the update's backup: never past a `kg forget`, which deletes every
+update backup there is, since restoring one would bring the person back. When nothing needs restoring, a back after a
+forget still works.
+
+<details class="note" markdown>
+<summary>Going back by hand, when bosun update itself is what broke</summary>
+
+You need the version the update came from and the backup it took, both named in its summary:
 
 1. **Stop what writes:** `bosun quit --stop-now` (or `bosun stop`), and unload the watchdog, learning and console
    jobs: `launchctl bootout gui/$(id -u)/com.bosun.morning.watchdog`, and the same for `.learn` and `.console` if
@@ -173,9 +233,7 @@ need the version the update came from and the backup it took, both named in its 
 `bosun update` would take you forward again, to the newest release, or on the `main` channel to the head of the
 branch (from the checkout kept from before versions, which has no `bosun update`, the install line does).
 
-Going back is only to the version the update came from, and never past a `kg forget`: deleting a person deletes
-every update backup there is, since restoring one would bring the person back, and says so. A summary whose backup
-a forget deleted says that going back past it is no longer possible.
+</details>
 
 ## Uninstall
 

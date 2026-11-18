@@ -151,6 +151,14 @@ class Plan:
     # Those of them whose agent is not running (exited): not restarted, rather than left running; an older
     # record has none.
     stopped: tuple[str, ...] = ()
+    # The launchd jobs installed that the version updated from lists and the one updated to does not (its
+    # job_labels): the release unloads them, as they would run a command that version lacks.
+    unload: tuple[str, ...] = ()
+    # When `bosun update --back` left the version this plan goes to (its record's start), else "".
+    left_by_back: str = ""
+    # A back's own part (lib/update_back_plan.py, BackPart.as_record): what it restores and keeps, and
+    # what restoring loses; None for an update.
+    back: Mapping[str, Any] | None = None
 
 
 def _matches(path: str, patterns: Sequence[str]) -> bool:
@@ -308,6 +316,9 @@ _READ: dict[str, tuple[Callable[[Any], Any], Any]] = {
     "owed_left": (_strings, ()),
     "refused": (_pairs, ()),
     "stopped": (_strings, ()),
+    "unload": (_strings, ()),
+    "left_by_back": (str, ""),
+    "back": (lambda value: dict(value) if isinstance(value, dict) else None, None),
 }
 
 
@@ -362,24 +373,39 @@ def _console_lines(plan: Plan) -> list[str]:
     return ["running: restart it after the update"] if plan.console else []
 
 
-def render_plan(plan: Plan) -> str:
-    """The plan as the person reads it before saying yes."""
-    out = [f"Update {plan.from_commit} -> {plan.to_commit}", ""]
-    out += _section(f"Commits ({len(plan.commits)}):", plan.commits)
-    out += _section("Migrations:", [f"{s}: format {a} -> {b}" for s, a, b in plan.migrations])
+LEFT_BY_BACK = "bosun update --back left this version on {when}: this goes forward to it again."
+
+
+def _data_lines(plan: Plan) -> list[str]:
+    """What an update does to the data and the config: its migrations, rules changes and keys."""
+    out = _section("Migrations:", [f"{s}: format {a} -> {b}" for s, a, b in plan.migrations])
     out += _section("Rules changes:", [f"{s}: version {a} -> {b}" for s, a, b in plan.rules])
     out += _section("New config keys:", _key_lines(plan))
     kept = [migrations.assignment(key, value) for key, value in plan.kept]
     out += _section("Written to bosun.env, to keep what this install did:", kept)
-    out += _section("Config keys renamed or removed:", [_rename_line(a, b) for a, b in plan.renames])
-    out += _section(f"Prompts changed ({len(plan.prompts)}):", plan.prompts)
+    return out + _section("Config keys renamed or removed:", [_rename_line(a, b) for a, b in plan.renames])
+
+
+def plan_sections(plan: Plan) -> list[str]:
+    """The plan's lines on the prompts, the windows, the jobs, the console, the handed tasks and what to
+    change by hand, which an update's and a back's plans share."""
+    out = _section(f"Prompts changed ({len(plan.prompts)}):", plan.prompts)
     out += _section("Windows:", [_window_line(n, t, refused_lines(plan)) for n, t in plan.windows])
     out += _section(OWED, [f"{name}: {OWED_WHAT.get(what, what)}" for name, what in plan.owed])
     out += [OWED_LEFT.format(", ".join(plan.owed_left)), ""] if plan.owed_left else []
     out += _section("Jobs to reload:", plan.jobs)
+    out += _section("Jobs to unload (the version it goes to has none of them):", plan.unload)
     out += _section("Console:", _console_lines(plan))
     out += _section("Handed tasks keep their old text (bosun delegate --update):", plan.handed)
-    out += _section("Change these of your own files yourself:", plan.user_changes)
+    return out + _section("Change these of your own files yourself:", plan.user_changes)
+
+
+def render_plan(plan: Plan) -> str:
+    """The plan as the person reads it before saying yes."""
+    out = [f"Update {plan.from_commit} -> {plan.to_commit}", ""]
+    out += [LEFT_BY_BACK.format(when=plan.left_by_back), ""] if plan.left_by_back else []
+    out += _section(f"Commits ({len(plan.commits)}):", plan.commits)
+    out += _data_lines(plan) + plan_sections(plan)
     out += _section("Blocked:", plan.blockers)
     out.append("The update is blocked." if plan.blockers else "Nothing changes until you say yes.")
     return "\n".join(out) + "\n"

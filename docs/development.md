@@ -278,7 +278,7 @@ the cheapest of these that can show what you changed:
 | `get.sh`, `install.sh`, launchd, `pmset`, anything macOS does its own way | `tests/sandbox.sh mac run` | the real thing on real macOS, except sleep | 2 minutes |
 | What a new Mac lacks: Homebrew, Apple's tools | `tests/sandbox.sh mac run --from-nothing` | the same from a Mac with nothing on it | 4 minutes |
 | What the menu bar app (`bosun.app`) does: every state of its menu, every dialog and choice of its Quit and update, Open at Login across a restart, one copy at a time, what macOS says to a quit by Apple Event | `tests/sandbox.sh mac app` | the real app, built here and driven by its test hooks on a clone's desktop session, with launchd, a reboot and the Trash; `--from release` the published, notarized one | about 30 minutes |
-| What an update does to an install in use, its windows, its ledger and knowledge base, and what real use does to them: their journals, ids, writes, privacy | `tests/sandbox.sh mac work` | a week of work through the first update's conversion and a mid-afternoon update on a year of data, on real macOS: launchd, a moving clock, racing writers, writes cut short, files changed outside the journal, going back | 16 minutes |
+| What an update does to an install in use, its windows, its ledger and knowledge base, and what real use does to them: their journals, ids, writes, privacy | `tests/sandbox.sh mac work` | a week of work through the first update's conversion and a mid-afternoon update on a year of data, on real macOS: launchd, a moving clock, racing writers, writes cut short, files changed outside the journal, going back by hand and with `bosun update --back` | 16 minutes |
 | How an agent behaves: launching it, its screens and files, a task handed to it, an update's prompts, which MCP servers a window reaches | `tests/sandbox.sh mac live claude`, `... live codex` | the real agents from nothing, through setup, sessions, an update and connectors | about 10 minutes and a dollar each (on Claude Code about 12 minutes and a few dollars more, for the ontology) |
 | How Antigravity (`agy`) behaves under bosun: its hooks and plugin, its screen, its dialogs, its login | `tests/sandbox.sh mac live agy` | the real `agy` in a VM with a window, where you sign in; then windows started by launchd, Esc, a reviewer's dialog, the plugin's approvals, a slow hook, connectors, uninstall | about 25 minutes, you at the start, and a personal account's free quota |
 | How bosun feels to use, by hand, with the real agents and no setup of yours | `tests/sandbox.sh mac try` | bosun installed, signed in by your key and running in a VM with a window, for you to try until you leave its shell | about 10 minutes to set up, then the key's requests while it runs |
@@ -318,7 +318,8 @@ responsible process that is not the caller's: `launchctl procinfo`, which needs 
 `sudo -n`), the console's job (`BOSUN_CONSOLE_ALWAYS=1`: started by `bosun start`'s marker, no process after a
 `bosun quit`), `bosun quit` with what the watchdog and the morning job do after it, `bosun update` from one release
 to the next (the install is on the default `releases` channel, its origin `~/origin.git` a repository with a release
-tag, and the next release is tagged there by the test), the real `pmset`, `plutil` and bash 3.2. A Tart VM has
+tag, and the next release is tagged there by the test), `bosun update --branch` to a branch the test pushes there
+and back to `main` (then the releases again), the real `pmset`, `plutil` and bash 3.2. A Tart VM has
 Gatekeeper's assessments off, which the test turns on for its `spctl` check.
 
 ```bash
@@ -423,7 +424,12 @@ the version before's `ledger validate --journal`, that each hook command of that
 runs on the next, that the Slack watcher's next run catches up, and that a temporary link a switch cut
 short is swept. It measures the freeze (`freeze_ms` in the update's record, under 10 s) and what restoring
 the backup costs on that data (a recovering approval hook has 8 s). Then it goes back by hand, exactly as
-[Going back](updating.md#going-back) says, forward again with `bosun update`, and a person forgotten after
+[Going back](updating.md#going-back) says (the way back when the newer version's own update is what broke), and
+forward again with `bosun update`. Then `bosun update --back` over that update, with a ledger write and an ontology
+write made between the update and the back: the ledger restored in format 1 (the write made since in the back's
+own backup), the ontology kept with its write, a second `--back` refused, and forward again. Then an update to the
+version after (`tests/sandbox/update_patch.sh --again`: the same format 2, another line of `policy.md`) and
+`--back` over it, which restores nothing, takes no backup and keeps both writes made since. A person forgotten after
 that must leave nothing in any backup or rehearsal copy (`grep -r`).
 
 Then writers at once (twenty in the ledger, ten in the knowledge base, then ten in each, under one replica

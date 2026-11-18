@@ -25,8 +25,10 @@ from dataclasses import dataclass
 from typing import Any
 
 import migrations
+import update_back_plan
 import update_gate
 import update_plan
+import update_state
 from migrations import Applied
 from update_plan import Plan, Treatment
 from update_state import UpdateState
@@ -34,7 +36,8 @@ from update_state import UpdateState
 
 COLUMN = 12  # the narrowest column of names (stores, files, windows), as the design's example has it
 GAP = 2  # the least space between a name and its line
-GOING_BACK = "docs/updating.md#going-back"
+GOING_BACK = "bosun update --back (docs/updating.md#going-back)"
+GOING_FORWARD = "bosun update"  # what a back's summary ends with
 PROMPTS = "orchestrator/"  # what a prompt's path starts with, left out of its name
 LEFT_ALONE = "kept running (nothing it was started with changed)"
 NOT_BOSUNS = "left as it is (bosun did not start it)"
@@ -79,6 +82,9 @@ class Summary:
     backup_size: int  # the size of its files, in bytes
     backup_gone: bool  # a kg forget deleted it since
     findings: tuple[str, ...]
+    unloaded: tuple[str, ...] = ()  # the launchd jobs' labels the release unloaded
+    back: bool = False  # a back's (`bosun update --back`): it says it went back, and how to go forward
+    over: str = ""  # a back's: when the update it went back over started, as it says it
 
 
 # ---- the parts --------------------------------------------------------------------------------
@@ -152,6 +158,13 @@ def _agents(plan: Plan, said: Sequence[tuple[str, str]]) -> tuple[tuple[str, str
     return (*found, *lines.items())
 
 
+def _back_data(state: UpdateState, plan: Plan) -> tuple[tuple[str, str], ...] | None:
+    """A back's line per store (update_back_plan.summary_data), from its plan's part and what it restored;
+    None for an update."""
+    back = update_back_plan.from_record(plan.back)
+    return update_back_plan.summary_data(back, state.restored) if back is not None else None
+
+
 def build(  # noqa: PLR0913, PLR0917 - the parts, each from the step that learnt it
     state: UpdateState,
     plan: Plan,
@@ -170,12 +183,14 @@ def build(  # noqa: PLR0913, PLR0917 - the parts, each from the step that learnt
     of it); <jobs>, the launchd jobs reloaded; <findings>, what was found after the switch; whether
     its backup is still there and its size; how long it took; and <agents>, what came of each window
     brought along (update_agents.outcomes)."""
+    back = _back_data(state, plan)
+    over = update_back_plan.from_record(plan.back)
     return Summary(
         from_commit=state.from_commit,
         to_commit=state.to_commit,
         commits=len(plan.commits),
         seconds=seconds,
-        data=_data(plan, applied),
+        data=back if back is not None else _data(plan, applied),
         config=(*config_lines, *_added_keys(plan)),
         prompts=plan.prompts,
         jobs=tuple(jobs),
@@ -186,6 +201,9 @@ def build(  # noqa: PLR0913, PLR0917 - the parts, each from the step that learnt
         backup_size=backup_size if backup_exists else 0,
         backup_gone=bool(state.backup) and not backup_exists,
         findings=tuple(findings),
+        unloaded=state.unloaded,
+        back=state.kind == update_state.BACK,
+        over=update_back_plan.when(over.over_started) if over is not None else "",
     )
 
 
@@ -352,9 +370,12 @@ def _short(commit: str) -> str:
 
 
 def _headline(summary: Summary) -> str:
+    versions = f"{_short(summary.from_commit)} -> {_short(summary.to_commit)}"
+    if summary.back:
+        over = f", over the update of {summary.over}" if summary.over else ""
+        return f"bosun went back: {versions} in {duration(summary.seconds)}{over}"
     count = summary.commits
     commits = f" ({count} commit{'' if count == 1 else 's'})" if count else ""
-    versions = f"{_short(summary.from_commit)} -> {_short(summary.to_commit)}"
     return f"bosun updated: {versions}{commits} in {duration(summary.seconds)}"
 
 
@@ -386,11 +407,12 @@ def render(summary: Summary, *, home: str = "", launchd_label: str = "") -> str:
         *_config(summary),
         *_prompts(summary.prompts),
         *_named("Jobs reloaded", jobs),
+        *_named("Jobs unloaded", [job_name(label, launchd_label) for label in summary.unloaded]),
         *_named("Handed tasks keep their old text", handed),
         *_section("Agents", _rows(summary.agents)),
         *_section("Found after the switch", summary.findings),
         *_backup(summary, home),
-        f"Going back: {GOING_BACK}",
+        f"Going forward again: {GOING_FORWARD}" if summary.back else f"Going back: {GOING_BACK}",
     ]
     return "\n".join(lines) + "\n"
 

@@ -111,6 +111,20 @@ def wanted_version(root: Path) -> str:
     return version
 
 
+def _numbers(version: str) -> tuple[int, ...] | None:
+    """<version>'s dotted numbers (0.1.4: (0, 1, 4)); None for one with a part that is not a number."""
+    parts = version.split(".")
+    return tuple(int(part) for part in parts) if all(part.isdigit() for part in parts) else None
+
+
+def wants_older(wanted: str, installed: str | None) -> bool:
+    """Whether a version of bosun that wants app <wanted> wants an older app than the one installed: then
+    the app is left as it is (an update brings the app forward only). False with no app, or a version
+    that is not dotted numbers, which an update then installs as before."""
+    have, want = (_numbers(installed) if installed else None), _numbers(wanted)
+    return have is not None and want is not None and want < have
+
+
 def github_slug(url: str) -> str | None:
     """owner/repo of a GitHub address, in any form git takes; None for any other host (credentials in it
     are dropped, never kept)."""

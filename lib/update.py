@@ -67,6 +67,7 @@ import knowledge_store
 import ledger
 import migrations
 import update_agents
+import update_back_plan
 import update_backups
 import update_facts
 import update_gate
@@ -259,16 +260,24 @@ def _put_back(state_dir: Path, config_dir: Path, state: UpdateState, exc: BaseEx
     return _step(state_dir, restored, "failed", error=error)
 
 
-def freeze(state: UpdateState, plan: Plan, state_dir: Path, config_dir: Path) -> UpdateState:
+def freeze(
+    state: UpdateState,
+    plan: Plan,
+    state_dir: Path,
+    config_dir: Path,
+    frozen: Callable[[UpdateState], UpdateState] | None = None,
+) -> UpdateState:
     """Back up, migrate, switch and check under both stores' write locks (update_gate.store_locks:
-    the ledger's, then the knowledge base's), each step recorded before it starts. Any failure,
-    Ctrl-C included, puts it all back and records `failed` with the error. Records how long writes
-    were paused, freeze_ms: from the locks taken to their release (a writer that held a lock when the
-    freeze began delays it, but paused nothing meanwhile)."""
+    the ledger's, then the knowledge base's), each step recorded before it starts; or <frozen>'s steps
+    there (a back's: back up, restore, switch). Any failure, Ctrl-C included, puts it all back and
+    records `failed` with the error. Records how long writes were paused, freeze_ms: from the locks
+    taken to their release (a writer that held a lock when the freeze began delays it, but paused
+    nothing meanwhile)."""
+    steps = frozen or (lambda begun: _frozen(begun, plan, state_dir, config_dir))
     with update_gate.store_locks(state_dir, config_dir):
         started = time.monotonic()
         try:
-            state = _frozen(state, plan, state_dir, config_dir)
+            state = steps(state)
         except BaseException as exc:  # noqa: BLE001 - every failure inside the freeze is put back
             state = _put_back(state_dir, config_dir, state, exc)
     freeze_ms = round((time.monotonic() - started) * 1000)
@@ -319,7 +328,12 @@ def _bring_app_along(root: Path) -> list[str]:
     current one). It goes by the app being there, not by BOSUN_MENU_APP, which is the person's wish (init's
     question, the watchdog's alert): an app they added by hand is kept current, as a present Open at Login
     job is. A finding when it could not be (no network, a refusal): the update goes on, its summary says."""
-    present = app_release.app_path(Path.home()).exists()
+    app = app_release.app_path(Path.home())
+    present = app.exists()
+    left = _app_newer(root, app)
+    if left:
+        Output.say(f"  {left}")
+        return []
     done = update_facts.bosun(root, "app", "update")
     if done.returncode == 0:
         said = _last_line(done)
@@ -327,6 +341,20 @@ def _bring_app_along(root: Path) -> list[str]:
             Output.say(f"  {said}")
         return []
     return [f"bosun.app: {_last_line(done) or 'it could not be updated'}"]
+
+
+def _app_newer(root: Path, app: Path) -> str:
+    """What is said when the installed app is newer than the version in <root> wants (an update brings the
+    app forward only: a back, or a branch from before the app's last version, leaves it as it is); "" when
+    it is not, or that version's wish cannot be read (its own `bosun app update` says why)."""
+    try:
+        wanted = app_release.wanted_version(root)
+    except app_release.AppError:
+        return ""
+    installed = app_release.bundle_version(app)
+    if not app_release.wants_older(wanted, installed):
+        return ""
+    return f"{app_release.BUNDLE} {installed} is newer than this version wants ({wanted}): left as it is"
 
 
 def _restart_console(root: Path) -> list[str]:
@@ -385,20 +413,55 @@ def _prune(state_dir: Path, state: UpdateState) -> list[str]:
     return [f"kept {kept}, {_kept_as(kept)}: {why}" for kept, why in versions.held_back(folder, keep)]
 
 
+def _lead_install(state: UpdateState) -> None:
+    """The install led to the version <state> updates to, unless it does already (as after a freeze, whose
+    switch did it): the first thing a release does, so a back that restored nothing, which switches here,
+    is carried on from `checked` like an update."""
+    to_root = Path(state.to_root)
+    install = install_paths.install_path(to_root)
+    current = versions.current(install)
+    if current is not None and current.resolve() != to_root.resolve():
+        versions.point(install, to_root)
+        Output.say(f"  {install} now leads to {to_root.name}")
+
+
+def _unload_jobs(state: UpdateState) -> tuple[list[str], list[str]]:
+    """The launchd jobs installed that the version updated from lists and the one updated to does not
+    (update_facts.dropped_jobs), unloaded and their plists deleted by this code's unload_jobs: their labels,
+    and a finding if one could not be."""
+    labels = update_facts.dropped_jobs(Path(state.from_root), Path(state.to_root))
+    if not labels:
+        return [], []
+    done = update_facts.shell(update_facts.THIS, 'unload_jobs "$@"', *labels)
+    gone = done.stdout.split()
+    for label in gone:
+        Output.say(f"  unloaded the launchd job {label}: the version updated to has none")
+    found = (
+        [] if done.returncode == 0 else [f"launchd: {done.stderr.strip() or 'a job could not be unloaded'}"]
+    )
+    return gone, found
+
+
 def release(state: UpdateState) -> UpdateState:
-    """After the freeze: the launchd jobs whose plist changed reloaded, the check-in loop restarted, the
-    menu bar app brought to the version this one expects (`bosun app update`, which does nothing with no app
-    installed) and the console's job restarted, all while the hold is still on, then the hold lifted
-    (`released`); old backups and version folders pruned; what went wrong there, a checkout from before
-    versions kept for what it holds, and what the new version's `bosun doctor` finds kept as findings,
-    reported, never rolled back (writes may have landed since)."""
+    """After the freeze: the install led to the new version (a no-op after a freeze switched it), the
+    launchd jobs whose plist changed reloaded and those the new version lacks unloaded, the check-in loop
+    restarted, the menu bar app brought to the version this one expects (`bosun app update`, which does
+    nothing with no app installed, and never takes it back to an older one) and the console's job
+    restarted, all while the hold is still on, then the hold lifted (`released`); old backups and version
+    folders pruned; what went wrong there, a checkout from before versions kept for what it holds, and what
+    the new version's `bosun doctor` finds kept as findings, reported, never rolled back (writes may have
+    landed since)."""
     where = folders()
     to_root = Path(state.to_root)
+    _lead_install(state)
     labels, found = _reload_jobs(to_root)
     if labels:  # kept at once, with those of a release before this one (carried on)
         reloaded = tuple(dict.fromkeys((*state.reloaded, *labels)))
         state = _record(where.state_dir, dataclasses.replace(state, reloaded=reloaded))
-    found += _restart_checkin_loop(to_root)
+    unloaded, unloading = _unload_jobs(state)
+    if unloaded:
+        state = _record(where.state_dir, dataclasses.replace(state, unloaded=(*state.unloaded, *unloaded)))
+    found += unloading + _restart_checkin_loop(to_root)
     found += _bring_app_along(to_root)
     found += _restart_console(to_root)
     _unmark(where.state_dir)  # a conversion's own work: the reload and the restart brought it back
@@ -558,15 +621,15 @@ def _show(plan: Plan, as_json: bool) -> None:
 AHEAD = "bosun update --yes goes ahead"
 
 
-def _go_ahead(yes: bool, ahead: str = AHEAD) -> bool:
-    """--yes, or yes to the question in a terminal; without one, the plan alone, and <ahead>: what
+def _go_ahead(yes: bool, ahead: str = AHEAD, question: str = "Update now?") -> bool:
+    """--yes, or yes to <question> in a terminal; without one, the plan alone, and <ahead>: what
     goes ahead without asking."""
     if yes:
         return True
     if not sys.stdin.isatty():
         Output.say(f"Nothing has changed: in a terminal it asks first, and {ahead}.")
         return False
-    print("Update now? [y/N] ", end="", file=sys.stderr if Output.to_stderr else sys.stdout, flush=True)
+    print(f"{question} [y/N] ", end="", file=sys.stderr if Output.to_stderr else sys.stdout, flush=True)
     answer = input().strip().lower()
     if answer in ("y", "yes"):
         return True
@@ -639,8 +702,21 @@ def _prepared(plan: Plan, old_root: Path, new_root: Path, where: Folders) -> Upd
     one keeps."""
     Output.say("Asking bosun doctor what fails before the update...")
     before = _doctor_fails(new_root)
-    started = _started(plan, old_root, new_root, before, _taken_from(where.state_dir))
+    started = begun(plan, old_root, new_root, before, where.state_dir)
     return _rehearsed(_runs_as(where.state_dir, _record(where.state_dir, started)), plan, where)
+
+
+def begun(
+    plan: Plan, old_root: Path, new_root: Path, doctor_before: Sequence[str], state_dir: Path, kind: str = ""
+) -> UpdateState:
+    """Under update.lock, the record of an update (or of a back: <kind>) starting to carry out <plan>
+    (_started), with the last update's whose windows it takes over (_taken_from) and the last finished
+    record (`previous`, update_state.last_finished), so a back after it fails still finds what to go back
+    over, and a back's is the update it goes back over."""
+    carried = _taken_from(state_dir)
+    previous = update_state.bare(update_state.last_finished(update_state.read(state_dir)))
+    started = _started(plan, old_root, new_root, doctor_before, carried)
+    return dataclasses.replace(started, kind=kind, previous=previous)
 
 
 def _taken_from(state_dir: Path) -> UpdateState | None:
@@ -717,14 +793,16 @@ def _text(state: UpdateState, summary: update_summary.Summary) -> str:
 
 
 def _saved(state: UpdateState, text: str, say: Callable[[str], None]) -> Path | None:
-    """<text> as summary.md in the update's backup folder, once the update is done and if the folder
-    is still there (a kg forget deletes every backup, and may do so meanwhile: its deletion tries a
-    folder this wrote into again); where, or None. One that cannot be written is said."""
-    folder = Path(state.backup) if state.backup else None
-    if state.step != "done" or folder is None or not folder.is_dir():
+    """<text> as summary.md in the update's backup folder (a back that took none: beside the backup of
+    the update it went back over, update_back_plan.summary_place), once the update is done and if the
+    folder is still there (a kg forget deletes every backup, and may do so meanwhile: its deletion tries
+    a folder this wrote into again); where, or None. One that cannot be written is said."""
+    place = update_back_plan.summary_place(state)
+    if state.step != "done" or place is None or not place[0].is_dir():
         return None
-    path = folder / update_backups.SUMMARY
-    tmp = folder / f".{update_backups.SUMMARY}.tmp"
+    folder, name = place
+    path = folder / name
+    tmp = folder / f".{name}.tmp"
     try:
         tmp.write_text(f"```text\n{text}```\n", encoding="utf-8", errors="replace")
         tmp.replace(path)

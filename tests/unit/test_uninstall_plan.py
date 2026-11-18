@@ -175,6 +175,7 @@ class FileTables(unittest.TestCase):
             ("bosun.env", up.SETTINGS),
             ("bosun.env.pre-init-20261102-080000", up.SETTINGS),
             ("bosun.env.pre-update-20261106-093005", up.SETTINGS),
+            ("bosun.env.pre-back-20261118-154200", up.SETTINGS),  # what bosun update --back kept
             (".bosun.env.update.tmp", up.WORKING),  # bosun update's bosun.env, cut short
             (
                 jr.WRITING.format(name="bosun.env.pre-update-20261106-093005", writer="4242.1a2b3c4d"),

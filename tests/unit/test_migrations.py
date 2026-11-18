@@ -604,6 +604,93 @@ class TestAddedKeys(MigrationTest):
         self.assertEqual(out.getvalue(), "")
 
 
+class TestRevertConfig(MigrationTest):
+    """bosun update --back takes an update's changes to bosun.env back (revert_config): each where it still
+    reads as the update wrote it; the rest left, and said."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.env = self.ctx.config_dir / "bosun.env"
+        for table, value in (("CONFIG_ADDED", ADDED), ("CONFIG_RENAMES", RENAMES)):
+            patch = mock.patch.object(migrations, table, value)
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    BEFORE = "# mine\nOLD=1\nGONE=3\nKEEP=2"  # no newline at its end, as written by hand
+    ADDED_KEYS = ("BOSUN_FRESH", "BOSUN_KEEPS")
+
+    def written(self) -> str:
+        return migrations.written_config(self.BEFORE, self.ADDED_KEYS)[0]
+
+    def test_undoing_what_the_update_wrote_gives_back_what_it_read(self) -> None:
+        for before in (self.BEFORE, self.BEFORE + "\n", "", 'export OLD="a b"\n', "KEEP=2\n"):
+            with self.subTest(before=before):
+                now = migrations.written_config(before, self.ADDED_KEYS)[0]
+                self.assertEqual(migrations.revert_config(now, before, self.ADDED_KEYS).text, before)
+
+    def test_it_says_each_change_taken_back(self) -> None:
+        reverted = migrations.revert_config(self.written(), self.BEFORE, self.ADDED_KEYS)
+        self.assertEqual(reverted.said, ("NEW is OLD again", "GONE put back", 'BOSUN_KEEPS="all" removed'))
+        self.assertEqual(reverted.left, ())
+
+    def test_a_file_changed_since_keeps_what_was_changed(self) -> None:
+        """A line of my own added, a renamed key's value changed, the kept value changed: mine stays."""
+        now = self.written().replace("NEW=1", "NEW=5").replace('BOSUN_KEEPS="all"', 'BOSUN_KEEPS="slack"')
+        now += "MINE=1\n"
+        reverted = migrations.revert_config(now, self.BEFORE, self.ADDED_KEYS)
+        self.assertIn("NEW=5\n", reverted.text)
+        self.assertIn('BOSUN_KEEPS="slack"\n', reverted.text)
+        self.assertIn("MINE=1\n", reverted.text)
+        self.assertNotIn("# Added by bosun update", reverted.text)
+        self.assertTrue(reverted.text.endswith(migrations.PUT_BACK + "GONE=3\n"), reverted.text)
+        self.assertEqual(reverted.said, ("GONE put back",))
+        self.assertEqual(
+            reverted.left,
+            (
+                "NEW was changed since the update: left as it is (the version gone back to: it reads OLD)",
+                (
+                    "BOSUN_KEEPS was changed since the update: left as it is (the version gone back to: it "
+                    "does not read it)"
+                ),
+            ),
+        )
+
+    def test_a_removed_key_set_again_since_is_not_put_back_twice(self) -> None:
+        now = self.written() + "GONE=4\n"
+        reverted = migrations.revert_config(now, self.BEFORE, self.ADDED_KEYS)
+        self.assertEqual(reverted.text.count("GONE="), 1)
+        self.assertIn("GONE=4\n", reverted.text)
+
+    def test_writing_it_keeps_the_file_first_and_only_when_it_changes(self) -> None:
+        self.env.write_text(self.written())
+        self.env.chmod(0o600)
+        reverted = migrations.revert_written_config(self.ctx.config_dir, NOW, self.BEFORE, self.ADDED_KEYS)
+        self.assertEqual(self.env.read_text(), self.BEFORE)
+        copy = migrations.back_copy(self.ctx.config_dir, NOW)
+        self.assertEqual(copy.name, "bosun.env.pre-back-20261106-093005")
+        self.assertEqual(copy.read_text(), self.written())
+        self.assertEqual(oct(self.env.stat().st_mode & 0o777), "0o600")
+        self.assertEqual(len(reverted.said), 3)
+        copy.unlink()
+        again = migrations.revert_written_config(self.ctx.config_dir, NOW, self.BEFORE, self.ADDED_KEYS)
+        self.assertEqual(again.said, ())
+        self.assertFalse(copy.exists())
+
+    def test_no_config_file_is_nothing_to_take_back(self) -> None:
+        reverted = migrations.revert_written_config(self.ctx.config_dir, NOW, self.BEFORE, self.ADDED_KEYS)
+        self.assertEqual(reverted, migrations.Reverted("", (), ()))
+        self.assertFalse(self.env.exists())
+
+    def test_a_linked_config_stays_a_link_and_its_target_changes(self) -> None:
+        target = self.ctx.config_dir / "dotfiles" / "bosun.env"
+        target.parent.mkdir()
+        target.write_text(self.written())
+        self.env.symlink_to(target)
+        migrations.revert_written_config(self.ctx.config_dir, NOW, self.BEFORE, self.ADDED_KEYS)
+        self.assertTrue(self.env.is_symlink())
+        self.assertEqual(target.read_text(), self.BEFORE)
+
+
 class TestConfigAdded(unittest.TestCase):
     def test_the_registry(self) -> None:
         """Each entry a key with a default in lib/common.sh (a key an update adds), and each kept value

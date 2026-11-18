@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import subprocess
 import sys
@@ -304,6 +305,57 @@ class JobsTest(World):
             plan = update_facts.plan_for(self.old, self.new, self.state, self.config)
         self.assertEqual(asked, [{LOGIN: "0"}])
         self.assertEqual(plan.kept, ((LOGIN, "0"),))
+
+
+class EveryUpdateFactsTest(World):
+    """The facts every update's plan and release gather since `bosun update --back`: the jobs to unload,
+    each version's store formats from its source, and the line a plan says going forward to a version a back
+    left."""
+
+    def test_the_jobs_the_new_version_lacks_are_those_it_unloads(self) -> None:
+        labels = {
+            self.old: "com.bosun.morning com.bosun.morning.now com.bosun.morning.login\n",
+            self.new: "com.bosun.morning\n",
+        }
+        asked: list[tuple[str, ...]] = []
+
+        def shell(root: Path, script: str, *args: str) -> subprocess.CompletedProcess[str]:
+            if script == "job_labels":
+                return subprocess.CompletedProcess([], 0, labels[root], "")
+            asked.append((script, *args))
+            return subprocess.CompletedProcess([], 0, "com.bosun.morning.now\n", "")  # the one installed
+
+        with mock.patch.object(update_facts, "shell", side_effect=shell):
+            self.assertEqual(update_facts.dropped_jobs(self.old, self.new), ["com.bosun.morning.now"])
+            self.assertEqual(update_facts.dropped_jobs(self.new, self.old), [])
+        self.assertEqual(
+            asked, [('unload_jobs --dry-run "$@"', "com.bosun.morning.now", "com.bosun.morning.login")]
+        )
+
+    def test_a_version_that_cannot_say_its_jobs_unloads_none(self) -> None:
+        with mock.patch.object(
+            update_facts, "shell", return_value=subprocess.CompletedProcess([], 1, "", "")
+        ):
+            self.assertEqual(update_facts.dropped_jobs(self.old, self.new), [])
+
+    def test_a_version_s_formats_are_read_from_its_source(self) -> None:
+        (self.old / "lib").mkdir()
+        (self.old / "lib" / "ledger.py").write_text("LEDGER_FORMAT = 3\nRULES_VERSION = 2\n")
+        self.assertEqual(update_facts.source_formats(self.old), {"ledger": 3, "knowledge": 0})
+        repo = Path(update_facts.__file__).resolve().parents[1]
+        self.assertEqual(update_facts.source_formats(repo), dict(migrations.FORMATS))
+
+    def test_a_plan_to_the_version_a_back_left_says_so(self) -> None:
+        back = dataclasses.replace(
+            self.record("done"), kind=update_state.BACK, from_commit=TO, to_commit=FROM
+        )
+        update_state.write(self.state, back)
+        self.assertEqual(update_facts.left_by_back(self.state, TO), "2026-11-07 12:00 UTC")
+        self.assertEqual(update_facts.left_by_back(self.state, FROM), "")
+        update_state.write(self.state, dataclasses.replace(back, step="failed"))  # put back: it left nothing
+        self.assertEqual(update_facts.left_by_back(self.state, TO), "")
+        update_state.write(self.state, dataclasses.replace(back, kind=""))  # an update, not a back
+        self.assertEqual(update_facts.left_by_back(self.state, TO), "")
 
 
 class FactsTest(World):

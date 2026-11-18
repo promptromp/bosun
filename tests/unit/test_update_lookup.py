@@ -269,6 +269,44 @@ class LookupTest(unittest.TestCase):
         git(self.tmp, "--git-dir", str(self.repo), "config", "bosun.branch", "next")
         self.assertEqual(self.answer("main")["latest"]["commit"], self.commits[1])
 
+    def test_a_skipped_head_of_main_is_reported_until_a_newer_one(self) -> None:
+        """On the main channel a version is its head's commit as --check names it (what the menu bar app
+        passes to --skip, and what bosun update --back records of the version it left)."""
+        found = self.answer("main")
+        update_lookup.write_skip(self.state, found["latest"]["version"])
+        again = self.answer("main")
+        self.assertTrue(again["skipped"])
+        self.assertTrue(again["available"])  # skipped is not offered; an update you run still goes
+        self.commits.append(self.commit("fourth"))
+        newer = self.answer("main")
+        self.assertEqual(newer["latest"]["commit"], self.commits[3])
+        self.assertFalse(newer["skipped"])
+
+    def test_the_branch_check_finds_the_origin_s_branches(self) -> None:
+        git(self.up, "branch", "try-x", self.commits[1])
+        update_lookup.has_branch("try-x")
+        update_lookup.has_branch("main")
+        with self.assertRaises(update_lookup.LookupFailed) as caught:
+            update_lookup.has_branch("try-y")
+        self.assertIn("has no branch try-y: nothing changed", str(caught.exception))
+        with self.assertRaises(update_lookup.LookupFailed):
+            update_lookup.has_branch("try")  # a prefix of try-x is no branch
+
+    def test_a_back_skips_the_version_it_left_by_the_name_check_gives_it(self) -> None:
+        self.assertEqual(update_lookup.skip_left(self.state, "main", self.commits[2]), self.commits[2][:12])
+        self.assertEqual(update_lookup.skipped_version(self.state), self.commits[2][:12])
+        self.tag("v2026.01.03", 2)
+        self.assertEqual(update_lookup.skip_left(self.state, "releases", self.commits[2]), "v2026.01.03")
+        self.assertIsNone(
+            update_lookup.skip_left(self.state, "releases", self.commits[1])
+        )  # no release names it
+        self.assertEqual(update_lookup.skipped_version(self.state), "v2026.01.03")
+
+    def test_the_branch_followed_is_bosun_branch_or_main(self) -> None:
+        self.assertEqual(update_lookup.branch_followed(), "main")
+        git(self.tmp, "--git-dir", str(self.repo), "config", "bosun.branch", "try-x")
+        self.assertEqual(update_lookup.branch_followed(), "try-x")
+
     def test_a_channel_that_is_neither_is_refused_naming_the_key(self) -> None:
         found = self.answer("nightly")
         self.assertIn("BOSUN_UPDATE_CHANNEL", found["error"])
@@ -310,6 +348,11 @@ class CommandTest(unittest.TestCase):
             self.assertEqual(code, 2)
             self.assertIn("--skip takes a release version", err.getvalue())
             self.assertEqual(update_lookup.skipped_version(Path(tmp)), "v2026.11.12")
+            code, _ = self.run_main("skip", "0123456789ab", BOSUN_STATE_DIR=tmp)  # a head of main, as named
+            self.assertEqual((code, update_lookup.skipped_version(Path(tmp))), (0, "0123456789ab"))
+            for not_one in ("0123456789", "0123456789abc", "0123456789AB"):
+                with self.subTest(not_one=not_one), contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(self.run_main("skip", not_one, BOSUN_STATE_DIR=tmp)[0], 2)
 
     def test_target_refuses_the_main_channel_and_a_bad_one_in_one_line(self) -> None:
         for channel in ("main", "nightly"):
