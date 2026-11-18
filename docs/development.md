@@ -173,8 +173,8 @@ suite, about 18 minutes):
   the selection itself fails for any reason. The pre-push hook leaves that to the merge queue, whose smoke job
   makes the same choice from the merge group's base and runs it, saying so in one line (a push would otherwise
   wait about 15 minutes for what the queue runs anyway), and so it does a selection it would take more than
-  `BOSUN_SMOKE_DEFER_SECONDS` to run (180 by default: the sections' serial time, with what they need, by
-  `tests/smoke_weights.txt`, over the hook's three shards; a build-out setting, as the selection is);
+  `BOSUN_SMOKE_DEFER_SECONDS` to run (180 by default: the longest of the hook's three shards, each section with
+  what it needs, by `tests/smoke_weights.txt`; a build-out setting, as the selection is);
   `BOSUN_SMOKE_FULL=1` runs the whole suite before the push, `tests/smoke.sh --changed origin/main --jobs 3` the
   selection;
 - **nothing**, when every changed file is ignored (the docs, which their own hooks check; the settings of the
@@ -193,16 +193,24 @@ whole suite: `lib/common.sh` and the other shell libraries, `bin/bosun`, the sui
 and its stand-ins, what every window's launch loads) and `ignore <glob>` (the docs, the other suites, the shard
 weights). `tests/unit/test_smoke_selection.py` fails on a file that is none of those, naming it and saying what to
 add; the same for a section without `covers`. `tests/unit/test_smoke_covers.py` fails on a section that runs a bosun
-command (`"$BOSUN" <cmd>`, `bosun-<cmd>`, `bosun <cmd>`, in its own lines or through a helper it calls) that its
-`covers` do not name, since a change to that command would otherwise not run it; a message the patterns read as a
-run goes in that test's `ALLOWED`, with why.
+command its `covers` do not name, since a change to that command would otherwise not run it. What it reads as a
+run, and nothing more: `"$BOSUN" <cmd>`, `bosun-<cmd>` or `bosun <cmd>` where a command starts; `"$1" <cmd>` (any
+digit) inside a `bash -c '...'` whose arguments after its `_` pass bosun at that place; and the command after a
+helper that runs `"$BOSUN" "$@"` (`dkg kg import`). It reads those in the section's own lines and in every helper
+it calls where a command starts or as the command `check`, `fails_with`, `fails_with_status`, `refused_quietly`,
+`wait_for` or `exits_0_saying_nothing` runs; a call in another shape is not followed. A message the patterns read
+as a run goes in that test's `ALLOWED`, by the command and its exact line, with why. It also fails when the shared
+setup calls a helper a section defines, which does not exist in a run that skips that section.
 
 `tests/smoke.sh` itself is read section by section (`tools/shell_library.py`, a pure reader of a shell file's
-functions and top-level statements), on both sides of the diff: a changed line in a section selects that section and
-the sections that need it (they read what it leaves); in a helper (a function the suite defines), the sections that
-call it; in the shared setup (before the first section, or an `always_run` part), or in a helper the shared setup
-calls, the whole suite. A line of the shared setup that holds no code on either side (a comment, a blank line) runs
-nothing.
+functions), on both sides of the diff: a changed line in a section selects that section and the sections that need
+it (they read what it leaves); in a helper (a function the suite defines), the sections that call it; in the shared
+setup (before the first section, or an `always_run` part), or in a helper the shared setup calls, the whole suite. A
+line of the shared setup that holds no code on either side (a comment, a blank line) runs nothing. A change can
+also move lines it left alone: a `section` line taken out joins its checks to whatever came before it (the section
+above, or an `always_run` part's shared setup), one put in splits a section, a helper's `}` moved takes code into
+or out of the helper. Each such line selects what it was in and what it is in now, so a section split in two runs
+both halves, and a line that was or now is shared setup runs the whole suite.
 
 `BOSUN_SMOKE_FULL=1 git push` forces the whole suite (even for a tree that passed it: the pass record is not
 consulted then either; `BOSUN_SMOKE_NO_CACHE=1` only ignores the record, and still runs just the sections the change reaches). A partial run never records the tree as passed: only a whole one does.

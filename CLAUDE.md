@@ -601,19 +601,23 @@ section, or why it chose everything; `--changed <ref>` alone runs what it chose)
 no section covers and no `ignore` rule lists, an `origin/main` that does not resolve. The hook leaves the whole
 suite to the merge queue, whose smoke job makes the same choice and runs it there (so a push does not wait about 15
 minutes for what the queue does anyway), and so it does a selection the hook would take more than
-`BOSUN_SMOKE_DEFER_SECONDS` to run (180 by default; the sections' serial time by `tests/smoke_weights.txt` over the
-hook's three shards; a build-out setting too); `BOSUN_SMOKE_FULL=1` runs the whole suite before the push. This goes back to the whole suite on every push once the project is past its release
+`BOSUN_SMOKE_DEFER_SECONDS` to run (180 by default; the longest of the hook's three shards by
+`tests/smoke_weights.txt`; a build-out setting too); `BOSUN_SMOKE_FULL=1` runs the whole suite before the push. This goes back to the whole suite on every push once the project is past its release
 (`--pre-push` without the selection); CI's merge queue makes the same selection, and its nightly run the whole
 suite. The choice is `tools/smoke_select.py`; the two places that feed it are `covers` on each
 `section` line and `tests/smoke_selection.txt` (`all <glob>`: the whole suite; `ignore <glob>`: no section reaches it).
 `tests/smoke.sh` itself is read section by section (`tools/shell_library.py`, a pure reader of a shell file's
-functions and top-level statements): a changed line, on either side of the diff, in a section selects it and the
-sections that need it; in a helper, the sections that call it; in the shared setup (before the first section, or an
-`always_run` part) or a helper it calls, the whole suite. The shell libraries are on the `all` list, and what
+functions): a changed line, on either side of the diff, in a section selects it and the sections that need it; in a
+helper, the sections that call it; in the shared setup (before the first section, or an `always_run` part) or a
+helper it calls, the whole suite; a line the diff left alone that a change moved into another of those (a `section`
+line taken out or put in, a helper's `}` moved) selects both. The shell libraries are on the `all` list, and what
 `lib/common.sh` names counts as every section's. `tests/unit/test_smoke_selection.py` fails on a tracked file that is
 none of covered, `all` or `ignore`, and on a section without `covers`, and says what to add;
-`tests/unit/test_smoke_covers.py` fails on a section that runs a bosun command (`"$BOSUN" <cmd>`, `bosun <cmd>`,
-itself or through a helper) its `covers` do not name (a message read as a run goes in its `ALLOWED`, with why). A test must not write into
+`tests/unit/test_smoke_covers.py` fails on a section that runs a bosun command its `covers` do not name, as it
+reads a run: `"$BOSUN" <cmd>`, `bosun-<cmd>` or `bosun <cmd>` where a command starts, `"$1" <cmd>` in a `bash -c`
+whose arguments pass bosun as `$1`, and the command after a helper that runs `"$BOSUN" "$@"`; in the section's lines
+or in a helper it calls where a command starts or as check's (and the other runners') command (a message read as a
+run goes in its `ALLOWED`, by the exact line, with why); and on the shared setup calling a helper a section defines. A test must not write into
 the repository: the run then records no pass and names the file. In `tests/smoke.sh`, a new section begins with
 `section <id> "<name>" [needs <id>,...] covers '<glob>,...'` (unique kebab-case id, and the files it runs or reads:
 its command, the lib modules it exercises, a template or a fixture; what imports or runs those is followed by the
