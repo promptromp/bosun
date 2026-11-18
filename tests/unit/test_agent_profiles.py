@@ -25,7 +25,7 @@ import agent_state
 import agy_state
 import claude_state
 import codex_state
-import uninstall_plan
+import file_tables
 import update_backups
 from agent_files import USAGE, AgentSetup, Profile, SetupError
 from agent_state import AGENTS
@@ -71,7 +71,7 @@ class AgentProfileTest(unittest.TestCase):
             self.assertTrue(agent.PROFILE.setup_preview)
 
     def test_every_state_file_is_in_the_tables(self) -> None:
-        patterns = {pattern for pattern, _kind in uninstall_plan.STATE_FILES}
+        patterns = {pattern for pattern, _kind in file_tables.STATE_FILES}
         for agent in AGENTS.values():
             for name in agent.PROFILE.state_files:
                 assert name in patterns

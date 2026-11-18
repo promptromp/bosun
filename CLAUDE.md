@@ -145,8 +145,8 @@ of truth, so don't copy rules into this file.
   the questions), `lib/init_terminal.py` (the keys and screens) and `lib/init.py` (the CLI: writes the
   config with backups, trusts the folders, then runs `install.sh`, which runs `set_wake` (`lib/common.sh`), the one place that sets `pmset`; the
   launchd jobs are rendered and loaded by `lib/common.sh`, which `install.sh` and `bosun update` share).
-  `lib/uninstall_detect.py` (read-only: what of bosun is here), `lib/uninstall_plan.py` (pure: the
-  tables of what bosun's files are, what goes, what stays, how it reads), `lib/uninstall_macos.py` (launchd
+  `lib/uninstall_detect.py` (read-only: what of bosun is here), `lib/uninstall_plan.py` (pure: what
+  goes, what stays, how it reads, by the tables of what bosun's files are in `lib/file_tables.py`), `lib/uninstall_macos.py` (launchd
   and `pmset`) and `lib/uninstall.py` (the CLI) take it off again; `lib/agent_changes.py` records what bosun
   changed in the agents' own files and the worktrees folders it made beside repo windows (`worktrees_folder` in
   `lib/common.sh`, made by `bosun launch`), so that only that is undone. Design: `docs/design/uninstall.md`.
@@ -384,7 +384,8 @@ of truth, so don't copy rules into this file.
   `tests/sandbox/agy-stand-in` so the stand-in does it too, `tests/fixtures/agy/` (the recorded hook payloads,
   screens and listings) and `docs/design/antigravity.md`.
 - **A file bosun writes in its state or config folder, or anything it leaves elsewhere:** a row in `STATE_FILES`
-  or `CONFIG_FILES` (`lib/uninstall_plan.py`), or a step there, or uninstall leaves it behind. The smoke suite
+  or `CONFIG_FILES` (`lib/file_tables.py`, which uninstall and the update's backups both go by), or a step in
+  `lib/uninstall_plan.py`, or uninstall leaves it behind. The smoke suite
   fails on a file in the state folder that the table does not list. A change in an agent's own files, or a folder
   bosun makes outside its own, goes on record in `lib/agent_changes.py`.
 - **An answer `bosun init` offers:** a field of `Answers` (`lib/init_plan.py`) with its check, what

@@ -18,7 +18,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import agent_state
 import update_backups as ub
-from uninstall_plan import CONFIG_FILES, STATE_FILES
+from file_tables import CONFIG_FILES, STATE_FILES
 
 
 NOW = datetime(2026, 11, 5, 9, 0, tzinfo=UTC)

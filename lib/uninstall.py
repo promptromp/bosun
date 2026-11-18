@@ -32,6 +32,7 @@ import uninstall_detect
 import uninstall_macos
 import uninstall_plan as up
 from agent_state import AGENTS
+from file_tables import KNOWLEDGE, LEDGER
 from init_plan import tilde
 from uninstall_plan import Choices, Facts, Plan, Step
 
@@ -113,8 +114,8 @@ def ask(args: argparse.Namespace, facts: Facts) -> Choices | None:
         return None
     keep = {question.key: confirm(question.text, default=True) for question in up.questions(facts, choices)}
     return Choices(
-        keep_ledger=keep.get(up.LEDGER, choices.keep_ledger),
-        keep_knowledge=keep.get(up.KNOWLEDGE, choices.keep_knowledge),
+        keep_ledger=keep.get(LEDGER, choices.keep_ledger),
+        keep_knowledge=keep.get(KNOWLEDGE, choices.keep_knowledge),
         purge=choices.purge,
     )
 

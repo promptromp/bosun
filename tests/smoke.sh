@@ -6557,7 +6557,7 @@ unset BOSUN_LAUNCHD_LABEL
 
 # What this whole run left behind is the best list there is of what bosun writes: uninstall must know it all,
 # or the file stays on people's machines after they uninstall. A new file goes in lib/uninstall_plan.py's tables.
-section uninstall-files "uninstall knows every file bosun writes" covers 'lib/uninstall*.py,lib/agent_changes.py,libexec/bosun-uninstall'
+section uninstall-files "uninstall knows every file bosun writes" covers 'lib/uninstall*.py,lib/file_tables.py,lib/agent_changes.py,libexec/bosun-uninstall'
 knows_all_of() { # <state dir> <config dir>: names what it does not know
   local unknown
   unknown="$(BOSUN_STATE_DIR="$1" BOSUN_LOG_DIR="$1/logs" BOSUN_CONFIG_DIR="$2" "$BOSUN" uninstall --dry-run 2>&1 |
