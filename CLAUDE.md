@@ -393,6 +393,11 @@ of truth, so don't copy rules into this file.
   test in `tests/unit/test_init_plan.py`.
 - **A macOS tool bosun starts to use:** a stand-in in `tests/sandbox/macos/`, so `tests/sandbox.sh` still
   passes without it, and a check in `tests/install_e2e.sh` for the real one.
+- **A check in a Mac VM suite** (`tests/install_e2e.sh`, `tests/work_e2e.sh`, `tests/app_e2e.sh`,
+  `tests/sandbox/live.sh`): in the part it belongs to (its `part_<id>`), and the files it rests on in that part's
+  `covers`; a new part is a `part` line among the others, its `part_<id>` and a `minutes` line in
+  `tests/vm_selection.txt`. A new file, or a new function of `lib/common.sh`: a part's `covers` or a rule there, or
+  `tests/unit/test_vm_selection.py` fails and says which.
 - **A new kind of file written by hand:** its linter in `.pre-commit-config.yaml` and `pyproject.toml`'s
   dev group, here under Tooling. If it is glue code in Python, add it to mypy's `files` and to the
   complexity hooks, which do not cover `tests/`. A file in a new place needs a rule for the commit
@@ -526,8 +531,10 @@ bundle must verify; a cheap Linux job, `changes`, compares the pull request or m
 cannot skip `app` past the ruleset), and
 gitleaks over the pull request's or merge group's commits (`gitleaks`; a made-up value in a test carries a
 `gitleaks:allow` comment). `.github/workflows/install.yml` runs the install for real on a clean macOS
-runner and the Docker sandbox, when the install could have changed and weekly; those are not required
-checks, because a required check that did not run blocks a merge. `.github/workflows/release-app.yml`, on a tag
+runner (`tests/install_e2e.sh`, the VM's `run` suite, from an origin with a release in it,
+`tests/sandbox/release_origin.sh`) and the Docker sandbox: on a pull request when its `changes` job finds that
+the change reaches a part of `run` (`tools/vm_select.py --suite run --changed`, and only those parts run), and
+weekly whole; those are not required checks, because a required check that did not run blocks a merge. `.github/workflows/release-app.yml`, on a tag
 `app-v<app/VERSION>`, signs, notarizes and publishes bosun.app (steps for the person: `docs/development.md`,
 "Releasing bosun.app"); it checks the signed bundle with `lib/app_release.py requirement` and its final zip
 with `lib/app_install.py verify-archive`, which is the install's own code, never a copy of it. `.github/workflows/docs.yml`
@@ -640,6 +647,24 @@ exit; `hold_lock`/`release_lock` for a lock the test holds), a `wait_for` timeou
 hang; how long a poll, a deadline or an interval waits is the unit tests', with an injected clock
 (`tests/unit/test_smoke_timing.py` holds the suite to the common shapes of it).
 
+The Mac VM suites are in parts the same way, chosen by what a change touches (`docs/development.md`, "Running part of
+a suite"). Each suite's main body is its `part <id> "<name>" [needs <id>,...] [last] [paid] covers '<glob>,...'`
+lines, then `parts_end` (`tests/sandbox/e2e_parts.sh`: each runs `part_<id>`; E2E_PARTS, which `tests/sandbox/mac.sh`
+resolves on the host with what the parts need, names the ones a run runs; empty, all). `tests/sandbox.sh mac <suite>
+--only <part>` runs that part and what it needs, `--changed <ref>` the parts the change reaches, `--list` only says
+which (and `tests/sandbox.sh mac --changed <ref>` for every suite), `-x` stops at the first failed part. The choice is
+`tools/vm_select.py` (it shares the markers, globs, git's changed files and the `needs` closure with
+`tools/smoke_select.py` through `tools/selection.py`), fed by the parts' `covers` and `tests/vm_selection.txt`
+(`all <suites> <glob>`, `none <glob>`, `year <glob>`, `minutes`): unlike the smoke selection it matches `covers`
+directly and follows no imports (the VM runs behind the smoke suite and the unit tests, which do), and it reads
+`lib/common.sh` by function (`lib/common.sh#<fn-glob>` entries, through `tools/shell_library.py`; a comment or blank
+line outside the functions is no change, code there fails closed). A file nothing names fails closed to run, work and
+app whole, never to live: `live`'s paid parts run only from their `covers`, and with `--changed` only with `--paid`.
+Work's afternoon update gets a year of data only when the change reaches the update's freeze (`year`), else 30 days,
+and its freeze check then says so. `tests/unit/test_vm_selection.py` fails on a tracked file or a `lib/common.sh`
+function no part and no rule names, a part without `covers`, a glob that matches nothing, code between the part lines,
+a missing `part_<id>`, a `needs` that is not above or names a `last` part, and a part without its `minutes`.
+
 **Never test an install on the machine you are running on: `install.sh`, `bosun init --recommended`,
 `get.sh`, `bosun update` and `bosun uninstall` change launchd, `pmset`, the install and the config for
 real.** Use the cheapest sandbox that can show what
@@ -649,7 +674,7 @@ you changed (the table and how to set them up: `docs/development.md`, "Which san
   checkout. `init` walks a new user's first day with no network (`tests/sandbox/fresh_user.sh`, in the
   fictional world of `world.sh`), through a real terminal (`drive.py`). Docker on a Mac is Linux, so
   `tests/sandbox/macos/` holds stand-ins: it proves bosun's logic, never launchd or the Keychain.
-- `tests/sandbox.sh mac [setup|run [--from-nothing]|live [claude|codex]|shell|clean]`: a real throwaway Mac in a Tart VM (`live`: the real agents, about a dollar a run)
+- `tests/sandbox.sh mac [setup|run [--from-nothing]|live [claude|codex]|shell|clean]`: a real throwaway Mac in a Tart VM (`live`: the real agents, about a dollar a run; a run of `run`, `work`, `app` or `live` takes `--only <part>[,...]`, `--changed <ref> [--list]` and `-x`: below)
   (`tests/sandbox/mac.sh`), running `tests/install_e2e.sh`, the same script as the GitHub macOS runner.
   Use it for `get.sh`, `install.sh`, launchd, `pmset` and whatever macOS does its own way. A clone costs
   no time or disk, so make one rather than be careful with one. It has already shown what Docker could
