@@ -158,7 +158,7 @@ def changed_files(root: Path, base: str) -> list[str]:
     """What differs from <base>, where this branch left the ref: committed since, staged, unstaged, and
     untracked (not ignored) files, since the tree on disk is what runs. A rename is its two paths."""
     names: set[str] = set()
-    names.update(git(root, "diff", "--name-only", "--no-renames", "-z", base).split("\0"))
+    names.update(git(root, "diff", "--name-only", "--no-color", "--no-renames", "-z", base).split("\0"))
     names.update(git(root, "ls-files", "--others", "--exclude-standard", "-z").split("\0"))
     return sorted(n for n in names if n)
 
@@ -170,17 +170,26 @@ def tracked_files(root: Path) -> list[str]:
 
 @dataclass(frozen=True)
 class FileChange:
-    """How a file changed since the base: its text there ("" if it was not), and the hunks of `git diff -U0`
-    from there to the file on disk (tools/shell_library.py's parse_hunks)."""
+    """How a file changed since the base: its text there ("" if it was not), the hunks of `git diff -U0` from
+    there to the file on disk (tools/shell_library.py's parse_hunks), and the text on disk ("" when gone)."""
 
     old: str
     hunks: tuple[tuple[int, int, int, int], ...]
+    new: str = ""
 
 
 def file_change(root: Path, base: str, path: str) -> FileChange:
-    """<path> at <base> ("" when it was not there; git failing otherwise is a SelectionError), and the hunks
-    since."""
+    """<path> at <base> ("" when it was not there; git failing otherwise is a SelectionError), the hunks since
+    and the text on disk. A diff with no hunk the reader can parse for two texts that differ (a git that
+    colours its output whatever it writes to, say) is a SelectionError, never no change."""
     there = git(root, "ls-tree", "--name-only", base, "--", path).strip()
     old = git(root, "show", f"{base}:{path}") if there else ""
-    diff = git(root, "diff", "-U0", "--no-renames", "--no-ext-diff", base, "--", path)
-    return FileChange(old, shell_library.parse_hunks(diff))
+    diff = git(
+        root, "diff", "-U0", "--no-color", "--no-renames", "--no-ext-diff", "--no-textconv", base, "--", path
+    )
+    on_disk = root / path
+    new = on_disk.read_text(encoding="utf-8", errors="replace") if on_disk.is_file() else ""
+    hunks = shell_library.parse_hunks(diff)
+    if not hunks and old != new:
+        raise SelectionError(f"git diff of {path} since {base} has no hunk that reads, though it changed")
+    return FileChange(old, hunks, new)

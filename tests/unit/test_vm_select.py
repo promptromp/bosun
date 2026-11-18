@@ -25,7 +25,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 import selection as sel  # noqa: E402
-import shell_library as sl  # noqa: E402
 import vm_select as vs  # noqa: E402
 
 
@@ -230,49 +229,6 @@ class SaysTest(unittest.TestCase):
         self.assertEqual(vs.failed(OSError("broken"), ["work"])[-1], "=> all")
 
 
-class FunctionNamesTest(unittest.TestCase):
-    """function_names: shell_library.changed_functions, and prose outside the functions no change."""
-
-    OLD = "one() {\n  echo one\n}\n\ntwo() {\n  echo two\n}\n"
-
-    def names(self, new: str, old: str = OLD) -> frozenset[str] | None:
-        return vs.function_names(sl.read(new), sl.read(old), hunks(old, new))
-
-    def test_a_line_changed_in_a_function_is_that_function(self) -> None:
-        self.assertEqual(self.names(self.OLD.replace("echo two", "echo 2")), {"two"})
-
-    def test_a_function_added_with_its_comment_and_a_blank_line_is_that_function(self) -> None:
-        added = self.OLD + "\n# three says three\nthree() {\n  echo three\n}\n"
-        self.assertEqual(self.names(added), {"three"})
-
-    def test_a_comment_changed_between_functions_is_no_function(self) -> None:
-        old = "one() {\n  :\n}\n\n# about two\ntwo() {\n  :\n}\n"
-        self.assertEqual(self.names(old.replace("about two", "all about two"), old), frozenset())
-
-    def test_code_outside_the_functions_cannot_be_placed(self) -> None:
-        self.assertIsNone(self.names(self.OLD + "\nLIMIT=4\n"))
-
-    def test_a_function_s_brace_moved_cannot_be_placed(self) -> None:
-        """Taking out one's closing brace (and the blank line) would put two's lines in one: not by line."""
-        merged = "one() {\n  echo one\n  echo more\n\ntwo() {\n  echo two\n}\n"
-        self.assertIsNone(self.names(merged))
-
-
-def hunks(old: str, new: str) -> tuple[tuple[int, int, int, int], ...]:
-    """What `git diff -U0` gives for <old> to <new>, as shell_library.parse_hunks reads it."""
-    with tempfile.TemporaryDirectory() as tmp:
-        a, b = Path(tmp, "a"), Path(tmp, "b")
-        a.write_text(old)
-        b.write_text(new)
-        done = subprocess.run(
-            ["git", "diff", "--no-index", "-U0", "--no-ext-diff", str(a), str(b)],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    return sl.parse_hunks(done.stdout)
-
-
 # ---- the whole tool, git and all, in a scratch repository --------------------------------------------------
 
 SUITE_FILES = {
@@ -371,6 +327,13 @@ class SelectChangedTest(Scratch):
         lines = self.select("run")
         self.assertIn("  run/beta: lib/common.sh#render_job, lib/common.sh#render_more", lines)
         self.assertEqual(lines[-1], "=> only alpha,beta")
+
+    def test_a_git_that_colours_its_diffs_still_reads_by_function(self) -> None:
+        """With color.ui=always git colours even a diff into a pipe; read as no hunk, an edit was none."""
+        git(self.repo, "config", "color.ui", "always")
+        git(self.repo, "config", "color.diff", "always")
+        self.write("lib/common.sh", COMMON.replace("echo job", "echo the job"))
+        self.assertEqual(self.select("run")[-1], "=> only alpha,beta")
 
     def test_code_added_outside_the_functions_runs_run_whole(self) -> None:
         self.write("lib/common.sh", COMMON + "\nLIMIT=4\n")

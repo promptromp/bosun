@@ -222,6 +222,64 @@ class HunksTest(unittest.TestCase):
         self.assertIsNone(self.changed(LIBRARY, (3, 1, 3, 1), old=broken))
 
 
+class ProseTest(unittest.TestCase):
+    """prose_is_no_change: a blank line or a comment outside the functions changes nothing that runs, but only
+    where a statement could begin; anywhere else it is a change, and the whole file."""
+
+    OLD = textwrap.dedent("""\
+        one() {
+          echo one
+        }
+
+        LIST="a
+        b"
+        run \\
+          --flag
+        cat <<EOF
+        text
+        EOF
+
+        two() {
+          echo two
+        }
+        """)
+
+    def changed(self, new: str) -> frozenset[str] | None:
+        return sl.changed_functions(
+            sl.read(new), diff(self.OLD, new), sl.read(self.OLD), prose_is_no_change=True
+        )
+
+    def test_a_function_added_with_its_comment_and_blank_line_is_that_function(self) -> None:
+        new = self.OLD + "\n# three says three\nthree() {\n  echo three\n}\n"
+        self.assertEqual(self.changed(new), {"three"})
+        strict = sl.changed_functions(sl.read(new), diff(self.OLD, new), sl.read(self.OLD))
+        self.assertIsNone(strict, "without the option a comment is a change")
+
+    def test_a_comment_or_a_blank_line_between_statements_is_no_change(self) -> None:
+        self.assertEqual(self.changed(self.OLD.replace('LIST="a', '# the list\nLIST="a')), frozenset())
+        self.assertEqual(self.changed(self.OLD.replace("}\n\nLIST", "}\n\n\nLIST")), frozenset())
+
+    def test_prose_where_no_statement_begins_is_the_whole_file(self) -> None:
+        for what, new in (
+            ("a comment inside a `\\` continuation", self.OLD.replace("run \\\n", "run \\\n# a note\n")),
+            ("a blank line after a `\\` line", self.OLD.replace("run \\\n", "run \\\n\n")),
+            ("a blank line inside a multi-line string", self.OLD.replace('LIST="a\n', 'LIST="a\n\n')),
+            ("a blank line inside a here-document", self.OLD.replace("text\n", "text\n\n")),
+            ("a comment inside a string", self.OLD.replace('LIST="a\n', 'LIST="a\n# not one\n')),
+            ("a comment inside a here-document", self.OLD.replace("text\n", "text\n# not one\n")),
+        ):
+            with self.subTest(what):
+                self.assertIsNone(self.changed(new))
+
+    def test_code_outside_the_functions_is_still_the_whole_file(self) -> None:
+        self.assertIsNone(self.changed(self.OLD.replace("--flag", "--other")))
+        self.assertIsNone(self.changed(self.OLD + "\nLIMIT=4\n"))
+
+    def test_prose_taken_out_is_read_on_the_old_side(self) -> None:
+        self.assertEqual(self.changed(self.OLD.replace("}\n\nLIST", "}\nLIST")), frozenset())
+        self.assertIsNone(self.changed(self.OLD.replace("text\nEOF", "EOF")))
+
+
 def diff(old: str, new: str) -> tuple[tuple[int, int, int, int], ...]:
     """The hunks `git diff -U0` gives from <old> to <new>."""
     found = []

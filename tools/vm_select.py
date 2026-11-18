@@ -35,9 +35,10 @@ unit tests, which follow them, and following them reaches nearly every part from
 4. otherwise it is unknown, which fails closed: run, work and app whole, with the rule to add. Never live: a
    paid suite runs only what its parts' covers name, and only when asked (`--paid`).
 
-A changed line of a function-read file outside every function, or such a file that does not read as
-functions, is unknown too. Work's afternoon update gets 365 days of data when a changed file matches a `year`
-rule (the update's freeze), else 30, and its freeze check then says it measured 30.
+A changed line of a function-read file outside every function (but a blank line or a comment where a
+statement could begin), or such a file that does not read as functions, is unknown too. Work's afternoon
+update gets 365 days of data when a changed file matches a `year` rule (the update's freeze), else 30, and its
+freeze check then says it measured 30.
 
 Run it as `vm_select.py [--root <repo>] [--suite <suite>] (--changed <ref> | --only <part>[,<part>...])`.
 --changed compares with the merge-base of <ref> and HEAD (committed, staged, unstaged and untracked files);
@@ -372,46 +373,16 @@ def failed(error: Exception, suites: Sequence[str]) -> list[str]:
 # ---- git and the command -----------------------------------------------------------------------------------
 
 
-Hunks = Sequence[tuple[int, int, int, int]]
-
-
-def prose_outside(script: shell_library.Script, lines: Sequence[int]) -> bool:
-    """Whether each of <lines> is in <script> and, outside its functions, holds no code (a blank line, a
-    comment)."""
-    return all(
-        1 <= n <= len(script.lines) and (script.function_at(n) or not script.has_code(n)) for n in lines
-    )
-
-
-def function_names(
-    new: shell_library.Script, old: shell_library.Script, hunks: Hunks
-) -> frozenset[str] | None:
-    """The functions <hunks> (from <old> to <new>) changed (shell_library.changed_functions); None when that
-    cannot be said. changed_functions fails closed on any changed line outside every function; where those
-    lines hold no code (a function added with the comment and blank line above it), they change nothing that
-    runs, and the functions are those of the changed lines inside them and of the code the diff moved between
-    functions (shell_library.moved_functions, which fails closed on code moved into or out of one)."""
-    names = shell_library.changed_functions(new, hunks, old)
-    if names is not None or new.problems or old.problems:
-        return names
-    hunks = list(hunks)
-    sides = ((new, shell_library.new_lines(hunks)), (old, shell_library.old_lines(hunks)))
-    moved = shell_library.moved_functions(new, hunks, old)
-    if moved is None or not all(prose_outside(script, lines) for script, lines in sides):
-        return None
-    inside = {f.name for script, lines in sides for f in map(script.function_at, lines) if f is not None}
-    return frozenset(inside | moved)
-
-
 def functions_changed(root: Path, base: str) -> FunctionsOf:
-    """The functions of a file that changed since <base> (function_names): the one place this tool reads a
-    shell file by function."""
+    """The functions of a file that changed since <base>, on both sides of the diff; None when that cannot be
+    said (shell_library.changed_functions, where a blank line or a comment outside the functions, where a
+    statement could begin, is no change: a function added with the comment above it). The one place this tool
+    reads a shell file by function."""
 
     def of(path: str) -> frozenset[str] | None:
         change = file_change(root, base, path)
-        on_disk = root / path
-        new = on_disk.read_text(encoding="utf-8") if on_disk.is_file() else ""
-        return function_names(shell_library.read(new), shell_library.read(change.old), change.hunks)
+        new = shell_library.read(change.new)
+        return shell_library.changed_functions(new, change.hunks, shell_library.read(change.old), True)
 
     return of
 
