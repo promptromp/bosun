@@ -79,12 +79,15 @@ def index_file(root: Path, env: Mapping[str, str]) -> Path | None:
 
 def disk_tree(root: Path, env: Mapping[str, str]) -> str | None:
     """The tree of the files on disk, as `git add -A` stages them, in a copy of the index: the real one is
-    not touched, and the copy's stat information spares hashing every file again."""
+    not touched, and the copy's stat information spares hashing every file again. The copy keeps the index
+    file's time (copy2): git trusts an entry's stat only when the entry is older than the index file, and
+    compares the content of one from the index's own second; a copy made later would trust it, and miss an
+    edit of the same size made in that second."""
     source = index_file(root, env)
     with tempfile.TemporaryDirectory(prefix="unit-index.") as scratch:
         copy = Path(scratch) / "index"
         if source is not None and source.is_file():
-            shutil.copyfile(source, copy)
+            shutil.copy2(source, copy)
         scratch_env = {**env, "GIT_INDEX_FILE": str(copy)}
         if git(root, "add", "-A", env=scratch_env) is None:
             return None
