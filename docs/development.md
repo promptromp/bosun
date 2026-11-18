@@ -133,8 +133,8 @@ The shards are balanced by how long their sections take, not by how many: a few 
 makes the split: the longest section first, a section's length counting what it needs, each into the shard it adds
 least to among those it leaves within an even share (the selection's time over N, or the longest section's if that is
 more), and where it fits in none, into the one that leaves the longest shard shortest. What a section needs costs
-nothing in a shard that already runs it, so `update-convert` goes where `update` runs, and `uninstall` and `init` where
-`install` does: on the suite's own weights the three shards come out even and run nothing twice. Each shard works out
+nothing in a shard that already runs it, so `uninstall` and `init` go where `install` does, and `update-back` and
+`update-branch` where `update-upstream` runs: on the suite's own weights the three shards come out even and run nothing twice. Each shard works out
 the same split from the same files. If the split cannot be made (the tool fails, the weights file does not parse) the
 shard runs every selected section, so a broken split makes a run longer, never shorter. `uninstall-files`, which
 checks that uninstall knows every file the run left behind, runs in every shard that runs anything: each shard leaves
@@ -291,7 +291,7 @@ the cheapest of these that can show what you changed:
 | `get.sh`, `install.sh`, launchd, `pmset`, anything macOS does its own way | `tests/sandbox.sh mac run` | the real thing on real macOS, except sleep | 2 minutes |
 | What a new Mac lacks: Homebrew, Apple's tools | `tests/sandbox.sh mac run --from-nothing` | the same from a Mac with nothing on it | 4 minutes |
 | What the menu bar app (`bosun.app`) does: every state of its menu, every dialog and choice of its Quit and update, Open at Login across a restart, one copy at a time, what macOS says to a quit by Apple Event | `tests/sandbox.sh mac app` | the real app, built here and driven by its test hooks on a clone's desktop session, with launchd, a reboot and the Trash; `--from release` the published, notarized one | about 30 minutes |
-| What an update does to an install in use, its windows, its ledger and knowledge base, and what real use does to them: their journals, ids, writes, privacy | `tests/sandbox.sh mac work` | a week of work through the first update's conversion and a mid-afternoon update on a year of data, on real macOS: launchd, a moving clock, racing writers, writes cut short, files changed outside the journal, going back by hand and with `bosun update --back` | 16 minutes |
+| What an update does to an install in use, its windows, its ledger and knowledge base, and what real use does to them: their journals, ids, writes, privacy | `tests/sandbox.sh mac work` | a week of work on this checkout and a mid-afternoon update on a year of data, on real macOS: launchd, a moving clock, racing writers, writes cut short, files changed outside the journal, going back by hand and with `bosun update --back` | 16 minutes |
 | How an agent behaves: launching it, its screens and files, a task handed to it, an update's prompts, which MCP servers a window reaches | `tests/sandbox.sh mac live claude`, `... live codex` | the real agents from nothing, through setup, sessions, an update and connectors | about 10 minutes and a dollar each (on Claude Code about 12 minutes and a few dollars more, for the ontology) |
 | How Antigravity (`agy`) behaves under bosun: its hooks and plugin, its screen, its dialogs, its login | `tests/sandbox.sh mac live agy` | the real `agy` in a VM with a window, where you sign in; then windows started by launchd, Esc, a reviewer's dialog, the plugin's approvals, a slow hook, connectors, uninstall | about 25 minutes, you at the start, and a personal account's free quota |
 | How bosun feels to use, by hand, with the real agents and no setup of yours | `tests/sandbox.sh mac try` | bosun installed, signed in by your key and running in a VM with a window, for you to try until you leave its shell | about 10 minutes to set up, then the key's requests while it runs |
@@ -392,34 +392,21 @@ in `app/publisher.json`.
 ### A week of work: `tests/sandbox.sh mac work`
 
 `run` shows a new install. `work` shows what an update does to someone who already uses bosun, and what
-real use does to the ledger and the knowledge base: on a clone of the developer's Mac it installs the
-release with the piped installer, works three days of the fictional acme week
-(`tests/sandbox/acme_week.sh`: review requests, tasks and their links, a workstream, outreach and its
-reply, proposals approved, what I typed in a window through the hook, tickets, a history long enough to
-be trimmed, prune; in the knowledge base the acme fixture imported, facts added, confirmed, rejected and
-corrected, a fact I stated with my quote checked in a session's transcript, and a person deleted on
-request), with the clock moved a day between them.
+real use does to the ledger and the knowledge base: on a clone of the developer's Mac it installs this
+checkout with the piped installer (versions side by side, following the checkout's branch), works three
+days of the fictional acme week (`tests/sandbox/acme_week.sh`: review requests, tasks and their links, a
+workstream, outreach and its reply, proposals approved, what I typed in a window through the hook, tickets,
+a history long enough to be trimmed, prune; in the knowledge base the acme fixture imported, facts added,
+confirmed, rejected and corrected, a fact I stated with my quote checked in a session's transcript, and a
+person deleted on request), with the clock moved a day between them.
 
-Then the release's windows come up (the orchestrator, three repos, the check-in loop in its checkin
-window), with a plain shell opened beside them by hand, and it updates the way a user does, running
-`get.sh` again. The release is a checkout from before versions side by side, so that first update converts
-it, at a quiet moment. It is tried twice: first to a head whose ledger migration fails while writes are
-paused (`tests/sandbox/update_patch.sh --failing`), which must put everything back (the watchdog's and
-learning's launchd jobs, really unloaded meanwhile, loaded again from their plists, which stay as they
-were; the check-in loop started again on the old code; the ledger byte for byte; no window touched), then
-to this checkout for real. That one must swap the checkout for the link in one step on the real APFS disk
-(the checkout moved whole to `bosun-versions/legacy-<its commit>`, the install path never missing while a
-watcher looks at it, no temporary link left), stop and reload the jobs, end the check-in loop with a real
-SIGTERM and start it again on the new code, restart each of bosun's windows in its own conversation as one
-whose launch changed (the release recorded none), leave the shell I opened alone, and end with its summary.
-Then the first write starts each journal from what was there (or goes on with the ledger's, when the
-release journals it already): the same items, entities and facts, old ids working and new ones minted, the
-key of the forgotten made and kept out of the knowledge history, nothing naming a person and none of my
-words in the knowledge journal file that can leave the Mac. A person deleted on request then leaves
-nothing in `local.jsonl`, in a torn file (one is made as a power loss would leave it), in the git history
-or in an update's backup.
+Then it looks at the journals those days wrote: ids from the first day working and new ones minted, both
+stores under this Mac's one replica id, the key of the forgotten kept out of the knowledge history, nothing
+naming a person and none of my words in the knowledge journal file that can leave the Mac. A person deleted
+on request then leaves nothing in `local.jsonl`, in a torn file (one is made as a power loss would leave
+it), in the git history or in an update's backup.
 
-Two more days follow on the new bosun, then a mid-afternoon update to the next version (this checkout and
+Two more days follow, then a mid-afternoon update to the next version (this checkout and
 `tests/sandbox/update_patch.sh`: the ledger's format 2 with its migration, a line of `policy.md`, the repo
 windows' hook settings), pushed to the install's origin, on a year of data that
 `tests/sandbox/acme_year.py` writes through the installed bosun's own commands. The Claude stand-in
@@ -452,8 +439,8 @@ must also clear the git lock such a cut leaves, so that its history records agai
 hundred approvals (they write both journal files) killed at points swept across their run and the rebuild
 from the journal that a write starts with once a cut has left `ledger.json` behind it, which it counts as
 torn tails, repairs and writes lost, and the knowledge files changed outside their journal: by hand, by
-`git checkout` of the data files and then of the whole folder, and by the release, run from a checkout of
-its own, forgetting a person that the next write must not bring back. Then a morning by launchd, the
+`git checkout` of the data files and then of the whole folder, and by an older bosun (one from before the knowledge
+base's journal), run from a checkout of its own, forgetting a person that the next write must not bring back. Then a morning by launchd, the
 console's knowledge view with the restricted files unreadable, an uninstall that keeps the ledger, the
 knowledge folder, their journals and this Mac's replica id, and a year on, when `kg expire` expires
 proposals and deletes person facts past retention. After each, `bosun ledger validate --journal` and
@@ -462,23 +449,24 @@ must be there. Right after the install, it checks what git and `get.sh` print fo
 token in it that cannot be reached: never the token.
 
 ```bash
-tests/sandbox.sh mac work                   # from the release to this checkout
-tests/sandbox.sh mac work --base <commit>   # from another starting point; it must be an ancestor
+tests/sandbox.sh mac work                   # this checkout, and the default older bosun for the forget
+tests/sandbox.sh mac work --base <commit>   # another older bosun; it must be an ancestor
 ```
 
-The default release is the last bosun from before versions side by side and the knowledge base's journal
-(`95545b0`), installed by its own `get.sh` as a user did then: a checkout, whose ledger journals already (the first days check its journal and minted ids,
-and the update that it goes on with them). Another base must be from before both too. One whose ledger
-is from before the journal as well makes the first days check that the release writes no journal and
-makes ids like `task:<date>/1`, and the update that the journal starts with the first write after it.
+The older bosun (`--base`) is only the one that forgets a person in the knowledge folder; by default the last
+bosun from before the knowledge base's journal (`95545b0`), whose forget keeps a plain hash. Another must be from
+before that journal too.
 
-It sends two bundles of this repository: the release, and this checkout (also what is not committed) as
-its descendant, the head of the branch that `get.sh`, run again, fetches into the install's `bosun.git`
-from the checkout's origin (`~/repo.bundle`). It also sends the release's own `get.sh` (`~/release-get.sh`),
-which installs the release as it did then, a checkout; the scenario refuses to run without it. Each later head (the failing one, the next version) is
-this checkout patched in the VM and bundled over `~/repo.bundle`. The scenario is `tests/work_e2e.sh`; what
-it shares with `tests/install_e2e.sh` is in `tests/sandbox/e2e_lib.sh`. It sets the clock with `sudo date`
-and puts it back when it ends, also on failure.
+It sends two bundles of this repository: the older bosun, and this checkout (also what is not committed) as
+the head of the branch that `get.sh` installs from the install's origin (`~/repo.bundle`). Each later head
+(the next version, and the one after it) is this checkout patched in the VM and bundled over `~/repo.bundle`.
+Until 2026-11-18 it started from the last release from before versions side by side, a checkout, which the
+first update converted; that conversion is gone (an older checkout is installed again), and with it the parts
+that showed it on a real Mac: the swap of the checkout for the link on APFS, the jobs and the check-in loop
+stopped and started again around it, a conversion put back, and the journals starting from a release's files.
+
+The scenario is `tests/work_e2e.sh`; what it shares with `tests/install_e2e.sh` is in `tests/sandbox/e2e_lib.sh`.
+It sets the clock with `sudo date` and puts it back when it ends, also on failure.
 
 ### The real agents: `tests/sandbox.sh mac live`
 
@@ -780,8 +768,7 @@ Work up the levels; each one exercises more of the real chain.
    the acme domain, from `tests/fixtures/corpus/`); the second the end-to-end checks,
    including setup with a fake `aws`, the morning dry run, install/uninstall with fake
    `launchctl` and `pmset` under a test label, and `bosun update` between two local commits (the next
-   version made by `tests/sandbox/update_patch.sh`), with fake windows brought along, and the first
-   update converting a checkout. Hermetic: temp HOME, fixture sessions, fake Claude
+   version made by `tests/sandbox/update_patch.sh`), with fake windows brought along. Hermetic: temp HOME, fixture sessions, fake Claude
    processes with fake status records for the refresh, orchestrator and check-in rules, ledger
    state machines and concurrency, a fake `claude` that registers itself for `send --new` and
    `--start` (long, multi-line prompts arrive intact; failures are reported), and a fake `claude`

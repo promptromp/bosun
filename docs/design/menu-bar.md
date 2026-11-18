@@ -504,7 +504,7 @@ Where what is built differs from what this note said before, or says more:
   build; the folder is removed on every path. It says when the build starts (a cold build takes minutes) and, when it
   fails, shows the last 20 lines of the build's output. It builds the source of the bosun it runs from, so from an install
   that is the installed version's, and SwiftPM's `app/.build` stays in that version's folder: `.build` is one of
-  `lib/checkout_work.py`'s `CACHES`, so the update's prune, the conversion and uninstall do not count it as the person's work. `swift`, `iconutil`, `codesign` and `ditto` are tools of that run, so each
+  `lib/checkout_work.py`'s `CACHES`, so the update's prune and uninstall do not count it as the person's work. `swift`, `iconutil`, `codesign` and `ditto` are tools of that run, so each
   has a stand-in in `tests/sandbox/macos/` and a real check in `tests/install_e2e.sh`.
 - **The pictures** are made once, from the logo, by `tools/app_icons.py` (Pillow, in the dev group; by hand on any
   machine) and committed: the ten sizes of `AppIcon.iconset` (the logo on a white rounded tile, with the margin macOS
@@ -553,8 +553,8 @@ macOS, where the unit and smoke suites cannot:
 - **Releases:** the fresh install runs on the default `releases` channel, from an origin that has a release tag, which
   `get.sh` installs; `bosun update --check --json` reads the next one (tagged on the patch commit) and its notes from the
   tag's message; `--skip` marks it skipped and still available; `bosun update --yes` moves to it, the jobs keep naming
-  the install path, and the console job is restarted. The work run has no channel exported: the conversion of the
-  release writes `BOSUN_UPDATE_CHANNEL="main"`, which the updates after it go by.
+  the install path, and the console job is restarted. The work run has no channel exported: it installs from a
+  branch (`BOSUN_BRANCH`), so `init` writes `BOSUN_UPDATE_CHANNEL="main"`, which the updates after it go by.
 - **`launchctl procinfo`** needs root (`This subcommand requires root privileges: procinfo`, so the check retries with
   `sudo -n`) and prints `responsible pid = <pid>` at the start of a line. A process started over ssh has the
   `sshd-session` of the login as its responsible process, one of its caller's parents; the tmux server of

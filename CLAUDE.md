@@ -135,9 +135,9 @@ of truth, so don't copy rules into this file.
   functions with `main` last, because people pipe it straight from `main`; a first install's versions side
   by side, taking the newest release (`newest_release`, an sh twin of `lib/update_check.py`'s tag rule, held to
   it by `tests/unit/test_get_sh.py`; `BOSUN_BRANCH` takes a branch's head and `init` follows `main`), and on an
-  install `init` set up the hand-over to the install's own `bosun update` (to the new version's, for an older
-  checkout, whose first run converts it: `convert` in `lib/update.py`); `lib/checkout_work.py` is what deleting a
-  checkout or a version would lose, which uninstall, the conversion and the update's prune go by), `lib/preflight.sh` (what
+  install `init` set up the hand-over to the install's own `bosun update`; a checkout an older get.sh made, from
+  before versions side by side, refused with how to install again, never converted: `look`; `lib/checkout_work.py`
+  is what deleting a checkout or a version would lose, which uninstall and the update's prune go by), `lib/preflight.sh` (what
   bosun needs and what to do about what is missing; plain sh, changes nothing, and `init` and `doctor`
   start with it) with its profiles `lib/platforms/<os>.sh` and `lib/harnesses/<harness>.sh`, `lib/init_detect.py`
   (read-only: what the Mac shows, Claude Code's files through `lib/claude_state.py`), `lib/init_plan.py`
@@ -634,7 +634,7 @@ you changed (the table and how to set them up: `docs/development.md`, "Which san
   Use it for `get.sh`, `install.sh`, launchd, `pmset` and whatever macOS does its own way. A clone costs
   no time or disk, so make one rather than be careful with one. It has already shown what Docker could
   not: a new Mac has no Apple tools, and launchd has no `gui/<uid>` domain until the auto-login is done.
-- `tests/sandbox.sh mac work [--base <ref>]`: in the same VM, a week of acme work in the ledger and the knowledge base (`tests/work_e2e.sh`, its days in `tests/sandbox/acme_week.sh`, what it shares with `install_e2e.sh` in `tests/sandbox/e2e_lib.sh`) on the release (a checkout from before versions), converted to this checkout by `get.sh`, a mid-afternoon `bosun update` to the next version (`tests/sandbox/update_patch.sh`) on a year of data (`tests/sandbox/acme_year.py`), going back and forward again, then the clock moved, writers racing, writes cut short, the knowledge files changed outside their journal, a person forgotten.
+- `tests/sandbox.sh mac work [--base <ref>]`: in the same VM, a week of acme work in the ledger and the knowledge base (`tests/work_e2e.sh`, its days in `tests/sandbox/acme_week.sh`, what it shares with `install_e2e.sh` in `tests/sandbox/e2e_lib.sh`) on this checkout, installed by its `get.sh` with versions side by side, a mid-afternoon `bosun update` to the next version (`tests/sandbox/update_patch.sh`) on a year of data (`tests/sandbox/acme_year.py`), going back and forward again, then the clock moved, writers racing, writes cut short, the knowledge files changed outside their journal, a person forgotten.
 - `tests/sandbox.sh mac app [--from build|release]`: in the same VM with its desktop session, bosun.app (built on this Mac with `app/build.sh --identity -`, never started here) driven through every state and choice of its menu by its test hooks, a restart of the Mac between the two parts, the app moved to the Trash and an uninstall (`tests/app_e2e.sh`, which shares the update's origin and the console and status helpers in `tests/sandbox/e2e_lib.sh`; the update's third release asks the app to quit, `tests/sandbox/update_quit_probe.sh`, to see what macOS says to a quit that an update the app started makes). `--from release` has `bosun init` install the notarized app.
 - `tests/sandbox.sh mac try [--from release|checkout] [codex]`: `mac shell` with bosun already set up, signed in by the Anthropic key from the Keychain (as for `live`, through `apiKeyHelper`) and running, for a person to try (`live.sh ready`); the key is billed while it runs, so its agents use `BOSUN_SANDBOX_TRY_MODEL` (`sonnet`).
 - `bosun wake-test` on real hardware: the only proof of a real wake, because a macOS guest cannot sleep and

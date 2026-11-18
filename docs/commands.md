@@ -323,10 +323,10 @@ How to use it: [Updating](updating.md). What each part does:
   the `main` channel a head, by the name `--check` gives it (its commit's first 12 characters): `--check` then
   reports it as `skipped`, and the next one as usual. It does not stop an update you run.
 - **`--back`** goes back to the version the last finished update came from, one step, never further: a second
-  `--back` is refused (`bosun update` goes forward again), and so is one with no finished update, or to a checkout
-  from before versions (by hand: [Going back](updating.md#going-back)). The version installed runs it and fetches
-  nothing; the older version's folder is added again from `bosun.git` if it is gone (never by a dry run, which reads
-  what it can of that version there and says what it cannot tell). It restores that update's
+  `--back` is refused (`bosun update` goes forward again), and so is one with no finished update. The version
+  installed runs it and fetches nothing; the older version's folder is added again from `bosun.git` if it is gone
+  (never by a dry run, which reads what it can of that version there and says what it cannot tell). It restores
+  that update's
   backup only for what the older version cannot read: a store whose format or rules version differs between the two
   (the changes written since then go, kept in a backup it takes first), and `bosun.env`, whose changes by that update
   are taken back where they still read as it wrote them (the file kept as `bosun.env.pre-back-<time>`). Everything
@@ -392,12 +392,11 @@ How to use it: [Updating](updating.md). What each part does:
   builds it. An origin that lists no peeled line for an annotated tag, such as a git bundle, is read as rightly as
   GitHub.
 - **Installs and checkouts.** It needs an install with its versions side by side (`~/.local/share/bosun-versions`,
-  which `get.sh` makes); in a checkout of your own, update with git. The install line run again hands over to it,
-  and its first run converts a checkout an older `get.sh` made, once
-  ([The first update of an older install](updating.md#the-first-update-of-an-older-install)).
+  which `get.sh` makes); in a checkout of your own, update with git. The install line run again hands over to it.
+  A checkout an older `get.sh` made, before versions side by side, is installed again, never updated
+  ([An install from before versions](updating.md#an-install-from-before-versions)).
 - **Old versions.** An update deletes older version folders, but keeps one with a change or a commit of its own in
-  it, as it keeps the checkout from before versions while anything of yours is in it, and its summary says so. One a
-  running process still uses is left to a later update.
+  it, and its summary says so. One a running process still uses is left to a later update.
 
 Design: [design/update.md](design/update.md).
 
