@@ -15,10 +15,10 @@
 #
 # Run it again to update: it hands over to the `bosun update` of the install, which moves it as its own
 # channel says (the newest release, or the head of its branch), shows its plan and asks first. An install
-# an earlier get.sh made, a checkout in ~/.local/share/bosun, is converted by a first update, at a quiet
-# moment, by the update this gets from the head of main: the checkout is kept as bosun-versions/legacy-<its
-# commit>, and ~/.local/share/bosun becomes the link. An install `bosun init` has not set up yet (it
-# stopped at what bosun needs) gets `bosun init` again instead. `bosun uninstall` takes it all off again.
+# `bosun init` has not set up yet (it stopped at what bosun needs) gets `bosun init` again instead. An
+# install an older get.sh made, before versions side by side (a checkout in ~/.local/share/bosun), is
+# refused, with how to install again: it never touches that checkout. `bosun uninstall` takes it all off
+# again.
 #
 #   curl ... | sh -s -- --dry-run      say what it would do, and do nothing
 #   curl ... | sh -s -- --unattended   ask nothing: take the recommended setup (on a first install without
@@ -27,8 +27,8 @@
 #   curl ... | BOSUN_HARNESS=codex sh  run repo sessions on Codex, and check that it is ready
 #
 # BOSUN_DIR (where it goes), BOSUN_REPO and BOSUN_BRANCH (what it gets) override the defaults. On an
-# existing install the defaults are what it came from: bosun.git's origin, and its bosun.branch; for a
-# checkout from before versions, its own origin. What it says never shows a URL's user and password.
+# existing install the defaults are what it came from: bosun.git's origin, and its bosun.branch. What it
+# says never shows a URL's user and password.
 # The newest release is found by newest_release below, which follows lib/update_check.py's rule for
 # one (tests/unit/test_get_sh.py holds the two to the same answers): this runs before Python can be
 # relied on, so it cannot ask it.
@@ -53,12 +53,9 @@ PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH" # where Homebrew 
 export PATH
 DRY_RUN=0
 UNATTENDED=0
-# What is at $DIR: new (nothing), checkout (one from before versions), link (to a version), or
-# unfinished (either of them, which bosun init has not set up yet).
+# What is at $DIR: new (nothing), link (to a version), or unfinished (a link bosun init has not set up yet).
 KIND=""
-FROM="" # the version in use: the checkout, or the folder the link leads to
-NEW=""  # the folder of the version this gets
-CHECKOUT_SET_ASIDE="the checkout"
+NEW="" # the folder of the version this gets
 
 say() { printf '%s\n' "$*"; }
 die() {
@@ -163,17 +160,16 @@ look_at_link() {
   [ -f "$target/bin/bosun" ] && [ -d "$BARE" ] && [ -n "$parent" ] && [ "$parent" = "$versions" ] ||
     die "$DIR is a link to $target, which is not a version in $VERSIONS. Move it, or set BOSUN_DIR."
   KIND="link"
-  FROM="$target"
 }
 
-# What is at $DIR: nothing, a checkout of bosun from before versions, or a link to a version. Anything
-# else is refused, never guessed at, and so is a versions folder that is not bosun's.
+# What is at $DIR: nothing, or a link to a version. Anything else is refused, never guessed at, and so is
+# a versions folder that is not bosun's. A checkout of bosun there is one an older get.sh made, before
+# versions side by side: it is installed again, never updated, and this changes nothing in it.
 look() {
   if [ -L "$DIR" ]; then
     look_at_link
   elif [ -d "$DIR/.git" ] && [ -f "$DIR/bin/bosun" ]; then
-    KIND="checkout"
-    FROM="$DIR"
+    die "$DIR is a checkout of bosun from before versions side by side, which this no longer updates: install bosun again. Take it off with its own bosun uninstall ($DIR/bin/bosun uninstall, which keeps your settings, ledger and ontology), or move it aside, then run this line again."
   elif [ -e "$DIR" ]; then
     die "$DIR is not bosun's: neither a link to one of its versions nor a checkout of bosun. Move it, or set BOSUN_DIR."
   else
@@ -181,18 +177,6 @@ look() {
   fi
   [ ! -e "$VERSIONS" ] || [ -d "$BARE" ] || [ -z "$(ls -A "$VERSIONS")" ] ||
     die "$VERSIONS is there, without bosun.git, so it is not bosun's. Move it, or set BOSUN_DIR."
-  case "$FROM" in
-    */legacy-*) CHECKOUT_SET_ASIDE="$FROM, the checkout from before versions," ;; # a conversion put back
-    *) [ "$KIND" = checkout ] || CHECKOUT_SET_ASIDE="" ;;
-  esac
-}
-
-# Where a first bosun.git is cloned from: BOSUN_REPO, else for a checkout from before versions where it
-# came from (its origin, as an older get.sh pulled from it), else the default.
-pick_repo() {
-  [ -z "${BOSUN_REPO:-}" ] && [ "$KIND" = checkout ] || return 0
-  origin="$(git -C "$DIR" config remote.origin.url 2>/dev/null)" || origin=""
-  [ -z "$origin" ] || REPO="$origin"
 }
 
 # The branch: BOSUN_BRANCH, else the one the install follows (bosun.git's bosun.branch), else main.
@@ -234,7 +218,7 @@ newest_release() {
 # repository with no release yet gets the head of its branch, as a branch would, and it says so; one that
 # cannot be reached stops the install here, as it would at the clone.
 pick_release() {
-  [ "$KIND" = new ] && [ -z "${BOSUN_BRANCH:-}" ] || return 0
+  [ -z "${BOSUN_BRANCH:-}" ] || return 0
   tags="$(git ls-remote --tags "$REPO" 'v*')" || die "could not reach $(shown "$REPO")"
   newest="$(printf '%s\n' "$tags" | newest_release)"
   if [ -z "$newest" ]; then
@@ -277,28 +261,22 @@ add_version() {
     die "$NEW is not a checkout of $commit; move it aside and run this again"
 }
 
+# A first install: bosun.git (made, or as it is), the version this gets, and $DIR a link to it.
 get_bosun() {
-  pick_repo
   pick_branch
   pick_release
-  case "$KIND" in
-    new)
-      if [ -n "$RELEASE" ]; then
-        say "Getting bosun $RELEASE, the newest release, into $VERSIONS, with $DIR a link to the version in use"
-      else
-        say "Getting bosun into $VERSIONS, with $DIR a link to the version in use"
-      fi
-      ;;
-    checkout) say "$DIR is a checkout from before versions: getting the newest bosun beside it, into $VERSIONS" ;;
-    link) say "Getting the newest bosun into $VERSIONS, beside the one in use ($FROM)" ;;
-  esac
+  if [ -n "$RELEASE" ]; then
+    say "Getting bosun $RELEASE, the newest release, into $VERSIONS, with $DIR a link to the version in use"
+  else
+    say "Getting bosun into $VERSIONS, with $DIR a link to the version in use"
+  fi
   if [ -d "$BARE" ]; then use_repo; else make_repo; fi
   if [ -n "$RELEASE" ]; then
     add_version "$RELEASE" "+refs/tags/$RELEASE:refs/remotes/origin/release" refs/remotes/origin/release "$RELEASE_COMMIT"
   else
     add_version "$BRANCH" "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" "refs/remotes/origin/$BRANCH" "<commit>"
   fi
-  [ "$KIND" != new ] || run ln -s "$NEW" "$DIR"
+  run ln -s "$NEW" "$DIR"
 }
 
 start_init() {
@@ -331,38 +309,19 @@ start_init() {
   exec "$command" init # no terminal to ask on: it prints the plan
 }
 
-# Replaces this with `<command> update <args>`, which shows its plan and asks first: with --yes when
-# unattended, and with the terminal when there is one.
-exec_update() {
-  command="$1"
-  shift
-  [ "$UNATTENDED" = 0 ] || exec "$command" update "$@" --yes
-  has_terminal && exec "$command" update "$@" </dev/tty
-  exec "$command" update "$@" # no terminal to ask on: it shows the plan
-}
-
-# A re-run on an install: the install's own `bosun update`, which moves it as its channel says (the newest
-# release, or the head of its branch). Nothing is fetched here, so this never moves an install off its
-# channel.
+# A re-run on an install: this replaced with the install's own `bosun update`, which moves it as its
+# channel says (the newest release, or the head of its branch), shows its plan and asks first: with --yes
+# when unattended, and with the terminal when there is one. Nothing is fetched here, so this never moves an
+# install off its channel.
 hand_over() {
+  command="$DIR/bin/bosun"
   if [ "$DRY_RUN" = 1 ]; then
-    say "Then it would run: $DIR/bin/bosun update"
+    say "Then it would run: $command update"
     return 0
   fi
-  exec_update "$DIR/bin/bosun"
-}
-
-# The new version's `bosun update`, from the version in use, which is a checkout from before versions (or
-# one put back after a conversion): it converts it, shows the plan and asks first.
-start_update() {
-  command="$NEW/bin/bosun"
-  if [ "$DRY_RUN" = 1 ]; then
-    say "Then it would run: $command update --from $FROM"
-    [ -z "$CHECKOUT_SET_ASIDE" ] ||
-      say "which converts $CHECKOUT_SET_ASIDE at a quiet moment: it keeps it as $VERSIONS/legacy-<its commit>, and $DIR becomes a link to the new version"
-    return 0
-  fi
-  exec_update "$command" --from "$FROM"
+  [ "$UNATTENDED" = 0 ] || exec "$command" update --yes
+  has_terminal && exec "$command" update </dev/tty
+  exec "$command" update # no terminal to ask on: it shows the plan
 }
 
 # Whether bosun init has set the install at $DIR up: its install.sh links ~/.local/bin/bosun to it, as its
@@ -382,14 +341,9 @@ intro() {
       say "First it checks what it needs and tells you what to do about anything missing. Then a few"
       say "questions, and a plan to accept. Nothing changes until you do."
       ;;
-    *)
-      if [ -n "$CHECKOUT_SET_ASIDE" ]; then
-        say "It gets the newest version beside the one you run, whose bosun update shows its plan and asks"
-        say "first. Nothing changes until you accept it."
-      else
-        say "It hands over to the bosun you run: its bosun update looks for what its channel says is newest,"
-        say "shows its plan and asks first. Nothing changes until you accept it."
-      fi
+    link)
+      say "It hands over to the bosun you run: its bosun update looks for what its channel says is newest,"
+      say "shows its plan and asks first. Nothing changes until you accept it."
       ;;
   esac
   [ "$DRY_RUN" = 0 ] || say "(a dry run: nothing changes)"
@@ -414,14 +368,9 @@ main() {
       say "$DIR is there, but ~/.local/bin/bosun does not lead into it, as bosun init leaves it: starting bosun init again"
       start_init
       ;;
-    *)
-      if [ -n "$CHECKOUT_SET_ASIDE" ]; then
-        get_bosun
-        start_update
-      else
-        use_repo
-        hand_over
-      fi
+    link)
+      use_repo
+      hand_over
       ;;
   esac
 }
