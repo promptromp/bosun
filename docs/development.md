@@ -187,6 +187,14 @@ nothing above it. Every section begins by checking that the tools that reach out
 stand-ins in the run's own folder, and the run stops if one would be the real one. The run's HOME and those
 stand-ins exist before the first section, and a section that points bosun at another HOME gets them there too.
 
+A check makes no timing assumption, since CI's runners are slower than a laptop and slower still under load: it never
+asserts how long something took and never races a fixed sleep. It waits on what the code says or writes (a log
+line, a file, a lock's state, an exit), a lock the test holds is let go by the test (`hold_lock`, `release_lock`),
+and a `wait_for` timeout or a long timeout knob is only a failsafe against a hang. How long a poll, a deadline or
+an interval waits is the unit tests', with an injected clock. `tests/unit/test_smoke_timing.py` fails on the shapes
+that broke this: elapsed-time arithmetic, a lock holder that lets go after a fixed sleep, a background actor timed
+by a sleep.
+
 Suites of several checkouts (git worktrees, parallel agents) can run on one Mac at the same time. A run keeps its
 HOME, state, config, tmux sockets (`bosun-smoke-<pid>`), stand-ins and the install under test in its own temp folder;
 `tests/unit/test_smoke_state.py` checks one thing about that: no script the suite runs (`tests/smoke.sh`, the update

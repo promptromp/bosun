@@ -49,6 +49,7 @@ LOCK_BUSY = (
     "another bosun start or refresh is setting up the windows, and did not finish in time: "
     "nothing was changed, try the quit again"
 )
+LOCK_WAITING = "Waiting for a bosun start or refresh to finish setting up the windows, up to {seconds} s"
 RECORD_STAYS = (
     "the quit record stays, so bosun stays stopped: run `bosun quit --stop-now` again to finish, "
     "or `bosun start` to start bosun again"

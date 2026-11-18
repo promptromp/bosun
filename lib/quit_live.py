@@ -33,6 +33,7 @@ from quit import (
     CONSOLE_STILL,
     CONSOLE_STOPPED,
     LOCK_BUSY,
+    LOCK_WAITING,
     POLL_SECONDS,
     Options,
     Ports,
@@ -96,6 +97,16 @@ def lock_fd_open() -> bool:
     return True
 
 
+def take_windows_lock(path: str, wait: float) -> int | None:
+    """The windows lock's descriptor: at once if it is free, else after saying on stderr that the quit waits
+    for the start or refresh holding it, up to <wait> seconds; None if it stayed taken."""
+    fd = run_locked.acquire(path, 0)
+    if fd is not None or wait <= 0:
+        return fd
+    print(LOCK_WAITING.format(seconds=round(wait)), file=sys.stderr, flush=True)
+    return run_locked.acquire(path, wait)
+
+
 @contextlib.contextmanager
 def windows_lock(world: World) -> Iterator[None]:
     """Hold the `windows` lock (what `bosun start` takes: one_at_a_time) for the body, on run_locked.LOCK_FD
@@ -105,7 +116,7 @@ def windows_lock(world: World) -> Iterator[None]:
         yield
         return
     try:
-        fd = run_locked.acquire(path, world.lock_wait)
+        fd = take_windows_lock(path, world.lock_wait)
     except OSError as exc:  # the state folder cannot be made or the lock file opened
         raise QuitError(f"could not take the windows lock {path}: {exc}; nothing was changed") from exc
     if fd is None:

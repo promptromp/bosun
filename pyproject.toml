@@ -168,6 +168,7 @@ impacted_map = [
     "tests/smoke_cache.sh=tests/unit/test_smoke_sections.py",
     "tests/smoke_cache.sh=tests/unit/test_smoke_cache.py",
     "tests/smoke.sh=tests/unit/test_smoke_state.py",
+    "tests/smoke.sh=tests/unit/test_smoke_timing.py",
     "tests/smoke_cache.sh=tests/unit/test_smoke_state.py",
     "tests/js_check.sh=tests/unit/test_smoke_state.py",
     "tests/sandbox/update_patch.sh=tests/unit/test_smoke_state.py",

@@ -193,6 +193,26 @@ class LiveTest(unittest.TestCase):
         ):
             self.fail("the lock was taken while another process held it")
 
+    def test_a_lock_another_holds_is_waited_for_saying_so_once_and_a_free_one_says_nothing(self) -> None:
+        """The quit says on stderr that it waits for the start or refresh holding the windows lock (the
+        smoke suite goes by that line), once, then waits up to the lock wait; a free lock, or no wait, says
+        nothing."""
+        path = str(self.state / "windows.lock")
+        for first, wait, calls, said in (
+            (None, 30.0, [(path, 0), (path, 30.0)], quit_core.LOCK_WAITING.format(seconds=30) + "\n"),
+            (7, 30.0, [(path, 0)], ""),
+            (None, 0.0, [(path, 0)], ""),
+        ):
+            with (
+                self.subTest(first=first, wait=wait),
+                mock.patch.object(run_locked, "acquire", side_effect=[first, 8]) as acquire,
+                mock.patch("sys.stderr", io.StringIO()) as err,
+            ):
+                taken = quit_live.take_windows_lock(path, wait)
+                self.assertEqual([c.args for c in acquire.call_args_list], calls)
+                self.assertEqual(err.getvalue(), said)
+                self.assertEqual(taken, 8 if len(calls) == 2 else first)
+
     def test_what_the_lock_starts_finds_it_held_and_it_is_free_afterwards(self) -> None:
         check = self.state / "bosun"
         held = f"{Path(run_locked.__file__)} --held {self.state / 'windows.lock'}"

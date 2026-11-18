@@ -507,7 +507,9 @@ version_folder() {
   (cd "$dest" && pwd -P)
 }
 
-# wait_for <seconds> <command...>: poll until the command succeeds, instead of a fixed sleep.
+# wait_for <seconds> <command...>: poll until the command succeeds, instead of a fixed sleep. <seconds> is only a
+# failsafe against a hang (30 s or more: CI's runners are slower than a laptop), never a measurement: a check asserts no
+# duration (tests/unit/test_smoke_timing.py).
 wait_for() {
   local deadline=$((SECONDS + $1))
   shift
@@ -531,7 +533,7 @@ has_windows() { [ "$(tmux -L "$SOCKET" list-windows -t =smoke -F '#{window_name}
 # whose server keeps the environment it was started with (BOSUN_CLAUDE_BIN) for every window opened in it.
 no_session() {
   tmux -L "$SOCKET" kill-server 2>/dev/null
-  wait_for 10 bash -c '! tmux -L "$1" list-sessions >/dev/null 2>&1' _ "$SOCKET"
+  wait_for 30 bash -c '! tmux -L "$1" list-sessions >/dev/null 2>&1' _ "$SOCKET"
 }
 
 # The run's own HOME, with two projects and named sessions, and the stand-ins, before the first section: no
@@ -709,6 +711,23 @@ runs_this_guard() { # <settings JSON>: its PreToolUse hooks run this checkout's 
 lock_taken() { # <lock file>: someone holds it (exit 75, busy), not merely that the probe failed
   python3 "$ROOT/lib/run_locked.py" "$1" 0 probe -- true 2>/dev/null
   [ $? -eq 75 ]
+}
+# hold_lock <lock file> <name>: a process holds the lock (taken as bosun's commands take it, run_locked.py) until
+# release_lock <name>, never for a fixed time: a check that something waits for the lock, or gives up on it, cannot
+# race the holder. (The holder lets go by itself after 5 minutes, only so that a run cut short leaves no holder.)
+hold_lock() {
+  local release="$WORK/hold-lock.$2"
+  : >"$release"
+  python3 "$ROOT/lib/run_locked.py" "$1" 30 busy -- bash -c '
+    for _ in $(seq 1 3000); do [ -e "$1" ] || exit 0; sleep 0.1; done' _ "$release" &
+  echo $! >"$release.pid"
+  wait_for 30 lock_taken "$1"
+}
+release_lock() { # <name>: the holder hold_lock started lets go, and is gone
+  local release="$WORK/hold-lock.$1"
+  rm -f "$release"
+  wait "$(cat "$release.pid")" 2>/dev/null
+  rm -f "$release.pid"
 }
 fake_claude() { # <window> <status> <version> <seconds-in-status> [name]; runs `sleep` in the pane as "Claude"
   local window_id pane_pid pid
@@ -1044,7 +1063,9 @@ done
 check "minutes since the latest client keystroke" test "$(bash -c 'source "$1/lib/common.sh"; tmux_cmd() { echo $(( $(date +%s) - 600 )); echo $(( $(date +%s) - 125 )); }; minutes_since_client_input' _ "$ROOT")" = 2
 check "no attached client means no answer" bash -c 'source "$1/lib/common.sh"; tmux_cmd() { :; }; ! minutes_since_client_input' _ "$ROOT"
 check "only idle, busy and shell sessions take input" bash -c 'source "$1/lib/common.sh"; agent_takes_input idle && agent_takes_input busy && agent_takes_input shell && ! agent_takes_input waiting && ! agent_takes_input ""' _ "$ROOT"
-check "run_with_timeout stops a slow command" bash -c 'source "$1/lib/common.sh"; start=$SECONDS; ! run_with_timeout 1 sleep 10 && [ $((SECONDS - start)) -lt 5 ]' _ "$ROOT"
+# (A command that runs past its timeout ends killed, its status 143 (TERM); one left to run would end 0. The sleep's
+# length is only how long a broken timeout would hang the run.)
+check "run_with_timeout stops a slow command" bash -c 'source "$1/lib/common.sh"; run_with_timeout 1 sleep 30; [ $? -eq 143 ]' _ "$ROOT"
 check "run_with_timeout passes a fast command's status" bash -c 'source "$1/lib/common.sh"; run_with_timeout 5 true && ! run_with_timeout 5 false' _ "$ROOT"
 fnc() { bash -c 'source "$1/lib/common.sh"; load_config; shift; "$@"' _ "$ROOT" "$@"; } # with the config's defaults
 check "harness_bin names the command the config gives each agent" test "$(fnc harness_bin codex)" = codex
@@ -1312,10 +1333,15 @@ check "the prompt hook does nothing while events are off" bash -c '"$1" hook use
 check "the prompt hook records what I type on the item the window holds" bash -c '
   BOSUN_EVENTS_ENABLED=1 "$1" hook user-prompt --window exporter <<<"$2" || exit 1
   for _ in $(seq 1 50); do "$1" ledger said "$3" | grep -q "go with option b" && exit 0; sleep 0.1; done; exit 1' _ "$BOSUN" "$said_payload" "$TASK"
-check "... in the background: the hook returns at once" bash -c '
-  start=$(python3 -c "import time; print(time.time())")
-  BOSUN_EVENTS_ENABLED=1 "$1" hook user-prompt --window exporter <<<"$2"
-  python3 -c "import sys, time; sys.exit(time.time() - float(sys.argv[1]) > 1.0)" "$start"' _ "$BOSUN" "$said_payload"
+# In the background: with the ledger's lock held (as a write in progress holds it), the hook returns all the same,
+# and its write lands once the lock is free. (The 30 s are only hang protection, against a hook that waits.)
+hold_lock "$BOSUN_STATE_DIR/ledger.lock" ledger-for-the-hook
+said_later='{"hook_event_name":"UserPromptSubmit","session_id":"s-1","prompt":"and keep the suites green"}'
+check "... in the background: the hook returns while the ledger's lock is held, which its write waits for" python3 -I -c '
+import subprocess, sys
+sys.exit(subprocess.run(sys.argv[2:], input=sys.argv[1], text=True, timeout=30).returncode)' "$said_later" env BOSUN_EVENTS_ENABLED=1 "$BOSUN" hook user-prompt --window exporter
+release_lock ledger-for-the-hook
+check "... and its write lands once the lock is free" wait_for 30 bash -c '"$1" ledger said "$2" | grep -q "keep the suites green"' _ "$BOSUN" "$TASK"
 check "... and never fails the prompt, even on garbage" bash -c 'BOSUN_EVENTS_ENABLED=1 "$1" hook user-prompt --window exporter <<<"{nope"' _ "$BOSUN"
 check "... it logs the error instead" wait_for 30 bash -c 'grep -q "ERROR: unreadable hook input" "$1"/hook-*.log' _ "$BOSUN_LOG_DIR"
 check "a prompt bosun passes at launch is not taken for mine" bash -c '
@@ -1769,10 +1795,10 @@ kill -TERM "$hung_doctor"
 sleep 0.1
 kill -TERM "$hung_doctor" 2>/dev/null
 wait "$hung_doctor" 2>/dev/null
-# Within 5 s none of those runs; if one does, it is named.
+# None of those runs once doctor is gone (30 s of looks, only hang protection); if one does, it is named.
 check "doctor cut short, twice, leaves nothing its checks started running, nor a check of its own" bash -c '
   left() { while read -r pid; do kill -0 "$pid" 2>/dev/null && ps -o pid=,ppid=,stat=,command= -p "$pid"; done <"$1"; }
-  for _ in $(seq 1 25); do [ -z "$(left "$1")" ] && exit 0; sleep 0.2; done
+  for _ in $(seq 1 150); do [ -z "$(left "$1")" ] && exit 0; sleep 0.2; done
   left "$1"; exit 1' _ "$WORK/hang-claude.pids"
 while read -r hung; do kill "$hung" 2>/dev/null && kill -CONT "$hung" 2>/dev/null; done <"$WORK/hang-claude.pids"
 rm -f "$BOSUN_CONFIG_DIR/bosun.env"
@@ -1987,16 +2013,12 @@ check "refresh recreates missing windows" contains "$out" "gamma: create the mis
 printf 'sessions:\n  - name: alpha\n    dir: %s\n  - name: ghost\n    dir: %s\n' "$REPO_A" "$WORK/repos/moved-away" >"$WORK/ghost-sessions.yml"
 check "refresh skips a window whose folder is gone, as start does, never opening it elsewhere" contains \
   "$(BOSUN_SESSIONS_FILE="$WORK/ghost-sessions.yml" "$BOSUN" refresh --dry-run 2>&1)" "ghost: directory $WORK/repos/moved-away does not exist; skipping the window"
-python3 "$ROOT/lib/run_locked.py" "$BOSUN_STATE_DIR/windows.lock" 10 busy -- sleep 20 &
-windows_holder=$!
-# The holders below wait (10 s) for the lock, since this probe may take it for a moment before they start.
-wait_for 30 lock_taken "$BOSUN_STATE_DIR/windows.lock"
+hold_lock "$BOSUN_STATE_DIR/windows.lock" tmux-windows
 check "a start while another sets up the windows waits, then gives up saying why" fails_with "another bosun start or refresh is setting up the windows" env BOSUN_WINDOWS_LOCK_WAIT_SECONDS=0 "$BOSUN" start
 check "... and so does a refresh" fails_with "another bosun start or refresh is setting up the windows" env BOSUN_WINDOWS_LOCK_WAIT_SECONDS=0 "$BOSUN" refresh
 check "... but not a dry run, which changes nothing" "$BOSUN" refresh --dry-run
 check "... exiting 75 (EX_TEMPFAIL: try again later)" bash -c 'BOSUN_WINDOWS_LOCK_WAIT_SECONDS=0 "$1" start >/dev/null 2>&1; [ $? -eq 75 ]' _ "$BOSUN"
-kill "$windows_holder"
-wait "$windows_holder" 2>/dev/null
+release_lock tmux-windows
 lock_free() { ! lock_taken "$1"; } # <lock file>
 check "the windows lock is free once the holder is gone, though the tmux server bosun start left runs on" lock_free "$BOSUN_STATE_DIR/windows.lock"
 check "a start under a parent that holds the windows lock goes on, and its refresh too (inherited, not waited for)" \
@@ -2835,7 +2857,8 @@ FAKE
 chmod +x "$WORK/live-claude"
 BOSUN_CLAUDE_BIN="$WORK/live-claude" "$BOSUN" start >/dev/null 2>&1
 wait_for 30 has_windows "orch alpha beta gamma checkin "
-live() { BOSUN_LAUNCH_DRY_RUN=0 BOSUN_START_TIMEOUT=5 "$BOSUN" send "$@"; }
+# (A start ends as soon as the agent registers, or its launch ends: the timeout is only hang protection.)
+live() { BOSUN_LAUNCH_DRY_RUN=0 BOSUN_START_TIMEOUT=120 "$BOSUN" send "$@"; }
 # claude_in <window>: prints the pid of the fake Claude running in the window: the first of the pane's descendants
 # with a running-session record, which the fakes write for themselves ($HOME/.claude/sessions/<pid>.json). Read by
 # the shell, with no Python started (agent_pid_under asks lib/agent_state.py), since wait_for loops call it.
@@ -2877,7 +2900,7 @@ another_claude_in() { # <window> <old pid>: a fake Claude other than that one ru
   pid="$(claude_in "$1")" && [ -n "$pid" ] && [ "$pid" != "$2" ]
 }
 check "... and an update's restart of it" env BOSUN_LAUNCH_DRY_RUN=0 BOSUN_AGENT_SETTLE_SECONDS=0.5 "$BOSUN" refresh --update-restart "$WORK/update-prompt" zeta
-check "... starts it again" wait_for 15 another_claude_in zeta "$zeta_pid"
+check "... starts it again" wait_for 30 another_claude_in zeta "$zeta_pid"
 check "... keeping its --model and --effort, with the update's prompt" bash -c '
   grep -qx haiku "$1.args" && grep -q "\"effortLevel\":\"low\"" "$1.args" && [ "$(cat "$1.prompt")" = bosun-was-updated:check-in ]' _ "$WORK/live-claude.$(claude_in zeta)"
 # The default agent now Codex, and zeta's agent exited: one restart for the update shows both, the conversation
@@ -2891,7 +2914,7 @@ wait_for 30 bash -c '! pgrep -P "$(tmux -L "$1" display -p -t =smoke:zeta "#{pan
 # A real Claude leaves its conversation to resume; this fake writes none, so zeta is given one.
 make_session "$REPO_A" 44444444-0000-0000-0000-000000000001 zeta 202601040000
 check "... and once its agent has exited, an update's restart" env BOSUN_LAUNCH_DRY_RUN=0 BOSUN_AGENT_SETTLE_SECONDS=0.5 "$BOSUN" refresh --update-restart "$WORK/update-prompt" zeta
-check "... starts it again" wait_for 15 another_claude_in zeta "$zeta_pid"
+check "... starts it again" wait_for 30 another_claude_in zeta "$zeta_pid"
 check "... keeping them too, resuming its conversation with the update's prompt" bash -c '
   grep -qx haiku "$1.args" && grep -q "\"effortLevel\":\"low\"" "$1.args" && grep -qx 44444444-0000-0000-0000-000000000001 "$1.args" &&
     [ "$(cat "$1.prompt")" = bosun-was-updated:check-in ]' _ "$WORK/live-claude.$(claude_in zeta)"
@@ -2929,13 +2952,12 @@ check "--start starts Claude in an idle window" contains "$out" "Claude is runni
 alpha_pid="$(claude_in alpha)"
 check "--start resumes the window's named session" grep -qx 11111111-0000-0000-0000-000000000002 "$WORK/live-claude.$alpha_pid.args"
 check "--start delivers the prompt" test "$(cat "$WORK/live-claude.$alpha_pid.prompt")" = "resume with this"
-started=$SECONDS
-# a timeout far above how long the early end takes even on a slow machine, so the two cannot be mistaken
-out="$(BOSUN_LAUNCH_DRY_RUN=0 BOSUN_START_TIMEOUT=60 "$BOSUN" send --start beta "x" 2>&1)"
+out="$(live --start beta "x" 2>&1)"
 check "--start fails when Claude does not start" test $? -ne 0
 check "a failed start shows the window's output" contains "$out" "already running as pid $$"
-check "... as soon as its launch has ended, saying so, not at BOSUN_START_TIMEOUT (60 s here)" bash -c '
-  grep -q "but its launch ended without starting a Claude session" <<<"$1" && [ "$2" -lt 30 ]' _ "$out" "$((SECONDS - started))"
+# The early end's own line (the timeout says "within ...s"), not how long it took.
+check "... as soon as its launch has ended, saying so, not at BOSUN_START_TIMEOUT" bash -c '
+  grep -q "but its launch ended without starting a Claude session" <<<"$1" && ! grep -q "no Claude session started there within" <<<"$1"' _ "$out"
 out="$(live --new epsilon "$TRUST_REPO" hi 2>&1)"
 check "--new trusts a repo inside the mask before starting" contains "$out" "trusted: $TRUST_REPO"
 check "... and Claude starts there" contains "$out" "Claude is running in smoke:epsilon"
@@ -2945,9 +2967,20 @@ wait_for 30 pane_has_children gamma
 check "--start never replaces a running command" fails_with "running another command" env BOSUN_RELAUNCH_SETTLE_SECONDS=1 "$BOSUN" send --start gamma x
 tmux -L "$SOCKET" send-keys -t "=smoke:gamma" C-c
 wait_for 30 bash -c '! pgrep -P "$(tmux -L "$1" display -p -t =smoke:gamma "#{pane_pid}")" >/dev/null' _ "$SOCKET"
-tmux -L "$SOCKET" send-keys -t "=smoke:gamma" "sleep 2" Enter
+# A shell busy until the test lets it go (a file it waits on), not for a fixed time: --start waits, starting
+# nothing while it is busy, and starts once it is free. (Its settle time, 120 s here, is only hang protection.)
+touch "$WORK/gamma-busy"
+tmux -L "$SOCKET" send-keys -t "=smoke:gamma" "while [ -e '$WORK/gamma-busy' ]; do sleep 0.1; done" Enter
 wait_for 30 pane_has_children gamma
-check "--start waits for a briefly busy shell to settle" contains "$(live --start gamma 'after the shell settled' 2>&1)" "Claude is running in smoke:gamma"
+gamma_busy_pane="$(tmux -L "$SOCKET" display -p -t "=smoke:gamma" '#{pane_pid}')"
+BOSUN_RELAUNCH_SETTLE_SECONDS=120 live --start gamma 'after the shell settled' >"$WORK/gamma-start.out" 2>&1 &
+gamma_start=$!
+check "--start waits for a briefly busy shell, replacing nothing while it is busy" bash -c '
+  kill -0 "$1" && [ "$(tmux -L "$2" display -p -t =smoke:gamma "#{pane_pid}")" = "$3" ] && ! grep -q "Claude is running" "$4"' \
+  _ "$gamma_start" "$SOCKET" "$gamma_busy_pane" "$WORK/gamma-start.out"
+rm -f "$WORK/gamma-busy"
+wait "$gamma_start"
+check "... and starts once it settled" contains "$(cat "$WORK/gamma-start.out")" "Claude is running in smoke:gamma"
 kill "$alpha_pid"
 wait_for 30 bash -c '! pgrep -P "$(tmux -L "$1" display -p -t =smoke:alpha "#{pane_pid}")" >/dev/null' _ "$SOCKET"
 drain_prompt="$(bash -c 'source "$1/lib/common.sh"; load_config; printf %s "$BOSUN_DRAIN_PROMPT"' _ "$ROOT")"
@@ -3007,8 +3040,9 @@ check "send refuses unsent text in the input line once its wait is over" fails_w
 box_window emptybox ""
 check "send pastes into an empty input line" contains "$("$BOSUN" send --no-item emptybox hello 2>&1)" "delivered to smoke:emptybox"
 box_window clearing "" reject
+# (send stops looking once the reply is there: the confirm time is only hang protection.)
 check "send fails when the paste ran as an unknown command" fails_with "ran the paste as an unknown command" \
-  env BOSUN_SEND_CONFIRM_SECONDS=2 "$BOSUN" send --no-item clearing "/clearLedger item x"
+  env BOSUN_SEND_CONFIRM_SECONDS=60 "$BOSUN" send --no-item clearing "/clearLedger item x"
 # A fake Claude at an input box holding unsent text, so send waits; once $WORK/flip.$1 exists, with $1=waiting
 # its status turns to waiting (a permission prompt opened meanwhile), with $1=clear its box empties and it takes
 # the next line, with $1=exit its box empties and it exits, its record left behind still saying idle (as a
@@ -3106,10 +3140,22 @@ check "--start dry-run only logs" contains "$(BOSUN_SEND_DRY_RUN=1 "$BOSUN" send
 "$BOSUN" stop >/dev/null 2>&1
 
 section checkin-loop-timing "check-in loop timing" covers 'libexec/bosun-checkin,libexec/bosun-chores'
-check "the loop waits one interval before the first check-in" bash -c '
-  BOSUN_CHECKIN_MINUTES=1 "$1" checkin --loop >"$2" 2>&1 & pid=$!
-  sleep 2; kill $pid 2>/dev/null; pkill -P $pid 2>/dev/null; wait $pid 2>/dev/null
-  [ ! -s "$2" ]' _ "$BOSUN" "$WORK/checkin-loop.out"
+# Its dispatcher ticks every second (as it starts, then each interval: its last_tick, to the second), the check-in
+# every minute: two ticks seen and no check-in line yet is a loop that waits before its first check-in. (The 40
+# looks are only hang protection.)
+check "the loop waits one interval before the first check-in: two of its ticks, and no check-in" bash -c '
+  state="$3/events/state.json"
+  tick() { grep -o "\"last_tick\": *\"[^\"]*\"" "$state" 2>/dev/null; }
+  last="$(tick)" ticks=0
+  BOSUN_CHECKIN_MINUTES=1 BOSUN_EVENTS_ENABLED=1 BOSUN_EVENTS_INTERVAL_SECONDS=1 "$1" checkin --loop >"$2" 2>&1 & pid=$!
+  for _ in $(seq 1 120); do
+    now="$(tick)"
+    if [ -n "$now" ] && [ "$now" != "$last" ]; then ticks=$((ticks + 1)) last="$now"; fi
+    [ "$ticks" -ge 2 ] && break
+    sleep 0.25
+  done
+  kill $pid 2>/dev/null; pkill -P $pid 2>/dev/null; wait $pid 2>/dev/null
+  [ "$ticks" -ge 2 ] && ! grep -q "\[checkin\]" "$2" || { echo "ticks: $ticks"; cat "$2"; exit 1; }' _ "$BOSUN" "$WORK/checkin-loop.out" "$BOSUN_STATE_DIR"
 check "with events on, the dispatcher runs as the loop starts, not an interval later" bash -c '
   state="$3/events/state.json"; before="$(grep -o "\"last_tick\": *\"[^\"]*\"" "$state" 2>/dev/null)"
   BOSUN_CHECKIN_MINUTES=60 BOSUN_EVENTS_ENABLED=1 BOSUN_EVENTS_INTERVAL_SECONDS=600 "$1" checkin --loop >"$2" 2>&1 & pid=$!
@@ -3322,7 +3368,11 @@ case "\$*" in
   "sts get-caller-identity --profile books-"*) [ -f "$WORK/aws.corp-login" ] ;;
   "sso login --sso-session corp")
     echo "open https://oidc.example.com/authorize?state=secret-state&code_challenge=secret"
-    sleep "\${FAKE_SSO_WAIT:-0}"
+    # FAKE_SSO_WAIT=alert: a login no one approves yet, until setup has said it alerts you (its own log line, no
+    # clock; the 30 s are only hang protection)
+    if [ "\${FAKE_SSO_WAIT:-}" = alert ]; then
+      for _ in \$(seq 1 300); do grep -qs "alerting you" "\$BOSUN_LOG_DIR"/setup-*.log && break; sleep 0.1; done
+    fi
     [ -n "\${FAKE_SSO_APPROVE:-}" ] && touch "$WORK/aws.corp-login"
     exit 0
     ;;
@@ -3336,8 +3386,6 @@ setup_steps() {
   ensure_aws_sso stale
   ensure_aws_sso broken
   ensure_aws_sso cached
-  run_step "slow step" sleep 10
-  run_step "quick step" true
 }
 SH
 # "cached": its SSO session token expired, but 12-hour role credentials are still cached.
@@ -3348,16 +3396,23 @@ echo '{"ProviderType": "sso", "Credentials": {}}' >"$HOME/.aws/cli/cache/role.js
 out="$(BOSUN_CONFIG_DIR="$SETUP_CFG" "$BOSUN" setup --dry-run 2>&1)"
 check "setup --dry-run keeps cached role credentials" test -f "$HOME/.aws/cli/cache/role.json"
 check "setup --dry-run only checks" bash -c 'grep -q "would run: aws sso login --profile stale" <<<"$1" && ! grep -q "sso login" "$2"' _ "$out" "$WORK/aws.log"
-out="$(BOSUN_CONFIG_DIR="$SETUP_CFG" BOSUN_LOGIN_TIMEOUT=1 "$BOSUN" setup 2>&1)"
+# (The login timeout is only hang protection here: every login of the stand-in ends at once.)
+out="$(BOSUN_CONFIG_DIR="$SETUP_CFG" BOSUN_LOGIN_TIMEOUT=60 "$BOSUN" setup 2>&1)"
 code=$?
-check "setup counts failed steps and exits 1" bash -c '[ "$1" = 1 ] && grep -q "setup finished with 2 failed step(s)" <<<"$2"' _ "$code" "$out"
+check "setup counts failed steps and exits 1" bash -c '[ "$1" = 1 ] && grep -q "setup finished with 1 failed step(s)" <<<"$2"' _ "$code" "$out"
 check "a valid profile needs no login" contains "$out" "aws profile good is valid, no login needed"
 check "an expired profile logs in" contains "$out" "aws profile stale logged in"
 check "a login that does not help is a failure" contains "$out" "aws profile broken still invalid after sso login"
 check "an expired SSO session is not hidden by cached role credentials" bash -c 'grep -q "aws profile cached logged in" <<<"$1" && [ ! -f "$2" ]' _ "$out" "$HOME/.aws/cli/cache/role.json"
+# A step that would run a minute, under a timeout of 1 s (the minute is only how long a broken timeout would hang).
+STEPS_CFG="$WORK/steps-config"
+mkdir -p "$STEPS_CFG"
+cp "$BOSUN_CONFIG_DIR/sessions.yml" "$STEPS_CFG/"
+printf 'setup_steps() {\n  run_step "slow step" sleep 60\n  run_step "quick step" true\n}\n' >"$STEPS_CFG/setup.sh"
+out="$(BOSUN_CONFIG_DIR="$STEPS_CFG" BOSUN_LOGIN_TIMEOUT=1 "$BOSUN" setup 2>&1)"
 check "a step that runs too long is stopped" contains "$out" "FAIL: slow step"
 check "the other steps still run" contains "$out" "ok: quick step"
-# The cached profile again, alone (the slow step's timeout is paid once), its SSO session live now.
+# The cached profile again, alone, its SSO session live now.
 CACHED_CFG="$WORK/cached-config"
 mkdir -p "$CACHED_CFG"
 cp "$BOSUN_CONFIG_DIR/sessions.yml" "$CACHED_CFG/"
@@ -3365,14 +3420,14 @@ echo 'setup_steps() { ensure_aws_sso cached; }' >"$CACHED_CFG/setup.sh"
 echo '{"expiresAt": "2999-01-01T00:00:00Z"}' >"$SSO_TOKEN"
 echo '{"ProviderType": "sso", "Credentials": {}}' >"$HOME/.aws/cli/cache/role.json"
 rm -f "$WORK/aws.cached-login"
-out="$(BOSUN_CONFIG_DIR="$CACHED_CFG" BOSUN_LOGIN_TIMEOUT=1 "$BOSUN" setup 2>&1)"
+out="$(BOSUN_CONFIG_DIR="$CACHED_CFG" BOSUN_LOGIN_TIMEOUT=60 "$BOSUN" setup 2>&1)"
 check "a live SSO session keeps its cached role credentials" bash -c 'grep -q "aws profile cached is valid, no login needed" <<<"$1" && [ -f "$2" ]' _ "$out" "$HOME/.aws/cli/cache/role.json"
 rm -f "$SSO_TOKEN" "$HOME/.aws/cli/cache/role.json"
 SSO_CFG="$WORK/sso-config"
 mkdir -p "$SSO_CFG"
 cp "$BOSUN_CONFIG_DIR/sessions.yml" "$SSO_CFG/"
 printf 'setup_steps() {\n  ensure_aws_sso books-dev\n  ensure_aws_sso books-prod\n}\n' >"$SSO_CFG/setup.sh"
-SSO() { BOSUN_CONFIG_DIR="$SSO_CFG" BOSUN_LOGIN_TIMEOUT=5 "$BOSUN" setup "$@" 2>&1; }
+SSO() { BOSUN_CONFIG_DIR="$SSO_CFG" BOSUN_LOGIN_TIMEOUT=60 "$BOSUN" setup "$@" 2>&1; } # (hang protection)
 logins() { grep -c "sso login --sso-session corp" "$WORK/aws.log"; }
 : >"$WORK/aws.log"
 out="$(SSO --dry-run)"
@@ -3384,9 +3439,9 @@ rm -f "$WORK/aws.corp-login"
 : >"$WORK/aws.log"
 out="$(SSO)"
 check "a session whose login failed is not logged in again for its next profile" bash -c '[ "$2" = 1 ] && grep -q "FAIL: aws profile books-prod: its SSO session corp still needs a login (see above); run: aws sso login --sso-session corp" <<<"$1"' _ "$out" "$(logins)"
-check "... the failure says what to run" contains "$out" "no browser approval within 5s. Run: aws sso login --sso-session corp"
+check "... the failure says what to run" contains "$out" "no browser approval within 60s. Run: aws sso login --sso-session corp"
 : >"$WORK/aws.log"
-out="$(FAKE_SSO_WAIT=2 BOSUN_AWS_SSO_ALERT_AFTER=1 SSO)" # the wait counts whole seconds: past 1, so 2
+out="$(FAKE_SSO_WAIT=alert BOSUN_AWS_SSO_ALERT_AFTER=1 SSO)"
 check "a login still waiting for its browser approval alerts you" bash -c 'grep -q "still waits for a browser approval after 1s; alerting you" <<<"$1" && grep -q "alert (notification only; BOSUN_ALERT_SLACK_USER is empty): AWS SSO login for SSO session corp waits for your approval" <<<"$1"' _ "$out"
 out="$(FAKE_SSO_APPROVE=1 BOSUN_AWS_SSO_ALERT_AFTER=60 SSO)"
 check "... but a login the browser approves at once does not" bash -c '! grep -q "alerting you" <<<"$1"' _ "$out"
@@ -3426,14 +3481,17 @@ out="$(BOSUN_CONFIG_DIR="$SETUP_CFG" BOSUN_NETWORK_PROBE_URL=file:///dev/null "$
 check "morning --dry-run would hold the keep-awake" contains "$out" "dry-run: would hold keep-awake for 5 minutes"
 check "... but starts no caffeinate" test ! -f "$BOSUN_STATE_DIR/keep-awake-smoke.pid"
 check "it waits for the network" contains "$out" "network is up"
-# With no network it probes every 5 seconds, but sleeps no longer than what is left of its timeout: the wait alone,
-# timed by the log's own clock from the line just before it (the keep-awake's) to its last, is its 1 s, not 5 s.
-out_down="$(BOSUN_CONFIG_DIR="$SETUP_CFG" BOSUN_NETWORK_PROBE_URL=file:///nonexistent-probe BOSUN_NETWORK_TIMEOUT=1 "$BOSUN" morning --dry-run --awake-minutes 5 2>&1)"
-check "... and gives up once its timeout is over, not at its next 5-second probe" bash -c '
-  clock() { grep -m1 "$1" <<<"$2" | awk "{ split(\$2, t, \":\"); print t[1] * 3600 + t[2] * 60 + t[3] }"; }
-  from="$(clock "would hold keep-awake" "$1")" to="$(clock "network still down after 1s; continuing" "$1")"
-  [ -n "$from" ] && [ -n "$to" ] && waited=$(((to - from + 86400) % 86400)) && [ "$waited" -le 3 ] ||
-    { echo "waited ${waited:-?} s for the network"; exit 1; }' _ "$out_down"
+# With no network it probes every 5 seconds, but sleeps no longer than what is left of its timeout: what it asks
+# of sleep, written down by a stand-in that returns at once (in ~/.local/bin, which bosun puts first on its PATH, for
+# this one run: no clock to race), is never more than its 3 s timeout, where a sleep to its next probe would be 5.
+printf '#!/bin/sh\necho "$*" >>"%s"\n' "$WORK/sleep-asked.log" >"$HOME/.local/bin/sleep"
+chmod +x "$HOME/.local/bin/sleep"
+rm -f "$WORK/sleep-asked.log"
+out_down="$(BOSUN_CONFIG_DIR="$SETUP_CFG" BOSUN_NETWORK_PROBE_URL=file:///nonexistent-probe BOSUN_NETWORK_TIMEOUT=3 "$BOSUN" morning --dry-run --awake-minutes 5 2>&1)"
+rm -f "$HOME/.local/bin/sleep"
+check "... and gives up once its timeout is over, never sleeping past it to its next 5-second probe" bash -c '
+  grep -q "network still down after 3s; continuing" <<<"$1" && [ -s "$2" ] && ! grep -vxE "[0-3]" "$2" ||
+    { echo "asked of sleep: $(sort "$2" 2>/dev/null | uniq -c | tr "\n" " ")"; grep -i network <<<"$1"; exit 1; }' _ "$out_down" "$WORK/sleep-asked.log"
 check "it previews the setup steps" contains "$out" "aws profile good is valid, no login needed"
 check "it lists the windows it would start, with model and effort" contains "$out" "alpha (session, opus/medium) -> $REPO_A"
 check "it names no agent update when no agent in use has update_args" bash -c '! grep -qE "updated |could not update|would run .*update" <<<"$1"' _ "$out"
@@ -3555,8 +3613,8 @@ timed="$(python3 -I -c 'import subprocess, sys, time; t = time.monotonic(); r = 
 status_seconds="${timed%%$'\n'*}"
 status_out="${timed#*$'\n'}"
 check "with the windows open it counts them, and none of the fake Claudes waits" said_has "$status_out" 'd["windows"] == 5 and d["waiting"] == [] and d["level"] != "stopped"'
+# (How long it took is a note, not a check: the suite asserts no durations; the profiled runs watch the time.)
 echo "  note  bosun status --json took ${status_seconds}s with five windows (the app polls it)"
-check "... quick enough to poll: under 10 seconds" python3 -I -c 'import sys; sys.exit(not float(sys.argv[1]) < 10)' "$status_seconds"
 check "... a level of ok is one with no problems, anything else lists them" said_has "$status_out" '(d["level"] == "ok") == (d["problems"] == []) and all(isinstance(p, str) for p in d["problems"])'
 check "... and no window needs you" said_has "$status_out" 'd["attention"] == []'
 # A Claude in beta at a prompt (a stand-in: a sleep this run started, with a session record); its pid is killed after
@@ -3687,35 +3745,35 @@ kill "$update_holder" 2>/dev/null
 wait "$update_holder" 2>/dev/null
 
 # A start that is setting up the windows holds the windows lock: a quit does not write anything under it.
-python3 "$ROOT/lib/run_locked.py" "$BOSUN_STATE_DIR/windows.lock" 10 busy -- sleep 60 &
-lock_holder=$!
-wait_for 30 lock_taken "$BOSUN_STATE_DIR/windows.lock"
+hold_lock "$BOSUN_STATE_DIR/windows.lock" quit-gives-up
 check "a quit while a start holds the windows lock gives up when the wait is over: exit 1 ..." env BOSUN_WINDOWS_LOCK_WAIT_SECONDS=0 bash -c '"$1" quit --stop-now </dev/null >"$2" 2>"$3"; [ $? -eq 1 ]' _ "$BOSUN" "$WORK/quit.out" "$WORK/quit.err"
 check "... with one line, and nothing changed: no quit.json, the session, the marker and the keep-awake" bash -c 'grep -q "setting up the windows" "$1" && [ "$(wc -l <"$1")" -eq 1 ] && [ ! -e "$2/quit.json" ] && tmux -L "$3" has-session -t =smoke && [ -f "$2/console/wanted" ] && [ -f "$2/keep-awake-smoke.pid" ]' _ "$WORK/quit.err" "$BOSUN_STATE_DIR" "$SOCKET"
-kill "$lock_holder" 2>/dev/null
-wait "$lock_holder" 2>/dev/null
+release_lock quit-gives-up
 
 # A quit record while windows are open is a quit that did not finish (bosun stop failed or was cut short)
 write_quit paused
 check "bosun status --json calls a quit record with windows still open an error, with how to finish" status_has 'd["level"] == "error" and d["sentence"] == "bosun quit did not finish" and "bosun quit --stop-now" in d["problems"][0] and "bosun start" in d["problems"][0]'
 rm -f "$BOSUN_STATE_DIR/quit.json"
 
-# alpha finishes once the quit says it waits for it (not at a fixed time, which a slow machine's quit could reach
-# only after alpha was done, and then never wait); beta keeps waiting at its prompt, which does not hold the wait.
-# A start still holds the windows lock when alpha is done: the quit takes it only for its stop phase, and waits.
-# (The wait polls every BOSUN_QUIT_POLL_SECONDS, 0.5 s here; the lock goes at 8 s, so a quit that waited for the lock
-# takes 6 s or more.)
-rm -f "$WORK/quit.err"
-python3 "$ROOT/lib/run_locked.py" "$BOSUN_STATE_DIR/windows.lock" 10 busy -- sleep 8 &
-wait_for 30 lock_taken "$BOSUN_STATE_DIR/windows.lock"
-(
-  wait_for 30 grep -q "Waiting for 1 busy window (alpha)" "$WORK/quit.err"
-  agent_status "$quit_alpha" idle
-) &
-quit_started=$SECONDS
-check "--let-finish waits (polling every BOSUN_QUIT_POLL_SECONDS) until alpha is done, though beta waits at a prompt, and for a start holding the windows lock, then quits: morning paused, Mac kept awake" env BOSUN_WINDOWS_LOCK_WAIT_SECONDS=30 bash -c '"$1" quit --let-finish=1 --pause-morning </dev/null >"$2" 2>"$3"' _ "$BOSUN" "$WORK/quit.out" "$WORK/quit.err"
-check "... it waited for alpha, then for the lock: 6 to 45 seconds" bash -c '[ "$1" -ge 6 ] && [ "$1" -le 45 ]' _ $((SECONDS - quit_started))
-check "... it said once, on stderr, who it waited for" bash -c '[ "$(wc -l <"$1")" -eq 1 ] && grep -q "Waiting for 1 busy window (alpha), up to 1 minute" "$1"' _ "$WORK/quit.err"
+# --let-finish in the order its waits come, each moved on by the test once the quit says it waits (no fixed times):
+# alpha busy (beta waiting at its prompt, which does not hold the wait), then a start holding the windows lock, which
+# the quit takes only for its stop phase. The lock wait (120 s) and the minute for alpha are only hang protection.
+hold_lock "$BOSUN_STATE_DIR/windows.lock" quit-let-finish
+rm -f "$WORK/quit.out" "$WORK/quit.err"
+BOSUN_WINDOWS_LOCK_WAIT_SECONDS=120 "$BOSUN" quit --let-finish=1 --pause-morning </dev/null >"$WORK/quit.out" 2>"$WORK/quit.err" &
+quitting=$!
+check "--let-finish waits (polling every BOSUN_QUIT_POLL_SECONDS) until alpha is done, though beta waits at a prompt, saying so" \
+  wait_for 60 grep -q "Waiting for 1 busy window (alpha), up to 1 minute" "$WORK/quit.err"
+agent_status "$quit_alpha" idle
+check "... then, alpha done, for the start holding the windows lock, saying so" \
+  wait_for 60 grep -q "Waiting for a bosun start or refresh to finish setting up the windows, up to 120 s" "$WORK/quit.err"
+check "... having stopped nothing while it waits: the session, no quit.json, the console's marker" bash -c '
+  kill -0 "$1" && tmux -L "$2" has-session -t =smoke && [ ! -e "$3/quit.json" ] && [ -f "$3/console/wanted" ]' _ "$quitting" "$SOCKET" "$BOSUN_STATE_DIR"
+release_lock quit-let-finish
+wait "$quitting"
+check "... and once the lock is free, it quits (exit 0): morning paused, Mac kept awake" test $? -eq 0
+check "... it said on stderr who it waited for, once, and that it waited for the lock" bash -c '
+  [ "$(wc -l <"$1")" -eq 2 ] && [ "$(grep -c "Waiting for 1 busy window (alpha), up to 1 minute" "$1")" -eq 1 ]' _ "$WORK/quit.err"
 check "... it says what it stopped and who was waiting for you" bash -c 'grep -q "^bosun is stopped\.$" "$1" && grep -q "Stopped the windows: .*alpha" "$1" && grep -q "They were waiting for you: beta" "$1" && grep -q "paused until you run: bosun start" "$1"' _ "$WORK/quit.out"
 check "... no session is left" bash -c '! tmux -L "$1" has-session -t =smoke' _ "$SOCKET"
 check "... quit.json says the morning is paused" bash -c 'python3 -I -c "import json,sys; sys.exit(not json.load(open(sys.argv[1]))[\"morning_paused\"])" "$1/quit.json"' _ "$BOSUN_STATE_DIR"
@@ -4134,10 +4192,10 @@ check "... and starts a new caffeinate, recorded in the pid file" bash -c '[ -n 
 check "... which ends where the new until does (about three hours: -t, from its command line)" bash -c 'left="$(ps -o args= -p "$1" | awk "{ print \$NF }")"; [ "$left" -gt 10000 ] && [ "$left" -le 10800 ]' _ "$set_new_caffeinate"
 check "... and outlived the command's process group, killed whole after it (the app's timeout)" is_caffeinate "$set_new_caffeinate"
 check "... being in a process group of its own" own_group "$set_new_caffeinate"
-check "... the old caffeinate ended, by its recorded pid" wait_for 10 bash -c '! ps -p "$1" >/dev/null 2>&1' _ "$set_old_caffeinate"
+check "... the old caffeinate ended, by its recorded pid" wait_for 30 bash -c '! ps -p "$1" >/dev/null 2>&1' _ "$set_old_caffeinate"
 check "... and the record bosun status reads names the new one" grep -q "\"pid\": $set_new_caffeinate}" "$SET_STATE/keep-awake-$(settings_session).json"
 check "set BOSUN_AWAKE_UNTIL to half an hour ago releases the keep-awake: now is outside every window" settings_exits 0 set BOSUN_AWAKE_UNTIL="$(date -v-30M +%H:%M)"
-check "... its caffeinate ended" wait_for 10 bash -c '! ps -p "$1" >/dev/null 2>&1' _ "$set_new_caffeinate"
+check "... its caffeinate ended" wait_for 30 bash -c '! ps -p "$1" >/dev/null 2>&1' _ "$set_new_caffeinate"
 check "... and its files gone" bash -c '[ ! -e "$1/keep-awake-$2.pid" ] && [ ! -e "$1/keep-awake-$2.json" ]' _ "$SET_STATE" "$(settings_session)"
 kill "$set_old_caffeinate" "$set_new_caffeinate" 2>/dev/null # by their pids, in case a check above failed
 rm -f "$HOME"/Library/LaunchAgents/"$SET_LABEL"*.plist
@@ -5117,7 +5175,7 @@ LATE
   rm -f "$WORK/late-ready"
   tmux -L "$SOCKET" new-session -d -s un-test -n w -- "$WORK/late-agent" "$WORK" "$WORK/un-state" "$WORK/late-written" "$WORK/late-helper"
   # tmux returns before the agent has set its trap: a stop that came first would end it with no hook to wait for.
-  wait_for 10 test -e "$WORK/late-ready"
+  wait_for 30 test -e "$WORK/late-ready"
   # Each line uninstall says, with when it said it.
   PYTHONUNBUFFERED=1 un --yes 2>&1 |
     python3 -u -c 'import sys, time
@@ -5178,14 +5236,11 @@ for line in sys.stdin:
   check "init --dry-run changes nothing" env BOSUN_CONFIG_DIR="$INIT_CFG" bash -c '"$1" init --answers "$2" --dry-run >/dev/null && [ ! -e "$BOSUN_CONFIG_DIR" ]' _ "$BOSUN" "$INIT_ANSWERS"
   # (--print-answers takes --detect's way past the lock and the preflight: test_init.py holds its JSON.)
   check "init refuses bad answers" fails_with "unknown answers" env BOSUN_CONFIG_DIR="$INIT_CFG" "$BOSUN" init --answers <(echo '{"typo": 1}')
-  python3 "$ROOT/lib/run_locked.py" "$BOSUN_STATE_DIR/init.lock" 10 busy -- sleep 20 &
-  init_holder=$!
-  wait_for 30 lock_taken "$BOSUN_STATE_DIR/init.lock"
+  hold_lock "$BOSUN_STATE_DIR/init.lock" init
   check "a second bosun init while one runs is refused at once" fails_with "bosun init is already running" env BOSUN_CONFIG_DIR="$INIT_CFG" "$BOSUN" init --answers "$INIT_ANSWERS"
   check "... while init --detect still answers, in JSON (it reads only, so it takes no lock)" env BOSUN_CONFIG_DIR="$INIT_CFG" bash -c '"$1" init --detect | jq -e .home >/dev/null' _ "$BOSUN"
   check "... and changes nothing" test ! -e "$INIT_CFG"
-  kill "$init_holder"
-  wait "$init_holder" 2>/dev/null
+  release_lock init
   BOSUN_CONFIG_DIR="$INIT_CFG" "$BOSUN" init --answers "$INIT_ANSWERS" >"$WORK/init.out" 2>&1
   init_rc=$?
   init_said="$(cat "$WORK/init.out")"
@@ -6269,7 +6324,7 @@ HAND
   printf '{"pid":%d,"status":"idle","version":"2.0.0","statusUpdatedAt":%d,"name":"u-busy"}' "$busy_pid" "$(date +%s)000" >"$HOME/.claude/sessions/$busy_pid.json"
   out="$(uc)"
   check "... and restarts it once it is idle" contains "$out" "bosun update: u-busy: restarted"
-  check "... with the update prompt, which it answers" wait_for 15 test -s "$U_STATE/update/notes/u-busy.status"
+  check "... with the update prompt, which it answers" wait_for 30 test -s "$U_STATE/update/notes/u-busy.status"
   out="$out$(uc)" # the restart's tick may take the answer itself: refresh waits for the agent to start
   check "... and a tick takes its answer; the one at a prompt is still waited for" bash -c '
     grep -q "u-busy: answered: resumed after the update" <<<"$1" && jq -e ".step == \"agents\" and .pending == [\"u-waiting\"]" "$2/update.json" >/dev/null' _ "$out" "$U_STATE"
@@ -6322,7 +6377,7 @@ HAND
   printf '{"pid":%d,"status":"idle","version":"2.0.0","statusUpdatedAt":%d,"name":"u-waiting"}' "$waiting_pid" "$(date +%s)000" >"$HOME/.claude/sessions/$waiting_pid.json"
   out="$(uc)"
   check "once you answered it, a tick restarts it for the update" bash -c 'grep -q "bosun update: u-waiting: restarted" <<<"$1" && ! kill -0 "$2" 2>/dev/null' _ "$out" "$waiting_pid"
-  check "... with the update prompt, which it answers" wait_for 15 test -s "$U_STATE/update/notes/u-waiting.status"
+  check "... with the update prompt, which it answers" wait_for 30 test -s "$U_STATE/update/notes/u-waiting.status"
   out="$out$(uc)"
   check "... and a tick takes its answer: the update is done" bash -c '
     grep -q "u-waiting: answered: resumed after the update" <<<"$1" && jq -e ".step == \"done\" and .pending == []" "$2/update.json" >/dev/null' _ "$out" "$U_STATE"
@@ -6545,7 +6600,7 @@ HAND
   python3 -c 'import fcntl, sys, time; f = open(sys.argv[1], "a"); fcntl.flock(f, fcntl.LOCK_EX); print("held", flush=True); time.sleep(120)' \
     "$R_STATE/init.lock" >"$R/held.out" &
   r_holder=$!
-  wait_for 10 grep -q held "$R/held.out"
+  wait_for 30 grep -q held "$R/held.out"
   check "--branch whose channel cannot be set (bosun settings set refuses) sets nothing at all" bash -c '
     out="$("${@:4}" update --branch try-x </dev/null 2>&1)"; [ $? = 1 ] && grep -q "nothing changed: the install follows what it did" <<<"$out" &&
       ! git --git-dir="$1/bosun.git" config bosun.branch && [ "$(cat "$2/bosun.env")" = "$3" ]' _ "$R_VERSIONS" "$R_CONFIG" "$r_env" "${R_ENV[@]}" "$R_LINK/bin/bosun"
