@@ -29,6 +29,7 @@ from test_smoke_cache import ROOT, SMOKE, Scratch, clean_env, git
 
 
 sys.path.insert(0, str(ROOT / "tools"))
+import shell_library
 import smoke_select as ss
 import smoke_shard as sh
 
@@ -1056,6 +1057,58 @@ class JobsOptionTest(ScratchSuite):
                 self.assertIn(
                     f"--jobs wants how many shards to run side by side, 1 to 99, not '{value}'", result.stderr
                 )
+
+
+class StoppedShardTest(Scratch):
+    """count_shard and shards_waited of tests/smoke.sh, run alone: what -x's stop races with."""
+
+    def bash(self, body: str) -> subprocess.CompletedProcess[str]:
+        script = shell_library.read(SMOKE.read_text())
+        wanted = [f for f in script.functions if f.name in ("count_shard", "shards_waited")]
+        self.assertEqual(len(wanted), 2)
+        functions = "\n".join("\n".join(script.lines[f.first - 1 : f.last]) for f in wanted)
+        return subprocess.run(
+            ["/bin/bash", "-c", f"{functions}\n{body}"],
+            capture_output=True,
+            text=True,
+            check=False,
+            stdin=subprocess.DEVNULL,
+        )
+
+    def count(self, status: str, summary: str | None, stopped: bool) -> str:
+        shard = self.dir / "jobs" / "1"
+        shutil.rmtree(shard.parent, ignore_errors=True)
+        shard.mkdir(parents=True)
+        (shard / "status").write_text(status + "\n")
+        (shard / "log").write_text("checks\n" + (f"{summary} (shard 1 of 2)\n" if summary else ""))
+        if stopped:
+            (shard / "stopped").touch()
+        jobs = f'JOBS=2 JOBS_DIR="{shard.parent}" passed=0 failed=0'
+        body = f'{jobs}; count_shard 1; echo "counts $passed $failed"'
+        return self.bash(body).stdout
+
+    def test_a_shard_that_ended_on_its_own_as_it_was_stopped_counts_what_it_says(self) -> None:
+        self.assertEqual(self.count("1", "5 passed, 1 failed", stopped=True), "counts 5 1\n")
+        self.assertEqual(self.count("143", "4 passed, 0 failed", stopped=True), "counts 4 0\n")
+        self.assertEqual(
+            self.count("143", None, stopped=True),
+            "shard 1 of 2: stopped (-x), when another shard failed\ncounts 0 0\n",
+        )
+        self.assertEqual(
+            self.count("1", "3 passed, 0 failed", stopped=False), "counts 3 1\n"
+        )  # stopped short
+        self.assertIn("ended (exit 2) without its summary\ncounts 0 1", self.count("2", None, stopped=False))
+
+    def test_the_wait_after_a_stop_ends_after_30_seconds_saying_so(self) -> None:
+        body = """sleep() { :; }
+SHARDS_STOP_WAIT=0
+shards_waited 0 && echo "not stopping: waits on"
+for _ in $(seq 1 29); do shards_waited 1 || echo early; done
+shards_waited 1 || echo "ends at 30"
+"""
+        result = self.bash(body)
+        self.assertEqual(result.stdout, "not stopping: waits on\nends at 30\n")
+        self.assertIn("a shard -x stopped had not ended 30 s later; not waiting for it", result.stderr)
 
 
 class ShardOptionTest(ScratchSuite):
