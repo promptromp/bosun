@@ -336,8 +336,9 @@ the cheapest of these that can show what you changed:
 | The wake itself | `bosun wake-test`, on real hardware | a real sleep and a real wake | 5 minutes |
 
 The Mac suites (`run`, `work`, `app`, `live`) are in parts, and a run can take only the parts a change reaches:
-see [Running part of a suite](#running-part-of-a-suite). The first also runs in CI (the second's unit and smoke suites
-run there natively: the smoke sections a change reaches in the merge queue, everything nightly), and so does the
+see [Running part of a suite](#running-part-of-a-suite). The first also runs in CI, on a pull request when the third
+does or its own files changed (the second's unit and smoke suites run there natively: the smoke sections a change
+reaches in the merge queue, everything nightly), and so does the
 third on a clean GitHub macOS runner (`.github/workflows/install.yml`): on a pull request, the parts of `run` it
 reaches, chosen as `tests/sandbox.sh mac run --changed` chooses them, from an origin with a release in it as the VM's
 is (so its update to the next release and `--branch` run there too); weekly, all of it. So `mac run` here is for
@@ -446,18 +447,24 @@ picks, for each changed file (or function of `lib/common.sh`), the suites a rule
 (`all`), the parts whose `covers` name it and what they need, or nothing for a file no part needs (`none`: the docs,
 the unit tests, what only the smoke suite can show). It matches `covers` directly and follows no imports: the VM runs
 behind the smoke suite and the unit tests, which do. A file nothing names fails closed: `run`, `work` and `app` run
-whole, and the report says which rule to add. `live` is paid, so it is never chosen beyond the parts its `covers` name,
-and `--changed` runs them only with `--paid`; a whole `live` run or `--only` is asked for by name. A run prints its
+whole, and the report says which rule to add. `live` is paid, so it is never chosen beyond the parts its `covers` name
+(and the `all *` rules: the VM itself and the parts' machinery), and `--changed` runs them only with `--paid`; a whole
+`live` run or `--only` is asked for by name. A part says in `needs` every part whose state it reads (what that one
+turns on, starts or leaves on disk): `run`'s `quit` and `releases` need `console-job`, which turns the console's job on. A run prints its
 choice first, with an estimate from the `minutes` lines of `tests/vm_selection.txt`, and its summary says it was a
 partial run. Nothing to run for a suite: it says so, and boots nothing. `tools/vm_select.py` makes the choice, and
 `tests/unit/test_vm_selection.py` fails on a file or a function of `lib/common.sh` that no part and no rule names, a part
-without `covers`, a glob that matches nothing, code between the part lines, or a part with no `part_<id>`.
+without `covers`, a glob that matches nothing, a step called outside every part, code between the part lines, or a part
+with no `part_<id>`. A comment or a blank line added to `lib/common.sh` between its statements is no change (a function
+added with its comment), but one in a string, a here-document or after a line that runs on with `\` is a change. A run
+whose E2E_PARTS names no part of the suite fails.
 
 Two parts changed shape with this. `work`'s afternoon update runs on a year of data (365 days) only when the change
 reaches the update's freeze (the `year` rules: `lib/update.py`, `lib/update_gate.py`, `lib/update_backups.py`, the
 journals and the stores' change files, `tests/sandbox/acme_year.py`); otherwise on 30 days, about five minutes less, and
-its freeze check says it measured 30. A whole run takes the year; `--only` takes 30; `BOSUN_SANDBOX_YEAR_DAYS=<days>`
-sets it. `live`'s plugin pick-up (whether a running Claude picks up a changed command file) is a fact about Claude
+its year-scale checks (the freeze, restoring the backup) say they measured 30. A whole run takes the year, and so does
+one a change runs whole (an `all` rule, a file nothing names); `--only` takes 30; `BOSUN_SANDBOX_YEAR_DAYS=<days>` sets
+it. `live`'s plugin pick-up (whether a running Claude picks up a changed command file) is a fact about Claude
 Code: a whole run looks only on a Claude Code other than the one `PICKUP_SEEN_ON` in `live.sh` names, and a run that
 names the part looks whatever the version.
 
