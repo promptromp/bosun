@@ -196,6 +196,7 @@ class PluginTest(unittest.TestCase):
             self.selected("docs/ledger.md"),
             {
                 "tests/unit/test_docs_examples.py",
+                "tests/unit/test_task_table.py",
                 "tests/unit/test_update.py",
                 "tests/unit/test_update_back.py",  # it imports test_update
                 "tests/unit/test_update_facts.py",  # it imports test_update

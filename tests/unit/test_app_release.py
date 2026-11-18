@@ -354,5 +354,20 @@ class StatusTest(World):
         self.assertIn("wants 0.2.0", text)
 
 
+class RepoFilesTest(unittest.TestCase):
+    """The repository's own app/publisher.json and app/VERSION, as the design says (docs/design/menu-bar.md):
+    the bundle id, the repository the releases are in and the Team ID (the publisher's to fill in, a string),
+    and a version of three numbers."""
+
+    def test_the_publisher_and_the_version_are_what_the_design_says(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        publisher = json.loads((root / "app" / "publisher.json").read_text())
+        self.assertIsInstance(publisher["bundle_id"], str)
+        self.assertIn(".", publisher["bundle_id"])
+        self.assertIsInstance(publisher["releases"], str)
+        self.assertIsInstance(publisher["team_id"], str)
+        self.assertRegex((root / "app" / "VERSION").read_text(), r"\A[0-9]+\.[0-9]+\.[0-9]+\n?\Z")
+
+
 if __name__ == "__main__":
     unittest.main()

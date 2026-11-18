@@ -824,15 +824,16 @@ rules and `bosun.env`; what restoring loses; `bosun.env` taken back with and wit
 keeps everything (no freeze), one that restores a store, one whose restore fails while writes are paused (put
 back) and one whose backup is found damaged (the rehearsal fails); the plan's and summary's text; the target
 checked against the data; the release's link, jobs to unload and app rule; the write gate both ways and for a
-checkout; a skipped head of `main`. Smoke sections, on installs of their own made from the `update` section's
-versions: `update-back` (over the format change from v1 to v2, v1's folder removed first, which the dry run does
+checkout; a skipped head of `main`. Smoke sections, on installs of their own made from the update's origin (the
+`update-upstream` section's versions): `update-back` (over the format change from v1 to v2, v1's folder removed first, which the dry run does
 not add again and reads from `bosun.git`, and going back does: the ledger restored, the write made since in the
 back's own backup, `bosun.env` taken back, a second `--back` refused, the version left skipped, forward again with
 the plan's line; with the backup gone, blocked; over v2 to v3, which changes nothing the data is read by: a ledger
 and a knowledge write kept, no freeze and no backup, the summary beside the update's backup) and `update-branch`
 (an unknown branch and a bad name refused with nothing changed, `--json`'s object, a dry run that writes nothing,
-the plan said no to while the install follows the branch, the update to its head, a branch older in format and
-one older in rules refused pointing at `--back`, `--branch main`). A back cut short at each step is not killed in
+the plan said no to while the install follows the branch, the update to its head, a branch older in format
+refused pointing at `--back` (one older in rules goes through the same target check, in the unit tests), `--branch
+main`). A back cut short at each step is not killed in
 the smoke suite: what carries it on is the update's own (`resume`, and the release that leads the install), unit
 tested. In the VM, `tests/work_e2e.sh` keeps its path by hand (the fallback when the newer version's own update is
 what broke) and adds `bosun update --back` twice: over the update to the next version (format 2: the ledger

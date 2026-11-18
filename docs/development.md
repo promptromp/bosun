@@ -182,10 +182,21 @@ consulted then either; `BOSUN_SMOKE_NO_CACHE=1` only ignores the record, and sti
 
 A section either sets up what it uses itself or says `needs <id>`, and
 `tests/unit/test_smoke_sections.py` fails on a section without a marker, a taken id or a `needs` that names
-nothing above it. Every section begins by checking that the tools that reach outside the run
+nothing above it. That holds for a bosun session too: a section that starts one (after `no_session`, which records it as
+that section's) has it ended when a section that needs none of it begins, in a whole run as in a partial one, so a
+section that uses windows an earlier one left says `needs` that one. Every section begins by checking that the tools that reach outside the run
 (`osascript`, `aws`, `launchctl`, `pmset`, `sudo`, `open`, `caffeinate`, `codesign`, `ditto`, `spctl`) are
 stand-ins in the run's own folder, and the run stops if one would be the real one. The run's HOME and those
 stand-ins exist before the first section, and a section that points bosun at another HOME gets them there too.
+
+A check makes no timing assumption, since CI's runners are slower than a laptop and slower still under load: it never
+asserts how long something took and never races a fixed sleep. It waits on what the code says or writes (a log
+line, a file, a lock's state, an exit), a lock the test holds is let go by the test (`hold_lock`, `release_lock`),
+and a `wait_for` timeout or a long timeout knob is only a failsafe against a hang. How long a poll, a deadline or
+an interval waits is the unit tests', with an injected clock. `tests/unit/test_smoke_timing.py` holds the suite to
+the common shapes of a timing assumption, line by line: elapsed time measured (shell or Python), a holder that lets
+go after a fixed time, a fixed sleep timing what follows it, a sleep of a variable's time, a short sleep typed into a
+pane. A race in another shape is not seen; its few justified exceptions are listed there, each with why.
 
 Suites of several checkouts (git worktrees, parallel agents) can run on one Mac at the same time. A run keeps its
 HOME, state, config, tmux sockets (`bosun-smoke-<pid>`), stand-ins and the install under test in its own temp folder;

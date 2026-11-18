@@ -493,6 +493,17 @@ class LogErrorsTest(WatchdogCase):
         self.append(f"checkin-{TUESDAY}.log", self.error("tuesday"))
         self.assertIn("tuesday", self.watch(at(TUESDAY, "09:00"))[0])
 
+    def test_a_new_line_outside_the_awake_window_is_held_until_it_opens(self) -> None:
+        """What the smoke suite asserted end to end: an ERROR line written in the evening is no alert then,
+        the dry run saying the log-errors verdict is held until the awake window."""
+        self.watch(at(MONDAY, "09:00"))
+        self.append(self.checkin, f"{MONDAY} 21:00:00 [checkin] ERROR: late")
+        with redirect_stdout(io.StringIO()) as out:
+            watchdog.run_dry(self.inputs(at(MONDAY, "21:00")), CHECKS, sinks=(self.sink,))
+        self.assertEqual(self.dry_sent, [])
+        self.assertIn("log-errors: held until the awake window", out.getvalue())
+        self.assertIn("ERROR: late", self.watch(at(TUESDAY, "08:30"), only="log-errors")[0])
+
     def test_a_partial_line_waits_until_it_is_complete(self) -> None:
         self.watch(at(MONDAY, "09:00"))
         with (self.log_dir / self.checkin).open("a") as fh:

@@ -158,8 +158,8 @@ and never restart what is being stopped), takes away the console job's `console/
 <summary>Locks, failures and its JSON</summary>
 
 - **The lock.** The steps after the wait hold the `windows` lock that `bosun start` takes, waiting up to
-  `BOSUN_WINDOWS_LOCK_WAIT_SECONDS` for a start in the middle of setting up the windows, and failing with nothing
-  changed if it does not come free. Under it they look at the windows and for an update once more: an update that
+  `BOSUN_WINDOWS_LOCK_WAIT_SECONDS` for a start in the middle of setting up the windows (saying so on stderr), and
+  failing with nothing changed if it does not come free. Under it they look at the windows and for an update once more: an update that
   began refuses the quit, and with `--let-finish` a window busy again lets the lock go and goes back to waiting, to
   the same deadline. The wait for busy windows holds no lock.
 - **Failures.** While an update runs, a quit is refused (exit 1). A step after `quit.json` failing fails the quit
@@ -230,7 +230,9 @@ shows for a window it leaves running.
 - **`send --new`** opens a new window; **`send --start`** starts Claude in a window that has none, in its folder from
   the window list (the pane's own folder for a window outside the list, or without a `sessions.yml`), resuming its
   named session (with no message, it gets the drain prompt). Both run `bosun launch` as the pane's own command, with
-  the task in a prompt file, and exit 0 only once Claude is running.
+  the task in a prompt file, and exit 0 only once Claude is running. A pane still running a command (its shell's
+  helpers, right after an agent exits) is waited for, saying so once, up to 8 seconds; past that, `--start` refuses,
+  replacing nothing.
 - **`--id <ledger id>`** names the work item (checked, prefixed, noted in its history); the orchestrator must give
   `--id` or `--no-item`.
 

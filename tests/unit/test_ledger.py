@@ -114,6 +114,19 @@ class TransitionTest(LedgerTestCase):
         with self.assertRaisesRegex(ledger.LedgerError, "allowed: "):
             run("transition", REVIEW_ID, "rereview-requested", "--note", "x")
 
+    def test_a_merged_pr_never_goes_back_to_an_open_state(self) -> None:
+        """What the smoke suite asserted (merged -> awaiting-review is refused), for every open state of a
+        my-pr: from merged it may only be dismissed. The rules digest only forces a bump when the table
+        changes; this fails on a move back out of merged."""
+        run("upsert", MYPR_ID, "--kind", "my-pr")
+        run("transition", MYPR_ID, "approved", "--note", "ok")
+        run("transition", MYPR_ID, "merged", "--note", "merged")
+        kind = ledger.KINDS["my-pr"]
+        self.assertEqual(ledger.allowed_targets("my-pr", "merged"), {"dismissed"})
+        for state in sorted(set(kind["transitions"]) - set(kind["terminal"])):
+            with self.subTest(state=state), self.assertRaisesRegex(ledger.LedgerError, "is not allowed"):
+                run("transition", MYPR_ID, state, "--note", "x")
+
     def test_rereview_needs_evidence(self) -> None:
         run("transition", REVIEW_ID, "reviewed", "--note", "done")
         with self.assertRaisesRegex(ledger.LedgerError, "needs --evidence"):
