@@ -1134,8 +1134,14 @@ true &
 bg_waited=$!
 bg_started "$bg_waited"
 bg_done "$bg_waited"
-bg_other="$(sh -c '(trap "echo TERM >>\"\$1\"; exit" TERM; trap "echo USR1 >>\"\$1\"; exit" USR1
-  for _ in $(seq 1 300); do sleep 0.1; done; exit 7) >/dev/null 2>&1 & echo $!' _ "$WORK/bg-other.signals")"
+# The other process writes down every TERM and USR1 it gets and goes on (USR1, the test's own, ends it once both
+# traps have run), so neither the order the shell runs pending traps in nor a TERM arriving first can hide one; it
+# says it is ready once its traps are set, so the test signals it only then.
+rm -f "$WORK/bg-other.signals" "$WORK/bg-other.ready"
+bg_other="$(sh -c '(trap "echo TERM >>\"\$1\"" TERM; trap "echo USR1 >>\"\$1\"; got=1" USR1; got=""
+  : >"$2"; for _ in $(seq 1 300); do [ -z "$got" ] || exit 0; sleep 0.1; done; exit 7) >/dev/null 2>&1 & echo $!' \
+  _ "$WORK/bg-other.signals" "$WORK/bg-other.ready")"
+wait_for 30 test -e "$WORK/bg-other.ready"
 stops_only_its_own() { # <own pid> <other pid>: each is told for what it is, then stop_background goes over both
   own_child "$1" && ! own_child "$2" || return 1
   BG_PIDS=" $2 $1"
@@ -1147,9 +1153,9 @@ check "the run's end tells a background command of its own from a pid that names
 wait "$bg_own" 2>/dev/null # (bash would say "Terminated")
 check "... stops its own (TERM: 143), which would have ended 7 on its own" test $? -eq 143
 kill -USR1 "$bg_other"
-wait_for 30 test -s "$WORK/bg-other.signals"
-check "... and sends nothing to the other: the first signal it got is the test's, sent after" \
-  test "$(head -1 "$WORK/bg-other.signals")" = USR1
+wait_for 30 grep -qx USR1 "$WORK/bg-other.signals"
+check "... and sends nothing to the other: it got only the test's signal, sent after" \
+  bash -c '! grep -qx TERM "$1"' _ "$WORK/bg-other.signals"
 fnc() { bash -c 'source "$1/lib/common.sh"; load_config; shift; "$@"' _ "$ROOT" "$@"; } # with the config's defaults
 check "harness_bin names the command the config gives each agent" test "$(fnc harness_bin codex)" = codex
 check "... and an override of it" test "$(BOSUN_CODEX_BIN=/opt/acme/codex fnc harness_bin codex)" = /opt/acme/codex
