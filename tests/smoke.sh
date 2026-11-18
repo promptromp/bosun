@@ -2483,8 +2483,8 @@ BOSUN_EVENTS_ENABLED=1 BOSUN_EVENTS_INTERVAL_SECONDS=1 BOSUN_CHECKIN_EVERY_SECON
   "$BOSUN" checkin --loop --dry-run >"$WORK/deferred-loop.out" 2>&1 &
 deferred_loop=$!
 check "the loop keeps a deferred check-in due" wait_for 30 grep -q "the check-in stays due; retrying every tick" "$WORK/deferred-loop.out"
-# Two more ticks while it is busy (each tick's events line), so it retried without logging the skip again.
-wait_for 30 bash -c '[ "$(sed -n "/the check-in stays due; retrying every tick/,\$p" "$1" | grep -c "\[events\] dry-run: ")" -ge 3 ]' _ "$WORK/deferred-loop.out"
+check "... and retries on its next ticks while the orchestrator is busy (each tick's events line)" wait_for 30 bash -c '
+  [ "$(sed -n "/the check-in stays due; retrying every tick/,\$p" "$1" | grep -c "\[events\] dry-run: ")" -ge 3 ]' _ "$WORK/deferred-loop.out"
 orch_status idle 3600
 check "... and sends it on a later tick, once the orchestrator is free" wait_for 30 grep -q "would send '/bosun:chores check-in'" "$WORK/deferred-loop.out"
 pkill -P "$deferred_loop" 2>/dev/null
@@ -3240,6 +3240,10 @@ env | grep -E '^(BOSUN_|PATH=|ENABLE_CLAUDEAI_MCP_SERVERS=)' >"$WORK/fake-claude
 "$BOSUN" ledger upsert 'review:o/r#9' --kind review-request --title 'From dry run' >/dev/null
 echo '{"result":"fake plan","total_cost_usd":0.01,"num_turns":1,"permission_denials":[{"tool_name":"Bash","tool_input":{"command":"gh pr merge x"}}]}'
 FAKE
+# The three rehearsals below start in one second, by a stand-in date that gives a folder's stamp as 2026-01-05
+# 09:00:00 (and anything else as date does), so they number their folders -01, -02 and -03.
+printf '#!/bin/sh\n[ "$1" = "+%%Y%%m%%d-%%H%%M%%S" ] && { echo 20260105-090000; exit 0; }\nexec /bin/date "$@"\n' >"$HOME/.local/bin/date"
+chmod +x "$HOME/.local/bin/date"
 out="$("$BOSUN" chores morning --dry-run 2>&1)"
 check "dry run prints the plan" contains "$out" "fake plan"
 check "dry run reports scratch ledger changes" contains "$out" "+ review:o/r#9"
@@ -3266,10 +3270,10 @@ check "... with the orchestrator's list, and claude.ai's connectors on when it n
   [ "$(jq -c .allowedMcpServers <<<"$settings")" = "[{\"serverName\":\"acme-local\"}]" ] && grep -q PreToolUse <<<"$settings" &&
     grep -qx ENABLE_CLAUDEAI_MCP_SERVERS=true "$2"' _ "$WORK/fake-claude.args" "$WORK/fake-claude.env"
 out="$("$BOSUN" chores morning --dry-run --continue 2>&1)"
-# The three run within a second or two of each other: a name a rehearsal of the same second has gets a suffix that
-# sorts after it, so each has its own folder and --continue seeds from the one just before.
-check "each rehearsal has a folder of its own, also when two start in the same second" bash -c '
-  [ "$1" != "$2" ] && [ "$2" != "$3" ] && [ "$1" != "$3" ]' _ "$first_rehearsal" "$second_rehearsal" "$(scratch_of_run)"
+rm -f "$HOME/.local/bin/date"
+# Each has a folder of its own, numbered within its second, and --continue seeds from the one just before.
+check "each rehearsal has a folder of its own, numbered within the second they all start in" bash -c '
+  [ "$1 $2 $3" = "$4-01 $4-02 $4-03" ]' _ "$first_rehearsal" "$second_rehearsal" "$(scratch_of_run)" "$BOSUN_STATE_DIR/dry-runs/20260105-090000"
 check "--continue starts from the previous rehearsal" contains "$out" "seeded from $second_rehearsal/ledger.json"
 check "--continue sees earlier items as existing" contains "$out" "(0 change(s)"
 
@@ -3471,10 +3475,14 @@ out="$(BOSUN_CONFIG_DIR="$SETUP_CFG" BOSUN_NETWORK_PROBE_URL=file:///dev/null "$
 check "morning --dry-run would hold the keep-awake" contains "$out" "dry-run: would hold keep-awake for 5 minutes"
 check "... but starts no caffeinate" test ! -f "$BOSUN_STATE_DIR/keep-awake-smoke.pid"
 check "it waits for the network" contains "$out" "network is up"
-# With no network it probes every 5 seconds, but sleeps no longer than what is left of its timeout.
-started=$SECONDS
+# With no network it probes every 5 seconds, but sleeps no longer than what is left of its timeout: the wait alone,
+# timed by the log's own clock from the line just before it (the keep-awake's) to its last, is its 1 s, not 5 s.
 out_down="$(BOSUN_CONFIG_DIR="$SETUP_CFG" BOSUN_NETWORK_PROBE_URL=file:///nonexistent-probe BOSUN_NETWORK_TIMEOUT=1 "$BOSUN" morning --dry-run --awake-minutes 5 2>&1)"
-check "... and gives up once its timeout is over, not at its next 5-second probe" bash -c 'grep -q "network still down after 1s; continuing" <<<"$1" && [ "$2" -lt 5 ]' _ "$out_down" "$((SECONDS - started))"
+check "... and gives up once its timeout is over, not at its next 5-second probe" bash -c '
+  clock() { grep -m1 "$1" <<<"$2" | awk "{ split(\$2, t, \":\"); print t[1] * 3600 + t[2] * 60 + t[3] }"; }
+  from="$(clock "would hold keep-awake" "$1")" to="$(clock "network still down after 1s; continuing" "$1")"
+  [ -n "$from" ] && [ -n "$to" ] && waited=$(((to - from + 86400) % 86400)) && [ "$waited" -le 3 ] ||
+    { echo "waited ${waited:-?} s for the network"; exit 1; }' _ "$out_down"
 check "it previews the setup steps" contains "$out" "aws profile good is valid, no login needed"
 check "it lists the windows it would start, with model and effort" contains "$out" "alpha (session, opus/medium) -> $REPO_A"
 check "it names no agent update when no agent in use has update_args" bash -c '! grep -qE "updated |could not update|would run .*update" <<<"$1"' _ "$out"
@@ -3750,8 +3758,9 @@ rm -f "$BOSUN_STATE_DIR/quit.json"
 
 # alpha finishes a second into the wait; beta keeps waiting at its prompt, which does not hold the wait
 # A start still holds the windows lock when alpha is done: the quit takes it only for its stop phase, and waits.
-# (The wait polls every BOSUN_QUIT_POLL_SECONDS, 0.5 s here: alpha is seen done by about 1.5 s, the lock goes at 5 s.)
-python3 "$ROOT/lib/run_locked.py" "$BOSUN_STATE_DIR/windows.lock" 10 busy -- sleep 5 &
+# (The wait polls every BOSUN_QUIT_POLL_SECONDS, 0.5 s here: alpha is seen done by about 1.5 s, the lock goes at 8 s,
+# so a quit that waited for the lock takes 7 s or more, and one that did not about 2 to 3.)
+python3 "$ROOT/lib/run_locked.py" "$BOSUN_STATE_DIR/windows.lock" 10 busy -- sleep 8 &
 wait_for 30 lock_taken "$BOSUN_STATE_DIR/windows.lock"
 (
   sleep 1
@@ -3759,7 +3768,7 @@ wait_for 30 lock_taken "$BOSUN_STATE_DIR/windows.lock"
 ) &
 quit_started=$SECONDS
 check "--let-finish waits (polling every BOSUN_QUIT_POLL_SECONDS) until alpha is done, though beta waits at a prompt, and for a start holding the windows lock, then quits: morning paused, Mac kept awake" env BOSUN_WINDOWS_LOCK_WAIT_SECONDS=30 bash -c '"$1" quit --let-finish=1 --pause-morning </dev/null >"$2" 2>"$3"' _ "$BOSUN" "$WORK/quit.out" "$WORK/quit.err"
-check "... it waited for alpha, then for the lock: 4 to 45 seconds" bash -c '[ "$1" -ge 4 ] && [ "$1" -le 45 ]' _ $((SECONDS - quit_started))
+check "... it waited for alpha, then for the lock: 6 to 45 seconds" bash -c '[ "$1" -ge 6 ] && [ "$1" -le 45 ]' _ $((SECONDS - quit_started))
 check "... it said once, on stderr, who it waited for" bash -c '[ "$(wc -l <"$1")" -eq 1 ] && grep -q "Waiting for 1 busy window (alpha), up to 1 minute" "$1"' _ "$WORK/quit.err"
 check "... it says what it stopped and who was waiting for you" bash -c 'grep -q "^bosun is stopped\.$" "$1" && grep -q "Stopped the windows: .*alpha" "$1" && grep -q "They were waiting for you: beta" "$1" && grep -q "paused until you run: bosun start" "$1"' _ "$WORK/quit.out"
 check "... no session is left" bash -c '! tmux -L "$1" has-session -t =smoke' _ "$SOCKET"
@@ -6645,7 +6654,7 @@ fi
 unset BOSUN_LAUNCHD_LABEL
 
 # What this whole run left behind is the best list there is of what bosun writes: uninstall must know it all,
-# or the file stays on people's machines after they uninstall. A new file goes in lib/uninstall_plan.py's tables.
+# or the file stays on people's machines after they uninstall. A new file goes in the tables of lib/file_tables.py.
 section uninstall-files "uninstall knows every file bosun writes" covers 'lib/uninstall*.py,lib/file_tables.py,lib/agent_changes.py,libexec/bosun-uninstall'
 knows_all_of() { # <state dir> <config dir>: names what it does not know
   local unknown
