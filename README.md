@@ -87,7 +87,8 @@ anything is missing, it says what, gives you the lines to run, and stops; run th
 they are done. Then it asks a few questions, one key each. Bosun works out your repos and hours from how
 you already use your agents and recommends a setup; nothing changes until you have seen the plan, and it
 asks for `sudo` once, for the wake schedule. Its last question offers to start bosun now; after that it starts
-on its own, on your schedule.
+on its own, on your schedule. [Getting started](docs/getting-started.md) walks you through it, and through how you
+work with bosun once it runs.
 
 To run the repo sessions on [Codex](https://developers.openai.com/codex/cli), with the orchestrator on
 Claude Code, end the line with `| BOSUN_HARNESS=codex sh`, or pick it in the questions if Codex is already
@@ -129,6 +130,7 @@ The guides, design notes and roadmap are also a website, with search:
 
 | Guide | What it covers |
 |---|---|
+| [Getting started](docs/getting-started.md) | From the install line to your first morning, and how you work with bosun day to day: the orchestrator, your phone, what wakes it |
 | [Setup](docs/setup.md) | What you need, the install, the first start, and what to do when stuck |
 | [The menu bar app](docs/menu-bar-app.md) | The icon, its menu, stopping and starting, starting at login, its Settings window |
 | [Updating and uninstalling](docs/updating.md) | Updating, update channels, trying a branch, going back, and taking bosun off |
