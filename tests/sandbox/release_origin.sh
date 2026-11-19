@@ -15,7 +15,9 @@ set -euo pipefail
   sed -n '2p' "$0" | sed 's/^# //' >&2
   exit 2
 }
-checkout="$1" ref="$2" origin="$3" tag="$4"
+# The checkout as an absolute path: the fetch below runs in the new repository (-C), where a relative one such as
+# CI's `.` would name that empty repository and find no <ref> in it.
+checkout="$(cd "$1" && pwd -P)" ref="$2" origin="$3" tag="$4"
 [ ! -e "$origin" ] || {
   echo "release_origin.sh: $origin is there already" >&2
   exit 1
