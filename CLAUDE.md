@@ -534,7 +534,8 @@ gitleaks over the pull request's or merge group's commits (`gitleaks`; a made-up
 runner (`tests/install_e2e.sh`, the VM's `run` suite, from an origin with a release in it,
 `tests/sandbox/release_origin.sh`) and the Docker sandbox: on a pull request when its `install-select` job finds
 that the change reaches a part of `run` (`tools/vm_select.py --suite run --changed`, and only those parts run; the
-Docker sandbox also when its own files changed), and weekly whole (the job is not named `changes`, which is ci.yml's
+Docker sandbox also when a file its first day runs changed: `docker` rules in `tests/vm_selection.txt`, held to at
+least the job's old `paths:` by `tests/unit/test_vm_selection.py`), and weekly whole (the job is not named `changes`, which is ci.yml's
 required check); those are not required checks, because a required check that did not run blocks a merge. `.github/workflows/release-app.yml`, on a tag
 `app-v<app/VERSION>`, signs, notarizes and publishes bosun.app (steps for the person: `docs/development.md`,
 "Releasing bosun.app"); it checks the signed bundle with `lib/app_release.py requirement` and its final zip
@@ -656,7 +657,7 @@ resolves on the host with what the parts need, names the ones a run runs; empty,
 which (and `tests/sandbox.sh mac --changed <ref>` for every suite), `-x` stops at the first failed part. The choice is
 `tools/vm_select.py` (it shares the markers, globs, git's changed files and the `needs` closure with
 `tools/smoke_select.py` through `tools/selection.py`), fed by the parts' `covers` and `tests/vm_selection.txt`
-(`all <suites> <glob>`, `none <glob>`, `year <glob>`, `minutes`): unlike the smoke selection it matches `covers`
+(`all <suites> <glob>`, `none <glob>`, `year <glob>`, `minutes`, and `docker <glob>` for CI's Docker sandbox job): unlike the smoke selection it matches `covers`
 directly and follows no imports (the VM runs behind the smoke suite and the unit tests, which do), and it reads
 `lib/common.sh` by function (`lib/common.sh#<fn-glob>` entries, through `tools/shell_library.py`'s `changed_functions`
 with `prose_is_no_change`: a comment or blank line outside the functions, where a statement could begin, is no change;
@@ -667,7 +668,8 @@ year of data when work runs whole or the change reaches the update's freeze (`ye
 checks (the freeze, restoring the backup) then say so. A part needs (`needs`) every part whose state it reads: what it
 turns on, starts, leaves on disk or in a variable. `tests/unit/test_vm_selection.py` fails on a tracked file or a
 `lib/common.sh` function no part and no rule names, a part without `covers`, a glob that matches nothing, a step
-called outside every part (above the parts too), code between the part lines, a missing `part_<id>`, a `needs` that
+called outside every part (above the parts too, after an assignment, in a string's command, and in the files the
+suites source), code between the part lines, a missing `part_<id>`, a `needs` that
 is not above or names a `last` part, and a part without its `minutes`; a run whose E2E_PARTS names no part of the
 suite fails.
 

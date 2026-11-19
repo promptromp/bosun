@@ -337,7 +337,7 @@ the cheapest of these that can show what you changed:
 
 The Mac suites (`run`, `work`, `app`, `live`) are in parts, and a run can take only the parts a change reaches:
 see [Running part of a suite](#running-part-of-a-suite). The first also runs in CI, on a pull request when the third
-does or its own files changed (the second's unit and smoke suites run there natively: the smoke sections a change
+does or a file its first day runs changed (the `docker` rules of `tests/vm_selection.txt`) (the second's unit and smoke suites run there natively: the smoke sections a change
 reaches in the merge queue, everything nightly), and so does the
 third on a clean GitHub macOS runner (`.github/workflows/install.yml`): on a pull request, the parts of `run` it
 reaches, chosen as `tests/sandbox.sh mac run --changed` chooses them, from an origin with a release in it as the VM's
