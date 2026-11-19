@@ -20,6 +20,7 @@ import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -342,6 +343,21 @@ class SelectChangedTest(Scratch):
         git(self.repo, "config", "color.diff", "always")
         self.write("lib/common.sh", COMMON.replace("echo job", "echo the job"))
         self.assertEqual(self.select("run")[-1], "=> only alpha,beta")
+
+    def test_a_diff_that_reads_as_no_hunk_for_a_file_that_changed_is_an_error(self) -> None:
+        """The run fails closed (a SelectionError) rather than read an edit it cannot place as none."""
+        self.write("lib/common.sh", COMMON.replace("echo job", "echo the job"))
+
+        def no_hunks(root: Path, *args: str) -> str:
+            return "" if args[0] == "diff" else real_git(root, *args)
+
+        real_git = sel.git
+        with mock.patch.object(sel, "git", no_hunks), self.assertRaisesRegex(sel.SelectionError, "no hunk"):
+            sel.file_change(self.repo, "base", "lib/common.sh")
+        with mock.patch.object(sel, "git", no_hunks):
+            self.assertEqual(
+                sel.file_change(self.repo, "base", "lib/b.py").hunks, ()
+            )  # unchanged: none to read
 
     def test_the_docker_sandbox_on_its_files_and_what_it_runs(self) -> None:
         rules = self.repo / vs.RULES

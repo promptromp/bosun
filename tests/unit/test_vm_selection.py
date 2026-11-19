@@ -42,8 +42,11 @@ HELPERS = (
 # The calls a suite's top level may make, outside its parts: its guards, the halves and steps it dispatches
 # to, and the parts themselves.
 TOP_LEVEL_CALLS = frozenset({"copied_in", "after_reboot", "other_steps", "part", "parts_end"})
-# A plain assignment, which calls nothing unless it holds a command substitution.
-PLAIN_ASSIGNMENT = re.compile(r"^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=")
+# A quoted string; once the strings are gone (but those that run a command), an assignment in front of a
+# command, and what separates commands.
+QUOTED = re.compile(r"'[^']*'" r'|"(?:[^"\\]|\\.)*"', re.DOTALL)
+ASSIGNMENT = re.compile(r"^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\+?=(?P<value>\([^)]*\)|\S*)")
+SEPARATOR = re.compile(r"&&|\|\||[;&|]")
 # What CI's install job started on before the suites had parts (main's .github/workflows/install.yml
 # `paths:`): the Docker sandbox's first day must still run on every one (tests/vm_selection.txt's `docker`).
 OLD_INSTALL_PATHS = (
@@ -300,14 +303,32 @@ class ScriptsTest(Guard):
 
     def test_no_statement_outside_the_parts_calls_a_suite_s_step(self) -> None:
         """What runs at the top level runs in every partial run, unchosen: it may only guard, dispatch and run
-        the parts (TOP_LEVEL_CALLS), wherever it stands in the script, above the parts too."""
-        steps = {f.name for path in HELPERS for f in sl.read((ROOT / path).read_text()).functions}
-        for suite, text in self.texts.items():
-            with self.subTest(suite=suite):
+        the parts (TOP_LEVEL_CALLS), wherever it stands in the script, above the parts too, and in the files
+        the suites source, whose top level runs in every part of every suite."""
+        helpers = {path: (ROOT / path).read_text() for path in HELPERS}
+        steps = {f.name for text in helpers.values() for f in sl.read(text).functions}
+        scripts = {**{vs.SUITES[s]: text for s, text in self.texts.items()}, **helpers}
+        for path, text in scripts.items():
+            with self.subTest(path=path):
                 script = sl.read(text)
                 names = (steps | {f.name for f in script.functions}) - TOP_LEVEL_CALLS
                 calls = sl.calls(top_level_code(script, text), names)
-                self.assertEqual(sorted(calls), [], f"called outside every part in {vs.SUITES[suite]}")
+                self.assertEqual(sorted(calls), [], f"called outside every part in {path}")
+
+    def test_the_top_level_reader_sees_a_call_after_an_assignment_and_in_a_string_s_later_line(self) -> None:
+        names = {"launchd_for_real"}
+        for code in (
+            "FOO=1 launchd_for_real\n",
+            'X="a\n$(launchd_for_real)"\n',
+            "X=`launchd_for_real`\n",
+            "export FOO=bar; launchd_for_real\n",
+        ):
+            with self.subTest(code=code):
+                self.assertEqual(sl.calls(top_level_code(sl.read(code), code), names), names)
+        quiet = (
+            "LIST=(a launchd_for_real b)\nNOTE=\"launchd_for_real runs at night\"\nWORDS='launchd_for_real'\n"
+        )
+        self.assertEqual(sl.calls(top_level_code(sl.read(quiet), quiet), names), set())
 
     def test_the_main_body_is_the_part_lines_then_parts_end(self) -> None:
         """What runs outside a part runs in every partial run, unchosen: from the first `part` line on, only
@@ -327,17 +348,37 @@ class ScriptsTest(Guard):
 
 
 def top_level_code(script: sl.Script, text: str) -> str:
-    """The code of <script> outside every function, but its part lines (checked apart) and its plain
-    assignments (a string's words are no calls), with the lines a string of theirs runs on over."""
+    """The code of <script> outside every function, but its part lines (checked apart), statement by
+    statement (a line that begins one, and the lines it runs on over), each without its strings (a string's
+    words are no calls) but those that run a command, and without the assignments in front of its commands
+    (`FOO=1 step` is a call of step) but a value that runs one."""
     markers = {n for n, _ in sel.marker_lines(text, vs.KEYWORD, vs.FLAGS)}
-    kept: list[str] = []
-    skipping = False
+    statements: list[list[str]] = []
     for number, line in enumerate(script.code_lines, 1):
-        begins = script.starts[number - 1]
-        if begins:
-            skipping = bool(PLAIN_ASSIGNMENT.match(line)) and "$(" not in line and "`" not in line
-        if script.function_at(number) is None and number not in markers and not skipping:
-            kept.append(line)
+        if script.function_at(number) is not None or number in markers:
+            continue
+        if script.starts[number - 1] or not statements:
+            statements.append([])
+        statements[-1].append(line)
+    return "\n".join(commands_of("\n".join(lines)) for lines in statements)
+
+
+def runs_a_command(text: str) -> bool:
+    return "$(" in text or "`" in text
+
+
+def commands_of(statement: str) -> str:
+    """<statement> without its strings (but those that run a command) and the assignments in front of its
+    commands (but a value that runs a command)."""
+    bare = QUOTED.sub(lambda m: m[0] if m[0].startswith('"') and runs_a_command(m[0]) else '""', statement)
+    kept: list[str] = []
+    for piece in SEPARATOR.split(bare):
+        rest = piece
+        while (match := ASSIGNMENT.match(rest)) is not None:
+            if runs_a_command(match["value"]):
+                kept.append(match["value"])
+            rest = rest[match.end() :]
+        kept.append(rest)
     return "\n".join(kept)
 
 

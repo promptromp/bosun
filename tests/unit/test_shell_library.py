@@ -271,6 +271,12 @@ class ProseTest(unittest.TestCase):
             with self.subTest(what):
                 self.assertIsNone(self.changed(new))
 
+    def test_a_shebang_changed_is_the_whole_file(self) -> None:
+        old = "#!/bin/bash\none() {\n  :\n}\n"
+        new = old.replace("#!/bin/bash", "#!/bin/sh")
+        got = sl.changed_functions(sl.read(new), diff(old, new), sl.read(old), prose_is_no_change=True)
+        self.assertIsNone(got)
+
     def test_code_outside_the_functions_is_still_the_whole_file(self) -> None:
         self.assertIsNone(self.changed(self.OLD.replace("--flag", "--other")))
         self.assertIsNone(self.changed(self.OLD + "\nLIMIT=4\n"))

@@ -103,9 +103,11 @@ class Script:
     def prose_at(self, line: int) -> bool:
         """Whether line <line> is prose where a statement could begin: blank or only a comment, and outside
         every quote and here-document, and not after a line that runs on with `\\` (there a blank line or a
-        comment ends the command, and what follows runs as a command of its own)."""
+        comment ends the command, and what follows runs as a command of its own). A `#!` first line is no
+        prose: it says what runs the file."""
         begins = 1 <= line <= len(self.starts) and self.starts[line - 1]
-        return begins and not self.has_code(line)
+        shebang = line == 1 and self.lines[0].startswith("#!")
+        return begins and not shebang and not self.has_code(line)
 
 
 def parse_hunks(diff: str) -> tuple[tuple[int, int, int, int], ...]:
