@@ -343,6 +343,20 @@ class SelectChangedTest(Scratch):
         self.write("lib/common.sh", COMMON.replace("echo job", "echo the job"))
         self.assertEqual(self.select("run")[-1], "=> only alpha,beta")
 
+    def test_the_docker_sandbox_on_its_files_and_what_it_runs(self) -> None:
+        rules = self.repo / vs.RULES
+        rules.write_text(SCRATCH_RULES + "docker tests/sandbox/**\ndocker lib/c*.py\n")
+        self.assertEqual(vs.select_docker(self.repo, rules, "base")[-1], "=> none")
+        self.write("lib/b.py", "b = 4\n")
+        self.assertEqual(vs.select_docker(self.repo, rules, "base")[-1], "=> none")
+        self.write("tests/sandbox/fresh_user.sh", "echo\n")
+        lines = vs.select_docker(self.repo, rules, "base")
+        self.assertEqual(lines, ["  docker: tests/sandbox/fresh_user.sh", "=> docker"])
+        self.assertEqual(vs.select_docker(self.repo, rules, "no-such-ref")[-1], "=> docker")
+        done = run_tool("--root", str(self.repo), "--rules", str(rules), "--docker", "--changed", "base")
+        self.assertEqual(done.stdout.splitlines()[-1], "=> docker")
+        self.assertEqual(run_tool("--root", str(self.repo), "--docker", "--only", "x").returncode, 2)
+
     def test_code_added_outside_the_functions_runs_run_whole(self) -> None:
         self.write("lib/common.sh", COMMON + "\nLIMIT=4\n")
         self.assertEqual(self.select("run")[-1], "=> all")

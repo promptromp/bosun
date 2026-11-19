@@ -24,8 +24,8 @@ jobs:
   # Which parts of tests/install_e2e.sh the pull request reaches: `run` is false when it reaches none, `parts` the
   # ones to run (with what they need), empty for the whole suite. Not a pull request: the whole suite. Only an
   # answer from a run that succeeded narrows it: a failed run, or no answer line, runs the whole suite (fail closed).
-  # `sandbox`: the Docker sandbox's first day runs when the suite does, or when its own files changed (which no part
-  # of the Mac suite covers).
+  # `sandbox`: the Docker sandbox's first day runs when the suite does, or when a file its first day runs changed
+  # (tests/vm_selection.txt's `docker` rules).
   install-select:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -74,22 +74,15 @@ jobs:
             echo "sandbox=true" >>"$GITHUB_OUTPUT"
             exit 0
           fi
-          if ! since=$(git merge-base "$BASE" HEAD) || ! files=$(git diff --name-only --no-color --no-renames "$since" HEAD); then
-            echo "No merge base or no diff: the sandbox runs."
+          # tests/vm_selection.txt's `docker` rules: its own files and what its first day runs
+          status=0
+          report=$(python3 tools/vm_select.py --root . --docker --changed "$BASE" 2>&1) || status=$?
+          echo "$report"
+          if [ "$status" = 0 ] && [ "$(printf '%s\n' "$report" | tail -n 1)" = "=> none" ]; then
+            echo "sandbox=false" >>"$GITHUB_OUTPUT"
+          else
             echo "sandbox=true" >>"$GITHUB_OUTPUT"
-            exit 0
           fi
-          sandbox=false
-          while IFS= read -r file; do
-            case $file in
-              tests/sandbox.sh | tests/sandbox/Dockerfile | tests/sandbox/fresh_user.sh | tests/sandbox/world.sh | tests/sandbox/inside.sh | tests/sandbox/drive.py | tests/sandbox/macos/*)
-                echo "Changed: $file"
-                sandbox=true
-                ;;
-              *) ;;
-            esac
-          done <<<"$files"
-          echo "sandbox=$sandbox" >>"$GITHUB_OUTPUT"
 
   clean-mac:
     needs: install-select

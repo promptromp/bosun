@@ -24,6 +24,7 @@ The rules are in tests/vm_selection.txt:
     year <glob>                       a change to it gives work's afternoon update a year of data
     minutes <suite>[/<part>] <n>      the estimate: a suite's clone and setup, or a part (`work/year`:
                                       what a year of data adds to the afternoon update, over 30 days)
+    docker <glob>                     a change to it reaches the Docker sandbox's first day (`--docker`)
 
 For each changed file (or each changed function of a file read by function), in this order. A direct match:
 no import or call is followed, as tools/smoke_select.py does, since the VM runs behind the smoke suite and the
@@ -46,7 +47,9 @@ Run it as `vm_select.py [--root <repo>] [--suite <suite>] (--changed <ref> | --o
 answer: with --suite `=> all`, `=> none` or `=> only <id>,<id>` (what to run, in order), and for work
 ` year=<days>` after it; without, `=> run:<ids|all|none> work:... app:... live:...`, live's marked `(paid)`.
 Whatever goes wrong with --changed runs run, work and app whole (live: nothing); an --only naming no part is
-an error (exit 2). Plain python3 3.9 is enough, as for tools/smoke_select.py."""
+an error (exit 2). `--docker --changed <ref>` answers `=> docker` when a changed file is on a `docker` rule,
+else `=> none` (CI's install job runs the Docker sandbox's first day then); whatever goes wrong, `=> docker`.
+Plain python3 3.9 is enough, as for tools/smoke_select.py."""
 
 from __future__ import annotations
 
@@ -114,6 +117,7 @@ class Rules:
     none: tuple[str, ...]
     year: tuple[str, ...]
     minutes: Mapping[str, float]
+    docker: tuple[str, ...] = ()
 
 
 @dataclass
@@ -171,21 +175,23 @@ def parse_rules(text: str) -> Rules:
     whole: list[Whole] = []
     none: list[str] = []
     year: list[str] = []
+    docker: list[str] = []
     minutes: dict[str, float] = {}
+    globs = {"none": none, "year": year, "docker": docker}
     for number, raw, line in rule_lines(text):
         words = line.split()
         try:
             if words[0] == "all" and len(words) == ALL_WORDS:
                 whole.append(Whole(parse_suites(words[1]), words[1], words[2]))
-            elif words[0] in ("none", "year") and len(words) == ONE_WORDS:
-                (none if words[0] == "none" else year).append(words[1])
+            elif words[0] in globs and len(words) == ONE_WORDS:
+                globs[words[0]].append(words[1])
             elif words[0] == "minutes" and len(words) == ALL_WORDS:
                 minutes[words[1]] = float(words[2])
             else:
-                raise SelectionError("want all <suites> <glob>, none <glob>, year <glob>, minutes <key> <n>")
+                raise SelectionError("want all <suites> <glob>, none|year|docker <glob> or minutes <key> <n>")
         except (SelectionError, ValueError) as error:
             raise SelectionError(f"{RULES}, line {number}: {error}: {raw}") from error
-    return Rules(tuple(whole), tuple(none), tuple(year), minutes)
+    return Rules(tuple(whole), tuple(none), tuple(year), minutes, tuple(docker))
 
 
 def function_files(parts: Parts, rules: Rules) -> frozenset[str]:
@@ -402,6 +408,21 @@ def select_changed(root: Path, rules_path: Path, base: str, suites: Sequence[str
         return failed(error, suites)
 
 
+def select_docker(root: Path, rules_path: Path, base: str) -> list[str]:
+    """Whether the change since <base> reaches the Docker sandbox's first day (`docker` rules: its own files
+    and what it runs; CI's install job runs it then, and when run's parts run). Any trouble: it runs."""
+    try:
+        rules = parse_rules(rules_path.read_text(encoding="utf-8"))
+        reaching = [
+            f for f in changed_files(root, merge_base(root, base)) if any(matches(f, g) for g in rules.docker)
+        ]
+    except Exception as error:  # noqa: BLE001 - failing closed is the point: any trouble runs it
+        return [f"docker sandbox: {error}: it runs", "=> docker"]
+    if not reaching:
+        return ["docker sandbox: no change reaches it", "=> none"]
+    return [*(f"  docker: {f}" for f in reaching), "=> docker"]
+
+
 def select_only(root: Path, rules_path: Path, suite: str, names: Sequence[str]) -> list[str]:
     parts = read_parts(root)
     choice = only(suite, parts[suite], names, parse_rules(rules_path.read_text(encoding="utf-8")))
@@ -415,11 +436,19 @@ def main(argv: Sequence[str]) -> int:
     parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument("--rules", type=Path, help=f"default: <root>/{RULES}")
     parser.add_argument("--suite", choices=tuple(SUITES))
+    parser.add_argument(
+        "--docker", action="store_true", help="with --changed: the Docker sandbox's first day"
+    )
     what = parser.add_mutually_exclusive_group(required=True)
     what.add_argument("--changed", metavar="REF")
     what.add_argument("--only", metavar="PART,...")
     args = parser.parse_args(argv)
     rules = args.rules or args.root / RULES
+    if args.docker:
+        if args.changed is None or args.suite:
+            parser.error("--docker goes with --changed, and no --suite")
+        print("\n".join(select_docker(args.root, rules, args.changed)))
+        return 0
     if args.changed is not None:
         suites = [args.suite] if args.suite else list(SUITES)
         print("\n".join(select_changed(args.root, rules, args.changed, suites)))

@@ -5,6 +5,8 @@
 #   none <glob>                       no VM part needs it: the smoke suite and the unit tests are enough
 #   year <glob>                       a change to it gives work's afternoon update a year of data (else 30 days)
 #   minutes <suite>[/<part>] <n>      the estimate a selection prints: a suite's clone and setup, or a part
+#   docker <glob>                     a change to it reaches the Docker sandbox's first day (`tests/sandbox.sh init`,
+#                                     which CI's install job runs then, and when run's parts run)
 #
 # Globs match the path from the repository root, whole: `*` within a folder, `**` through any number of them.
 # `<file>#<function glob>` names functions of a shell file read by function (lib/common.sh): a glob without `#`
@@ -135,6 +137,48 @@ none libexec/bosun-wake-test
 none lib/common.sh#notify
 none lib/common.sh#repo_in_mask
 none lib/common.sh#repo_mask_filter
+
+# --- docker: what the Docker sandbox's first day runs (tests/sandbox.sh init, tests/sandbox/fresh_user.sh) -------
+# CI's install job runs it when a changed file is on one of these (`vm_select.py --docker --changed`), or when it
+# runs run's parts. At least what the job's `paths:` started it on before parts (tests/unit/test_vm_selection.py
+# holds this list to that one), and its first day on Codex and agy: their stand-ins, state, launch and plugin.
+docker get.sh
+docker install.sh
+docker uninstall.sh
+docker bin/**
+docker libexec/bosun-init
+docker libexec/bosun-uninstall
+docker libexec/bosun-preflight
+docker libexec/bosun-launch
+docker libexec/bosun-doctor
+docker libexec/bosun-trust
+docker libexec/bosun-start
+docker libexec/bosun-stop
+docker libexec/bosun-refresh
+docker libexec/bosun-setup
+docker libexec/bosun-morning
+docker lib/setup-helpers.sh
+docker lib/login.py
+docker lib/common.sh
+docker lib/agents.sh
+docker lib/preflight.sh
+docker lib/platforms/**
+docker lib/harnesses/**
+docker lib/launch/**
+docker lib/init*.py
+docker lib/uninstall*.py
+docker lib/agent_*.py
+docker lib/claude_state.py
+docker lib/codex_state.py
+docker lib/agy_*.py
+docker lib/connectors_codex.py
+docker lib/connectors_agy.py
+docker agents/**
+docker templates/**
+docker tests/install_e2e.sh
+docker tests/sandbox.sh
+docker tests/sandbox/**
+docker .github/workflows/install.yml
 
 # --- minutes: what a selection prints as its estimate ---------------------------------------------------------------
 # Rough, from the runs of 2026-11-14..18 (about ±30 s a part). A suite's own line is its clone, boot and copies (and

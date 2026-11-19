@@ -44,6 +44,43 @@ HELPERS = (
 TOP_LEVEL_CALLS = frozenset({"copied_in", "after_reboot", "other_steps", "part", "parts_end"})
 # A plain assignment, which calls nothing unless it holds a command substitution.
 PLAIN_ASSIGNMENT = re.compile(r"^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=")
+# What CI's install job started on before the suites had parts (main's .github/workflows/install.yml
+# `paths:`): the Docker sandbox's first day must still run on every one (tests/vm_selection.txt's `docker`).
+OLD_INSTALL_PATHS = (
+    "get.sh",
+    "install.sh",
+    "uninstall.sh",
+    "bin/**",
+    "libexec/bosun-init",
+    "libexec/bosun-uninstall",
+    "libexec/bosun-preflight",
+    "libexec/bosun-launch",
+    "libexec/bosun-doctor",
+    "libexec/bosun-trust",
+    "libexec/bosun-start",
+    "libexec/bosun-stop",
+    "libexec/bosun-refresh",
+    "libexec/bosun-setup",
+    "lib/setup-helpers.sh",
+    "lib/login.py",
+    "libexec/bosun-morning",
+    "lib/common.sh",
+    "lib/agents.sh",
+    "lib/preflight.sh",
+    "lib/platforms/**",
+    "lib/harnesses/**",
+    "lib/launch/**",
+    "lib/init*.py",
+    "lib/uninstall*.py",
+    "lib/agent_*.py",
+    "lib/claude_state.py",
+    "lib/codex_state.py",
+    "templates/**",
+    "tests/install_e2e.sh",
+    "tests/sandbox.sh",
+    "tests/sandbox/**",
+    ".github/workflows/install.yml",
+)
 
 
 def repository_files() -> list[str]:
@@ -151,7 +188,7 @@ class CoverageTest(Guard):
         )
 
     def test_every_rule_glob_names_something(self) -> None:
-        globs = [w.glob for w in self.rules.whole] + list(self.rules.none) + list(self.rules.year)
+        globs = [w.glob for w in self.rules.whole] + [*self.rules.none, *self.rules.year, *self.rules.docker]
         dead = [glob for glob in globs if not self.names_something(glob)]
         self.assertEqual(dead, [], "\n\nThese rules of tests/vm_selection.txt match nothing. Remove them:")
 
@@ -176,6 +213,46 @@ class CoverageTest(Guard):
             and not any(sel.matches(path, c) for c in afternoon.covers)
         ]
         self.assertEqual(loose, [], f"`year` files that {vs.YEAR_SUITE}/{vs.YEAR_PART} does not cover")
+
+
+class DockerTest(Guard):
+    """The Docker sandbox's first day (CI's install job, `sandbox`): it runs on a change to a `docker` file"""
+
+    def test_every_file_the_old_paths_started_it_on_still_does(self) -> None:
+        dropped = [
+            path
+            for path in self.files
+            if any(sel.matches(path, g) for g in OLD_INSTALL_PATHS)
+            and not any(sel.matches(path, g) for g in self.rules.docker)
+        ]
+        self.assertEqual(
+            dropped,
+            [],
+            "files the job's old `paths:` ran the Docker sandbox on, which no `docker` rule names",
+        )
+
+    def test_its_first_day_on_codex_and_agy_and_its_own_files_reach_it(self) -> None:
+        for path in (
+            "tests/sandbox/codex-stand-in",
+            "tests/sandbox/agy-stand-in",
+            "tests/sandbox/fresh_user.sh",
+            "tests/sandbox/Dockerfile",
+            "tests/sandbox/macos/launchctl",
+            "lib/codex_state.py",
+            "lib/agy_state.py",
+            "lib/connectors_codex.py",
+            "lib/launch/codex.sh",
+            "libexec/bosun-refresh",
+            "agents/agy-plugin/plugin.json",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(any(sel.matches(path, g) for g in self.rules.docker))
+        self.assertFalse(any(sel.matches("docs/index.md", g) for g in self.rules.docker))
+
+    def test_ci_asks_the_docker_rules_and_runs_the_sandbox_on_their_answer(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "install.yml").read_text()
+        self.assertIn("python3 tools/vm_select.py --root . --docker --changed", workflow)
+        self.assertIn("if: ${{ needs.install-select.outputs.sandbox == 'true' }}", workflow)
 
 
 class ScriptsTest(Guard):
