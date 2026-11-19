@@ -23,7 +23,7 @@ hands who do the work.</p>
 hands each task to the right agent and follows it to done, and keeps a reviewed ontology of your team's
 people, process and product that every agent starts from (once switched on; `bosun init` recommends it). Nothing goes out under your name until you say yes.</p>
 
-<p class="bx-hero__actions" markdown>[Get started](setup.md){ .md-button .md-button--primary }
+<p class="bx-hero__actions" markdown>[Get started](getting-started.md){ .md-button .md-button--primary }
 [See it work](#how-it-works){ .md-button }</p>
 
 <p class="bx-fine">For macOS, with Claude Code, Codex and Antigravity.</p>
@@ -46,6 +46,31 @@ It can add bosun to your menu bar and start it when you log in.
 [Update it](updating.md) or [take it off again](updating.md#uninstall).</p>
 
 </div>
+</section>
+
+<section class="bx-section" markdown>
+
+## How do you work with it? { data-toc-label="Using it" }
+
+<p class="bx-lead">Mostly, you talk to one session. The orchestrator is a Claude Code session that bosun keeps open
+on your Mac: you ask in your own words, it does the legwork with an agent in each of your repositories, and it asks
+before anything goes out under your name.</p>
+
+<ul class="bx-points bx-points--two" markdown>
+<li markdown>**Ask in your own words.** "Ask Dana whether we can drop the shared password." "Go ahead and add the
+VAT breakdown in the exporter window." It records the work in the ledger and hands it to the agent for that
+repository.</li>
+<li markdown>**From your desk or your phone.** `bosun attach` opens the sessions in your terminal. With Remote Control,
+the same sessions are in the Claude app on your phone.</li>
+<li markdown>**It wakes itself.** Every morning it reads Slack and your pull requests, every hour it looks at what is
+new, and with events on, a repo session's report reaches it within minutes.</li>
+<li markdown>**It asks before anything goes out.** Each reply, merge or ticket change is listed word for word. Answer
+"1 and 3 yes", and exactly those go ahead.</li>
+</ul>
+
+<p class="bx-fine" markdown>[Getting started](getting-started.md) takes you from the install line through your first
+morning.</p>
+
 </section>
 
 <section class="bx-section" markdown>
@@ -302,6 +327,7 @@ app](menu-bar-app.md) has every state and what each item does.</p>
 
 Install bosun, connect your tools, and choose what needs your approval.
 
+- [Getting started](getting-started.md)
 - [Setup](setup.md)
 - [Permissions](permissions.md)
 - [Commands](commands.md)

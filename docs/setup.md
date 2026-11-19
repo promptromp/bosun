@@ -1,7 +1,8 @@
 # Setup
 
 This page gets bosun installed and running on your Mac: what you need, the install, and the first start. It ends
-once bosun runs. After that, [How a day runs](day.md) says what bosun does on its own,
+once bosun runs. For the short walk from the install line to how you work with bosun day to day, start with
+[Getting started](getting-started.md). After that, [How a day runs](day.md) says what bosun does on its own,
 [Configuration](configuration.md) how to change it, [The menu bar app](menu-bar-app.md) what its icon offers, and
 [Updating and uninstalling](updating.md) how to keep it current or take it off.
 
