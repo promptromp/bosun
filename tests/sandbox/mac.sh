@@ -1,8 +1,9 @@
 #!/bin/bash
-# Usage: tests/sandbox/mac.sh setup | run [--from-nothing] | work [--base <git ref>]
-#        | app [--from build|release] | live [claude|codex|agy] | shell
-#        | try [--from release|checkout] [--run <script>] [codex] | clean
+# Usage: tests/sandbox/mac.sh setup | run [--from-nothing] [<parts>] | work [--base <git ref>] [<parts>]
+#        | app [--from build|release] [<parts>] | live [claude|codex|agy] [<parts>] [--paid]
+#        | --changed <git ref> [--list] | shell | try [--from release|checkout] [--run <script>] [codex] | clean
 #        (through tests/sandbox.sh mac)
+#   <parts>: --only <part>[,<part>...] | --changed <git ref> [--list], and -x (--exitfirst)
 #
 # A real, throwaway Mac: macOS in a Tart VM on this machine, for what the Docker sandbox cannot show.
 # Each run clones a base image, which takes no time and no disk, and deletes the clone afterwards.
@@ -26,8 +27,8 @@
 #           real money, about a dollar. It reads API keys from your Keychain, as BOSUN_SANDBOX_ANTHROPIC_ITEM
 #           and BOSUN_SANDBOX_OPENAI_ITEM name them; they never leave the clone, which is deleted.
 #           BOSUN_SANDBOX_CODEX_MODEL picks a cheaper model than Codex's default.
-#           On Claude Code it includes the ontology end to end (live.sh's `ontology`, after the hand-over);
-#           BOSUN_SANDBOX_LIVE_STEP=ontology runs only that, after the install (about 15 minutes).
+#           On Claude Code it includes the ontology end to end (the part `ontology`, after the hand-over);
+#           `--only ontology` runs only that, after the install and the real windows.
 #           live agy needs you: its login is a browser sign-in, in the desktop session. The clone boots with
 #           its window, agy is installed with Google's installer, and you are told to open Terminal there,
 #           run ~/.local/bin/agy, sign in with Google (a personal account's free quota) and quit it; the run
@@ -44,6 +45,17 @@
 #           instead of your shell, the script runs in the clone (zsh, its output here, masked), and the clone is
 #           deleted when it ends: bosun with the real agents, set up and checked with no one at it
 #   clean   delete the clones and base images (the pulled image stays: `tart prune` removes it)
+#
+# run, work, app and live are in parts (each suite's `part` lines; tools/vm_select.py). By default a suite runs
+# whole. --only <part>[,<part>...] runs those parts and what they need; --changed <git ref> the parts the change
+# since the merge-base of <ref> and HEAD reaches (committed, staged, unstaged and untracked files), by the parts'
+# `covers` and tests/vm_selection.txt, failing closed: a file nothing names runs run, work and app whole. Either
+# prints the choice and its estimate first, and the summary says it was a partial run; with --list it prints the
+# choice and runs nothing (no clone). Nothing to run for a suite: it says so, exit 0. `--changed <ref>` without a
+# suite prints every suite's choice. live is paid: --changed runs its parts only with --paid (a whole run or --only
+# is asked for by name). On work, --changed gives the afternoon update a year of data only when the update's freeze
+# is in the change (else 30 days; --only always 30), BOSUN_SANDBOX_YEAR_DAYS=<days> another. -x stops at the
+# first failed part. live agy runs whole.
 # Needs Tart: brew install openai/tools/tart. Guide: docs/development.md.
 set -uo pipefail
 
@@ -136,6 +148,74 @@ need_tart() {
   command -v tart >/dev/null || die "needs Tart: brew install openai/tools/tart"
 }
 
+# ---- which parts a run runs (tools/vm_select.py; see the header) ----
+
+ONLY="" CHANGED="" LIST=0 EXITFIRST=0 PAID=0 # the options every suite takes
+SUITE_ARGS=()                                # the rest: the suite's own
+# selection_args <arguments...>: the selection's options out of them, the rest in SUITE_ARGS.
+selection_args() {
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --only | --changed)
+        [ -n "${2:-}" ] || die "$1 takes a value (see --help)"
+        if [ "$1" = --only ]; then ONLY="$2"; else CHANGED="$2"; fi
+        shift
+        ;;
+      --list) LIST=1 ;;
+      -x | --exitfirst) EXITFIRST=1 ;;
+      --paid) PAID=1 ;;
+      *) SUITE_ARGS+=("$1") ;;
+    esac
+    shift
+  done
+}
+
+# chosen_parts <suite>: PARTS, the parts the run runs with what they need (empty: the whole suite), and for work
+# YEAR_DAYS, from --only or --changed; it prints the choice. With --list, or when the change reaches none of the
+# suite's parts, it ends the run here, before any clone. A --changed that cannot be read runs the whole suite.
+PARTS="" YEAR_DAYS=""
+chosen_parts() {
+  local suite="$1" out last
+  if [ -z "$ONLY$CHANGED" ]; then
+    [ "$LIST" = 0 ] || die "--list goes with --changed or --only"
+    return 0
+  fi
+  [ -z "$ONLY" ] || [ -z "$CHANGED" ] || die "--only and --changed do not go together"
+  if [ -n "$ONLY" ]; then
+    out="$(python3 "$ROOT/tools/vm_select.py" --root "$ROOT" --suite "$suite" --only "$ONLY" 2>&1)" || die "$out"
+  else
+    out="$(python3 "$ROOT/tools/vm_select.py" --root "$ROOT" --suite "$suite" --changed "$CHANGED" 2>&1)"
+  fi
+  last="${out##*$'\n'}"
+  printf '%s\n' "${out%$'\n'*}"
+  case "$last" in
+    "=> none")
+      say "the change reaches no part of $suite: nothing to run"
+      exit 0
+      ;;
+    "=> all"*) PARTS="" ;;
+    "=> only "?*)
+      PARTS="${last#=> only }"
+      PARTS="${PARTS%% *}"
+      ;;
+    *) say "tools/vm_select.py gave no answer: the whole of $suite runs" ;;
+  esac
+  case "$last" in *" year="*) YEAR_DAYS="${last##* year=}" ;; esac
+  [ "$LIST" = 0 ] || exit 0
+}
+# part_runs <part>: the run runs it (every part does when PARTS is empty: the whole suite).
+part_runs() {
+  [ -z "$PARTS" ] && return 0
+  case ",$PARTS," in *",$1,"*) return 0 ;; esac
+  return 1
+}
+# What goes before a suite's script in the VM: its parts (tests/sandbox/e2e_parts.sh), -x, and work's year.
+vm_env() {
+  local year="${BOSUN_SANDBOX_YEAR_DAYS:-$YEAR_DAYS}"
+  case "$year" in *[!0-9]*) die "BOSUN_SANDBOX_YEAR_DAYS is a number of days, not '$year'" ;; esac
+  printf 'E2E_PARTS=%s E2E_EXITFIRST=%s%s' "$PARTS" "$EXITFIRST" "${year:+ E2E_YEAR_DAYS=$year}"
+}
+
 setup() {
   need_tart
   printf '#!/bin/sh\necho admin\n' >"$WORK/askpass"
@@ -190,7 +270,7 @@ copy_checkout() { # [<name of the bundle in the VM>]
   bundle_checkout "$WORK/repo.bundle" || die "could not bundle this checkout"
   to_vm "$CLONE" "$WORK/repo.bundle" "${1:-repo.bundle}" || die "could not copy the checkout"
   COPYFILE_DISABLE=1 tar -C "$ROOT" -czf "$WORK/e2e.tgz" get.sh tests/install_e2e.sh tests/work_e2e.sh tests/app_e2e.sh \
-    tests/sandbox/e2e_lib.sh tests/sandbox/update_quit_probe.sh tests/sandbox/acme_week.sh tests/sandbox/claude-stand-in \
+    tests/sandbox/e2e_lib.sh tests/sandbox/e2e_parts.sh tests/sandbox/update_quit_probe.sh tests/sandbox/acme_week.sh tests/sandbox/claude-stand-in \
     tests/sandbox/gh-stand-in tests/sandbox/drive.py tests/sandbox/live.sh tests/sandbox/live_agy.sh tests/sandbox/live \
     tests/sandbox/mcp_probe_server.py \
     tests/sandbox/acme_year.py tests/fixtures/knowledge/acme-import.jsonl
@@ -198,16 +278,11 @@ copy_checkout() { # [<name of the bundle in the VM>]
   in_vm "$CLONE" 'mkdir -p e2e && tar -xzf e2e.tgz -C e2e' || die "could not unpack the test"
 }
 
-# This checkout as the head of `main` of a repository that has made a release (RUN_RELEASE, an annotated tag with
-# notes in its message), a bare repository packed in a tar for the VM (~/origin.git there): what a first install
-# takes on the default `releases` channel, and what the next release (tests/install_e2e.sh makes it) is tagged on.
-# A repository and not a bundle: `git ls-remote` of a bundle has no peeled line for an annotated tag, as GitHub has. No tags
-# come with the fetch: this checkout's history holds the project's real releases, and a newer one would be the install's.
+# This checkout as the head of `main` of a repository that has made a release (RUN_RELEASE), packed in a tar for the
+# VM (~/origin.git there): what a first install takes on the default `releases` channel, and what the next release
+# (tests/install_e2e.sh makes it) is tagged on. tests/sandbox/release_origin.sh makes it, as CI's install job does.
 release_origin() { # <tar file>
-  local scratch="$WORK/origin.git"
-  git init -q --bare "$scratch" &&
-    git -C "$scratch" fetch -q --no-tags "$ROOT" "$TREE_BRANCH:refs/heads/main" &&
-    git -C "$scratch" -c user.name=sandbox -c user.email=sandbox@example.com tag -a "$RUN_RELEASE" -m "The first release" refs/heads/main &&
+  "$ROOT/tests/sandbox/release_origin.sh" "$ROOT" "$TREE_BRANCH" "$WORK/origin.git" "$RUN_RELEASE" &&
     COPYFILE_DISABLE=1 tar -C "$WORK" -czf "$1" origin.git
 }
 
@@ -221,14 +296,19 @@ copy_release_origin() {
 
 run() { # [--from-nothing]
   local base="$DEV_MAC"
-  [ "${1:-}" = "--from-nothing" ] && base="$NEW_MAC"
+  case "$#:${1:-}" in
+    0:) ;;
+    1:--from-nothing) base="$NEW_MAC" ;;
+    *) die "usage: tests/sandbox.sh mac run [--from-nothing] [<parts>]" ;;
+  esac
+  chosen_parts run
   prepare_clone "$base"
   say "booting a clone of $base"
   boot "$CLONE" --no-graphics
   copy_checkout
   copy_release_origin
   # shellcheck disable=SC2016 # expands in the VM
-  in_vm "$CLONE" 'BOSUN_REPO="$HOME/origin.git" BOSUN_E2E_RELEASE='"$RUN_RELEASE"' e2e/tests/install_e2e.sh'
+  in_vm "$CLONE" "$(vm_env) "'BOSUN_REPO="$HOME/origin.git" BOSUN_E2E_RELEASE='"$RUN_RELEASE"' e2e/tests/install_e2e.sh'
 }
 
 # Waits until the clone is back at its desktop (the auto-login), with a boot time other than <before> when one is
@@ -262,18 +342,19 @@ reboot_clone() {
 # never started on this Mac, only in the clone) and copied in beside the test, or with --from release left to
 # `bosun init`, which downloads the published one. The clone has its desktop session (the auto-login: the
 # status item needs one), so launchd's gui domain exists, which boot waits for. tests/app_e2e.sh runs in two
-# parts with the restart between them.
+# halves with the restart between them, when the run has its part `reboot`.
 app() { # [--from build|release]
-  local from="build" built="$WORK/app-built" run_env part status=0
+  local from="build" built="$WORK/app-built" run_env status=0
   case "$#:${1:-}" in
     0:) ;;
     2:--from) from="$2" ;;
-    *) die "usage: tests/sandbox.sh mac app [--from build|release]" ;;
+    *) die "usage: tests/sandbox.sh mac app [--from build|release] [<parts>]" ;;
   esac
   case "$from" in
     build | release) ;;
     *) die "unknown source '$from': build or release" ;;
   esac
+  chosen_parts app
   if [ "$from" = "build" ]; then
     say "building bosun.app with app/build.sh (ad hoc signed; a cold build takes minutes)"
     mkdir -p "$built"
@@ -289,14 +370,21 @@ app() { # [--from build|release]
     to_vm "$CLONE" "$(ls "$built"/bosun-app-*.zip)" e2e/app.zip || die "could not copy the app"
   fi
   # shellcheck disable=SC2016 # expands in the VM
-  run_env='BOSUN_REPO="$HOME/origin.git" BOSUN_E2E_RELEASE='"$RUN_RELEASE BOSUN_E2E_APP_FROM=$from"
-  for part in before-reboot after-reboot; do
-    in_vm "$CLONE" "$run_env e2e/tests/app_e2e.sh $part" || status=1
-    [ "$part" = "before-reboot" ] || break
-    in_vm "$CLONE" 'test -e ~/.app-e2e-results' || die "the first part of the test did not finish: no restart"
-    reboot_clone
-  done
-  return "$status"
+  run_env="$(vm_env) "'BOSUN_REPO="$HOME/origin.git" BOSUN_E2E_RELEASE='"$RUN_RELEASE BOSUN_E2E_APP_FROM=$from"
+  in_vm "$CLONE" "$run_env e2e/tests/app_e2e.sh before-reboot" || status=1
+  part_runs reboot || return "$status" # without the restart, the half before ends with the summary
+  app_after_the_restart "$run_env" "$status"
+}
+
+# The part `reboot`: the clone restarted once the half before has kept its counts, then the half after.
+app_after_the_restart() { # <run env> <the half before's status>
+  if ! in_vm "$CLONE" 'test -e ~/.app-e2e-results'; then
+    [ "$EXITFIRST" = 1 ] && [ "$2" = 1 ] && say "no restart: -x stopped the run before it" && return 1
+    die "the first half of the test did not finish: no restart"
+  fi
+  reboot_clone
+  in_vm "$CLONE" "$1 e2e/tests/app_e2e.sh after-reboot" || return 1
+  return "$2"
 }
 
 # This checkout, installed by its own get.sh from its origin (~/repo.bundle, which the suite makes from
@@ -306,8 +394,9 @@ work() { # [--base <git ref>]
   case "$#:${1:-}" in
     0:) ;;
     2:--base) base="$2" ;;
-    *) die "usage: tests/sandbox.sh mac work [--base <git ref>]" ;;
+    *) die "usage: tests/sandbox.sh mac work [--base <git ref>] [<parts>]" ;;
   esac
+  chosen_parts work
   git -C "$ROOT" merge-base --is-ancestor "$base" HEAD ||
     die "$base is not an ancestor of this checkout: the older bosun is one of this branch's"
   prepare_clone "$DEV_MAC"
@@ -317,7 +406,7 @@ work() { # [--base <git ref>]
   to_vm "$CLONE" "$WORK/repo-base.bundle" repo-base.bundle || die "could not copy $base"
   copy_checkout repo-tree.bundle
   # shellcheck disable=SC2016 # expands in the VM
-  in_vm "$CLONE" 'BOSUN_REPO="$HOME/repo.bundle" BOSUN_BRANCH='"$TREE_BRANCH"' e2e/tests/work_e2e.sh'
+  in_vm "$CLONE" "$(vm_env) "'BOSUN_REPO="$HOME/repo.bundle" BOSUN_BRANCH='"$TREE_BRANCH"' e2e/tests/work_e2e.sh'
 }
 
 need_key() { # <Keychain item>: without -w, this asks whether it is there and not for what it holds
@@ -339,17 +428,24 @@ keys_into_vm() { # <agent>
     die "could not log Codex in"
 }
 
-in_vm_masked() { # <live.sh step> <agent> [model]
-  in_vm "$CLONE" "BOSUN_BRANCH=$TREE_BRANCH e2e/tests/sandbox/live.sh $*" </dev/null | sed -l -E -e "$KEY_SHAPE" -e "$TOKEN_SHAPE"
+in_vm_masked() { # <live.sh step> <agent> [model]; VM_ENV: what goes before it (vm_env, for `go`)
+  in_vm "$CLONE" "${VM_ENV:-}${VM_ENV:+ }BOSUN_BRANCH=$TREE_BRANCH e2e/tests/sandbox/live.sh $*" </dev/null | sed -l -E -e "$KEY_SHAPE" -e "$TOKEN_SHAPE"
   return "${PIPESTATUS[0]}"
 }
 
 live() { # [claude|codex|agy]
   local agent="${1:-claude}"
-  case "$agent" in
-    claude | codex | agy) ;;
-    *) die "unknown agent '$agent': claude, codex or agy" ;;
+  case "$#:$agent" in
+    [01]:claude | [01]:codex | [01]:agy) ;;
+    *) die "usage: tests/sandbox.sh mac live [claude|codex|agy] [<parts>] [--paid]" ;;
   esac
+  if [ "$agent" = "agy" ]; then
+    [ -z "$ONLY$CHANGED" ] || die "live agy runs whole: its steps need a person, and it has no parts"
+  else
+    chosen_parts live
+    [ -z "$CHANGED" ] || [ "$PAID" = 1 ] ||
+      { say "live is paid (the real agents' API calls): add --paid to run those parts" && exit 0; }
+  fi
   need_key "$ANTHROPIC_ITEM"
   [ "$agent" = "codex" ] && need_key "$OPENAI_ITEM"
   prepare_clone "$DEV_MAC"
@@ -365,7 +461,7 @@ live() { # [claude|codex|agy]
   # The keys first: a failure of theirs, or a Keychain prompt on this Mac, never comes after the sign-in.
   keys_into_vm "$agent"
   [ "$agent" = "agy" ] && { in_vm_masked login agy || die "the sign-in to Antigravity did not finish"; }
-  in_vm_masked "${BOSUN_SANDBOX_LIVE_STEP:-go}" "$agent" "${BOSUN_SANDBOX_CODEX_MODEL:-}"
+  VM_ENV="$(vm_env)" in_vm_masked go "$agent" "${BOSUN_SANDBOX_CODEX_MODEL:-}"
 }
 
 # A clone with its window, and your shell in it, until you leave it. A restart in the clone (to try Open at Login,
@@ -501,21 +597,16 @@ for vm in json.load(sys.stdin):
 
 case "${1:-}" in
   setup) setup ;;
-  run)
+  run | work | app | live)
+    suite="$1"
     shift
-    run "$@"
+    selection_args "$@"
+    "$suite" ${SUITE_ARGS[@]+"${SUITE_ARGS[@]}"}
     ;;
-  work)
-    shift
-    work "$@"
-    ;;
-  app)
-    shift
-    app "$@"
-    ;;
-  live)
-    shift
-    live "$@"
+  --changed) # every suite's choice; it runs nothing
+    selection_args "$@"
+    [ -z "$ONLY" ] && [ -z "${SUITE_ARGS[*]-}" ] || die "usage: tests/sandbox.sh mac --changed <git ref> [--list]"
+    python3 "$ROOT/tools/vm_select.py" --root "$ROOT" --changed "$CHANGED"
     ;;
   shell) shell ;;
   try)

@@ -17,6 +17,9 @@
 # this checkout (~/repo-tree.bundle), which it installs, and an older bosun (~/repo-base.bundle: one from
 # before the knowledge base's journal), which forgets a person in the knowledge folder as it did. The
 # install's origin is ~/repo.bundle, which each head of the branch replaces.
+# In parts, the `part` lines at the end (tests/sandbox/e2e_parts.sh): E2E_PARTS names the ones a run runs
+# (tests/sandbox/mac.sh work --only, --changed); empty, all of them. E2E_YEAR_DAYS is the afternoon update's days
+# of data: 365, unless the selection says 30 (tests/sandbox/acme_week.sh).
 # Checks pass shell snippets to `bash -c '...' _ args`; their $ must not expand here.
 # shellcheck disable=SC2016
 set -uo pipefail
@@ -344,7 +347,7 @@ year_made() {
   return 1
 }
 a_year_of_data() {
-  echo "  a year of work in the ledger and the knowledge base"
+  echo "  $YEAR_DAYS days of work in the ledger and the knowledge base"
   check "$YEAR_DAYS days of acme work, through the installed bosun's own commands" year_made
   sed 's/^/  note  /' "$OUT/year.txt"
   valid "... ledger validate --journal passes on it"
@@ -559,8 +562,8 @@ the_update_itself() {
   check "... the ledger in format 2, migrated" test "$(jq -r '"\(.version) \(.update_patch)"' "$STATE/ledger.json")" = "2 migrated"
   valid
   kg_valid
-  echo "  note  writes were paused for $FREEZE_MS ms (freeze_ms), on a year of data"
-  check "the freeze, on a year of data, is under 10 000 ms: $FREEZE_MS ms" test "${FREEZE_MS:-99999}" -lt 10000
+  echo "  note  writes were paused for $FREEZE_MS ms (freeze_ms), on $YEAR_DAYS days of data"
+  on_the_data "the freeze, @DATA@, is under 10 000 ms: $FREEZE_MS ms" test "${FREEZE_MS:-99999}" -lt 10000
   check "each window brought along by the table: the orchestrator re-read, acme-api restarted, acme-web took stock first, invoice-exporter was waited for" brought_along
   check "... the orchestrator kept running, asked to re-read policy.md" kept_running_and_reread
   check "... acme-web's $BACKGROUND_SLEEP listed before its restart, and started again from its stock note" sleep_again
@@ -568,6 +571,17 @@ the_update_itself() {
   check "... my own shell left as it is" mine_untouched
   check "the summary: the versions, the migration, policy.md, the backup" afternoon_summary
   check "the temporary link a switch cut short before it is swept" test ! -L "$LEFT_LINK"
+}
+
+# on_the_data "<description, with @DATA@ for what it measured on>" <command...>: a check of what the afternoon
+# update's data costs (the freeze, restoring the backup). On a year of data it is the year's check; on fewer days (a
+# selection that does not reach the freeze's code: tools/vm_select.py, tests/vm_selection.txt's `year` rules) it
+# says so, and is not the year's.
+on_the_data() {
+  local what="on a year of data" description="$1"
+  [ "$YEAR_DAYS" -ge 365 ] || what="measured on $YEAR_DAYS days of data, not the year's check (a change to the freeze's code runs 365)"
+  shift
+  check "${description//@DATA@/$what}" "$@"
 }
 
 # What restoring the backup costs on a year of data, for a recovering approval hook (8 s): restore's own
@@ -618,7 +632,7 @@ the_backup_and_the_hooks() {
   costs="$(restore_costs 2>&1)"
   restored=$?
   echo "  note  $(tail -1 <<<"$costs")"
-  check "restoring it, as a recovering approval hook does, takes less than the hook's 8 s" test "$restored" = 0
+  on_the_data "restoring it, as a recovering approval hook does, @DATA@, takes less than the hook's 8 s" test "$restored" = 0
   check "each hook of the version before's launch settings, given its own event, does its job on the next version" \
     hooks_run "$OUT/base-hooks.txt"
   echo "  note  $(cat "$OUT/base-hooks.txt.ran" 2>/dev/null || echo 0) of the $(grep -c . "$OUT/base-hooks.txt") hooks did"
@@ -715,7 +729,7 @@ hooks_fail_their_controls() {
 }
 
 a_mid_afternoon_update() {
-  echo "a new day, and a mid-afternoon update to the next version, on a year of data"
+  echo "a new day, and a mid-afternoon update to the next version, on $YEAR_DAYS days of data"
   next_day 5
   a_year_of_data
   the_afternoon
@@ -1070,7 +1084,7 @@ cut_randomly() { # <name> <id pattern> <command...>: @N@ in the command is the c
 }
 
 # How far into a write the random cuts reach: a write's time, measured, and the rebuild from the whole
-# journal that a write starts with once a cut has left the file behind it (on a year of data most of its
+# journal that a write starts with once a cut has left the file behind it (on the afternoon's data most of its
 # time), so that some cuts fall after a write printed its id.
 CUT_MS=300
 cut_range() { # ledger|kg <a write of that store, as a command...>
@@ -1135,7 +1149,7 @@ all_approved() { # <file of quotes>: each one is in the item's history (and ther
 }
 
 # A write that finds ledger.json behind its journal (a cut left it so) first rebuilds it from the whole
-# journal, as `ledger validate --journal` does: on a year of data that is most of a write's time.
+# journal, as `ledger validate --journal` does: on the afternoon's data that is most of a write's time.
 swept_cuts() {
   echo "power cuts, swept: an approval (it writes both journal files) killed at each point of its run"
   local n ms took catch_up count=100 torn_before
@@ -1275,10 +1289,12 @@ folder_two_commits_back() {
 
 an_older_bosun_forgets() {
   echo "  an older bosun (from before the knowledge base's journal), from a checkout of its own, forgets Lee in the same knowledge folder"
+  local installed # the next version, after the afternoon update; else the one installed before the older bosun ran
+  installed="$(git -C "$DIR" rev-parse HEAD)"
   check "the older bosun, beside the installed one" git clone -q --branch sandbox-mac-tree "$HOME/repo-base.bundle" "$OUT/older"
   check "Lee asked to be forgotten: the older bosun deletes him" says "deleted the person" "$OUT/older/bin/bosun" kg forget person/lee
   check "... kept as a plain hash, as that bosun keeps it" last_forgotten 'has("hash_kind") | not'
-  check "the installed bosun is as it was" test "$(git -C "$DIR" rev-parse HEAD)" = "$B_COMMIT"
+  check "the installed bosun is as it was" test "$(git -C "$DIR" rev-parse HEAD)" = "${B_COMMIT:-$installed}"
   validate_notes
   kg_says "the next write deletes him from the journal too, and says so" "deleted on request are gone" \
     propose feature/csv-export caveat --value "After the older bosun's forget: the export check passed" --source "ledger:$T_JSON"
@@ -1381,42 +1397,69 @@ a_year_on() {
   valid "ledger validate --journal passes a year on"
 }
 
-start_clock
-cp "$HOME/repo-tree.bundle" "$HOME/repo.bundle"
-a_new_machine
-a_repo_by_hand acme-web https://github.com/acme/web.git
-a_repo_by_hand invoice-exporter https://github.com/acme/invoice-exporter.git
-follow_what_it_says
-install
-WINDOWS_ANSWERS_EXTRA='{"menu_app": false}' windows_by_answers acme-api acme-web invoice-exporter
-the_install
-git_keeps_tokens_out
-launchd_for_real
-the_first_days
-the_ledger_journal
-the_knowledge_journal
-knowledge_privacy
-the_new_days
-a_mid_afternoon_update
-the_ways_back
-forgotten_after_the_update
-twenty_writers
-knowledge_writers
-both_stores_at_once
-clock_goes_back
-power_cuts
-swept_cuts
-knowledge_power_cuts
-edited_by_hand
-files_two_commits_back
-folder_two_commits_back
-an_older_bosun_forgets
-launchd_on_the_new_bosun
-console_reads_knowledge
-uninstall_keeps_the_journal
-a_year_on
-put_the_clock_back
-rm -rf "$OUT"
-echo
-echo "$passed passed, $failed failed"
-[ "$failed" -eq 0 ]
+# ---- the parts (tests/sandbox/e2e_parts.sh): each a group of the steps above ----
+
+part_install() {
+  start_clock
+  cp "$HOME/repo-tree.bundle" "$HOME/repo.bundle"
+  a_new_machine
+  a_repo_by_hand acme-web https://github.com/acme/web.git
+  a_repo_by_hand invoice-exporter https://github.com/acme/invoice-exporter.git
+  follow_what_it_says
+  install
+  WINDOWS_ANSWERS_EXTRA='{"menu_app": false}' windows_by_answers acme-api acme-web invoice-exporter
+  the_install
+}
+part_tokens() { git_keeps_tokens_out; }
+part_launchd() { launchd_for_real; }
+part_week() {
+  the_first_days
+  the_ledger_journal
+  the_knowledge_journal
+  knowledge_privacy
+  the_new_days
+}
+part_afternoon_update() { a_mid_afternoon_update; }
+part_ways_back() { the_ways_back; }
+part_forgotten() { forgotten_after_the_update; }
+part_writers() {
+  twenty_writers
+  knowledge_writers
+  both_stores_at_once
+}
+part_clock() { clock_goes_back; }
+part_power_cuts() {
+  power_cuts
+  swept_cuts
+  knowledge_power_cuts
+}
+part_outside_edits() {
+  edited_by_hand
+  files_two_commits_back
+  folder_two_commits_back
+  an_older_bosun_forgets
+}
+part_launchd_new() { launchd_on_the_new_bosun; }
+part_console_kg() { console_reads_knowledge; }
+part_uninstall() { uninstall_keeps_the_journal; }
+part_year_on() {
+  a_year_on
+  put_the_clock_back
+}
+
+part install "this checkout installed by its piped installer, versions side by side, following its branch" covers 'get.sh,install.sh,bin/bosun,lib/versions.py,lib/install_paths.py,libexec/bosun-init,lib/init.py,lib/init_plan.py,lib/update_check.py,lib/update_lookup.py,tests/sandbox/claude-stand-in,tests/sandbox/gh-stand-in'
+part tokens "a repository URL with a token in it: git and get.sh never print the token" needs install covers 'get.sh'
+part launchd "launchd and pmset on this install" needs install covers 'templates/launchd.plist,libexec/bosun-morning'
+part week "five days of acme work in the ledger and the knowledge base, and their journals" needs install covers 'lib/journal.py,lib/change_log.py,lib/ledger.py,lib/ledger_changes.py,lib/knowledge.py,lib/knowledge_model.py,lib/knowledge_store.py,lib/knowledge_changes.py,lib/knowledge_schema.py,lib/knowledge_query.py,lib/knowledge_review.py,lib/validation.py,lib/approvals.py,lib/agent_state.py,lib/hook.py,lib/activity.py,lib/redact.py,libexec/bosun-ledger,libexec/bosun-kg,libexec/bosun-hook,tests/fixtures/knowledge/acme-import.jsonl'
+part afternoon-update "a mid-afternoon update on a year of data, the windows at work, writes and hooks all along" needs week covers 'libexec/bosun-update,lib/update.py,lib/update_agents.py,lib/update_backups.py,lib/update_facts.py,lib/update_gate.py,lib/update_notes.py,lib/update_plan.py,lib/update_state.py,lib/update_summary.py,lib/update_windows.py,lib/update_lookup.py,lib/update_check.py,lib/versions.py,lib/migrations.py,lib/launch_record.py,lib/checkout_work.py,lib/file_tables.py,lib/journal.py,lib/ledger_changes.py,lib/knowledge_changes.py,lib/knowledge_store.py,lib/hook.py,lib/signals.py,lib/events.py,lib/event_*.py,lib/slack_watch.py,lib/guard.py,lib/compact_context.py,lib/checkin_gate.py,lib/pane_input.py,lib/screen_text.py,lib/claude_state.py,libexec/bosun-checkin,libexec/bosun-hook,libexec/bosun-slack-watch,libexec/bosun-events,libexec/bosun-refresh,libexec/bosun-send,libexec/bosun-launch,libexec/bosun-guard,lib/launch/claude.sh,lib/agents.sh,lib/agent_profiles.tsv,tests/sandbox/acme_year.py,tests/sandbox/update_patch.sh,tests/sandbox/claude-stand-in,lib/common.sh#reload_changed_jobs,lib/common.sh#unload_jobs,lib/common.sh#update_hold_active,lib/common.sh#update_windows_pending,lib/common.sh#relaunch_in_window,lib/common.sh#recorded_restart,lib/common.sh#launch_recorded,lib/common.sh#record_field,lib/common.sh#paste_blocker,lib/common.sh#input_line,lib/common.sh#minutes_since_client_input,lib/common.sh#note_bosun_prompt,lib/common.sh#expected_session_name,lib/common.sh#conversation*,lib/common.sh#next_conversation_name,lib/common.sh#caller_window,lib/common.sh#is_orchestrator,lib/common.sh#checkin_loop_*,lib/common.sh#descendants,lib/common.sh#orchestrator_extra_settings,lib/common.sh#install_read_settings,lib/common.sh#guard_hook_settings,lib/common.sh#approvals_hook_settings,lib/common.sh#repo_session_settings,lib/common.sh#worktrees_folder,lib/common.sh#signal_hook_settings,lib/common.sh#compact_hook_settings,lib/common.sh#merge_settings,lib/common.sh#valid_effort,lib/common.sh#window_model_effort,lib/common.sh#build_model_effort_args,lib/common.sh#*autocompact*'
+part ways-back "going back by hand as docs/updating.md says, a forget, forward again, and bosun update --back" needs afternoon-update covers 'lib/update_back.py,lib/update_back_plan.py,lib/update_backups.py,lib/update.py,lib/migrations.py,libexec/bosun-update,install.sh,docs/updating.md'
+part forgotten "a person forgotten after the updates: no backup holds him" needs afternoon-update covers 'lib/update_backups.py,lib/knowledge.py,lib/knowledge_model.py'
+part writers "writers at once, in each store and in both, under one replica id" needs week covers 'lib/journal.py,lib/change_log.py,lib/ledger.py,lib/knowledge_store.py,lib/knowledge.py'
+part clock "the clock goes back an hour: every journal clock still above the one before" needs week covers 'lib/change_log.py,lib/journal.py'
+part power-cuts "writes of each store killed like a power cut, at random and swept through a write" needs week covers 'lib/journal.py,lib/change_log.py,lib/ledger.py,lib/ledger_changes.py,lib/knowledge_changes.py,lib/knowledge_store.py,lib/approvals.py'
+part outside-edits "the knowledge files changed outside their journal: by hand, by git, by an older bosun's forget" needs week covers 'lib/knowledge_changes.py,lib/knowledge_store.py,lib/validation.py,lib/knowledge.py'
+part launchd-new "launchd on the install after its week: the morning job, and the job that runs --now" needs week covers 'templates/launchd.plist,templates/launchd-now.plist,libexec/bosun-morning'
+part console-kg "the console's knowledge view, with the restricted files unreadable" needs week covers 'lib/console_kb.py,lib/console_knowledge.py,lib/console_kg_views.py,lib/console_server.py,libexec/bosun-console'
+part uninstall "uninstall keeps the records, journals and all, and installing again takes them" needs week covers 'libexec/bosun-uninstall,lib/uninstall.py,lib/uninstall_detect.py,lib/uninstall_plan.py,lib/uninstall_macos.py,lib/file_tables.py,lib/agent_changes.py,tests/sandbox/drive.py'
+part year-on "a year on: proposals no one reviewed expire, person facts past retention go" needs week last covers 'lib/knowledge_model.py,lib/knowledge.py'
+parts_end

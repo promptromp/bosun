@@ -60,6 +60,8 @@ impacted_map = [
     "*=tests/unit/test_impacted_rules.py",
     # ... and the smoke selection's: a new file needs a section's `covers` or a rule there, or it is missed.
     "*=tests/unit/test_smoke_selection.py",
+    # ... and the Mac VM selection's: the same for a part's `covers` or a rule of tests/vm_selection.txt.
+    "*=tests/unit/test_vm_selection.py",
     # bosun's programs. The tests that run them, or read them, import nothing of what they run, and
     # the shell runs every lib/ module: a change to any of them counts as one to bin/bosun, and a
     # change to bin/bosun selects those tests.
@@ -189,6 +191,13 @@ impacted_map = [
     "libexec/*=tests/unit/test_smoke_covers.py",
     # ... and what --shard splits them by.
     "tests/smoke_weights.txt=tests/unit/test_smoke_select.py",
+    # The Mac VM suites' parts: the selector, the shell helper the suites run them with, and mac.sh's options
+    # (test_vm_select.py runs copies of them); the guard reads the suites and the rules (`*=` above).
+    "tools/*.py=tests/unit/test_vm_select.py",
+    "tools/*.py=tests/unit/test_vm_selection.py",
+    "tests/sandbox/e2e_parts.sh=tests/unit/test_vm_select.py",
+    "tests/sandbox/mac.sh=tests/unit/test_vm_select.py",
+    "tests/vm_selection.txt=tests/unit/test_vm_select.py",
     # The commit hook's unit-test run and its pass record, and the hooks' order around it (CI's lint
     # job runs them all to the end).
     "tools/unit_hook.py=tests/unit/test_unit_hook.py",

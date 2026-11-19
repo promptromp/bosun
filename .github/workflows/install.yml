@@ -1,47 +1,18 @@
-# A new machine's install: for real on a clean macOS runner (tests/install_e2e.sh: the piped installer,
-# launchd jobs that really fire, the real pmset and plutil), and the wizard through a real terminal in
-# the Docker sandbox (tests/sandbox.sh), which would otherwise only run by hand and rot. Not required
-# checks: they only run when the install could have changed, and a required check that does not run
-# blocks a merge. Also weekly, to notice when a new macOS or Homebrew breaks it.
+# A new machine's install: for real on a clean macOS runner (tests/install_e2e.sh, the Mac VM's `run` suite: the
+# piped installer, launchd jobs that really fire, the real pmset and plutil, and an update from a release to the
+# next, from an origin with a release in it, as tests/sandbox/mac.sh makes it), and the wizard through a real
+# terminal in the Docker sandbox (tests/sandbox.sh), which would otherwise only run by hand and rot. On a pull
+# request, `install-select` asks tools/vm_select.py which parts of the suite the change reaches (the parts' `covers`
+# and tests/vm_selection.txt, as `tests/sandbox.sh mac run --changed` does) and the runner runs those; the change
+# that reaches none starts no runner. The Docker sandbox runs when the suite does, or its own files changed. Weekly
+# and by hand, both whole, to notice when a new macOS or Homebrew breaks them. Not required checks: they run only
+# when the install could have changed, and a required check that does not run blocks a merge. (Not named `changes`:
+# that is ci.yml's job, a required check, and a second check of the same name would muddle which one counts.)
 name: Install
 
 on:
   pull_request:
     branches: [main]
-    paths:
-      - get.sh
-      - install.sh
-      - uninstall.sh
-      - bin/**
-      - libexec/bosun-init
-      - libexec/bosun-uninstall
-      - libexec/bosun-preflight
-      - libexec/bosun-launch
-      - libexec/bosun-doctor
-      - libexec/bosun-trust
-      - libexec/bosun-start
-      - libexec/bosun-stop
-      - libexec/bosun-refresh
-      - libexec/bosun-setup
-      - lib/setup-helpers.sh
-      - lib/login.py
-      - libexec/bosun-morning
-      - lib/common.sh
-      - lib/agents.sh
-      - lib/preflight.sh
-      - lib/platforms/**
-      - lib/harnesses/**
-      - lib/launch/**
-      - lib/init*.py
-      - lib/uninstall*.py
-      - lib/agent_*.py
-      - lib/claude_state.py
-      - lib/codex_state.py
-      - templates/**
-      - tests/install_e2e.sh
-      - tests/sandbox.sh
-      - tests/sandbox/**
-      - .github/workflows/install.yml
   schedule:
     - cron: "17 6 * * 1"
   workflow_dispatch:
@@ -50,20 +21,98 @@ permissions:
   contents: read
 
 jobs:
-  clean-mac:
-    runs-on: macos-latest
-    timeout-minutes: 30
+  # Which parts of tests/install_e2e.sh the pull request reaches: `run` is false when it reaches none, `parts` the
+  # ones to run (with what they need), empty for the whole suite. Not a pull request: the whole suite. Only an
+  # answer from a run that succeeded narrows it: a failed run, or no answer line, runs the whole suite (fail closed).
+  # `sandbox`: the Docker sandbox's first day runs when the suite does, or when a file its first day runs changed
+  # (tests/vm_selection.txt's `docker` rules).
+  install-select:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.select.outputs.run }}
+      parts: ${{ steps.select.outputs.parts }}
+      sandbox: ${{ steps.sandbox.outputs.sandbox }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: tests/install_e2e.sh
+          fetch-depth: 0 # the merge base with the pull request's base
+      - name: Which parts of the install suite does the change reach?
+        id: select
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -u
+          if [ "$EVENT" != pull_request ]; then
+            echo "Not a pull request ($EVENT): the whole suite."
+            printf 'run=true\nparts=\n' >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          status=0
+          report=$(python3 tools/vm_select.py --root . --suite run --changed "$BASE" 2>&1) || status=$?
+          echo "$report"
+          last=$(printf '%s\n' "$report" | tail -n 1)
+          case "$status:$last" in
+            "0:=> none") printf 'run=false\nparts=\n' >>"$GITHUB_OUTPUT" ;;
+            "0:=> only "?*)
+              parts=${last#=> only }
+              printf 'run=true\nparts=%s\n' "${parts%% *}" >>"$GITHUB_OUTPUT"
+              ;;
+            *) printf 'run=true\nparts=\n' >>"$GITHUB_OUTPUT" ;;
+          esac
+      - name: Does the change reach the Docker sandbox's first day?
+        id: sandbox
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          RUN: ${{ steps.select.outputs.run }}
+        run: |
+          set -u
+          if [ "$EVENT" != pull_request ] || [ "$RUN" = true ]; then
+            echo "sandbox=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # tests/vm_selection.txt's `docker` rules: its own files and what its first day runs
+          status=0
+          report=$(python3 tools/vm_select.py --root . --docker --changed "$BASE" 2>&1) || status=$?
+          echo "$report"
+          if [ "$status" = 0 ] && [ "$(printf '%s\n' "$report" | tail -n 1)" = "=> none" ]; then
+            echo "sandbox=false" >>"$GITHUB_OUTPUT"
+          else
+            echo "sandbox=true" >>"$GITHUB_OUTPUT"
+          fi
+
+  clean-mac:
+    needs: install-select
+    if: ${{ needs.install-select.outputs.run == 'true' }}
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      RELEASE: v2026.11.01 # the first release, as tests/sandbox/mac.sh's RUN_RELEASE
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # the origin below holds the checkout's history, as the VM's does
+      # The origin a first install takes on the `releases` channel, with that release in it: the suite's `releases`
+      # and `branch` parts update from it, as in the VM.
+      - name: The origin of a first release
+        run: tests/sandbox/release_origin.sh . HEAD "$HOME/origin.git" "$RELEASE"
+      - name: The install suite (tests/install_e2e.sh), the parts chosen
+        run: BOSUN_REPO="$HOME/origin.git" BOSUN_E2E_RELEASE="$RELEASE" tests/install_e2e.sh
         env:
           GH_TOKEN: ${{ github.token }} # so `gh auth status` passes, as for someone logged in
           HOMEBREW_NO_AUTO_UPDATE: "1"
           HOMEBREW_NO_INSTALL_CLEANUP: "1"
+          E2E_PARTS: ${{ needs.install-select.outputs.parts }} # empty: the whole suite
 
+  # The first day in the Docker sandbox walks the same install (the wizard, a morning, re-runs, an uninstall): it
+  # runs when the install suite does, or when its own files changed.
   sandbox:
+    needs: install-select
+    if: ${{ needs.install-select.outputs.sandbox == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

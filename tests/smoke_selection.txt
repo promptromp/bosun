@@ -19,6 +19,7 @@ all tests/smoke_cache.sh
 all tests/smoke_selection.txt
 all tools/smoke_select.py
 all tools/shell_library.py
+all tools/selection.py
 all tools/smoke_shard.py
 all tests/sandbox/macos/**
 # What every window's launch loads: the agents' shell sides (some are named in a variable, which no reader of the
@@ -61,6 +62,7 @@ ignore tests/llm/**
 ignore tests/fixtures/corpus/**
 ignore tests/fixtures/migrations/**
 ignore tests/sandbox.sh
+ignore tests/vm_selection.txt
 ignore tests/install_e2e.sh
 ignore tests/work_e2e.sh
 ignore tests/app_e2e.sh

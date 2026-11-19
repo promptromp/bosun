@@ -29,6 +29,7 @@ from test_smoke_cache import ROOT, SMOKE, Scratch, clean_env, git
 
 
 sys.path.insert(0, str(ROOT / "tools"))
+import selection as sel
 import shell_library
 import smoke_select as ss
 import smoke_shard as sh
@@ -87,13 +88,13 @@ class GlobTest(unittest.TestCase):
             ("lib/a.py", "lib/?.py", True),
         ):
             with self.subTest(path=path, glob=glob):
-                self.assertEqual(ss.matches(path, glob), expected)
+                self.assertEqual(sel.matches(path, glob), expected)
 
     def test_regex_characters_in_a_glob_mean_themselves(self) -> None:
-        self.assertTrue(ss.matches("lib/a+b.py", "lib/a+b.py"))
-        self.assertFalse(ss.matches("lib/aab.py", "lib/a+b.py"))
-        self.assertTrue(ss.matches("lib/a.py", "lib/a.py"))
-        self.assertFalse(ss.matches("lib/aXpy", "lib/a.py"))
+        self.assertTrue(sel.matches("lib/a+b.py", "lib/a+b.py"))
+        self.assertFalse(sel.matches("lib/aab.py", "lib/a+b.py"))
+        self.assertTrue(sel.matches("lib/a.py", "lib/a.py"))
+        self.assertFalse(sel.matches("lib/aXpy", "lib/a.py"))
 
 
 class FilesTest(unittest.TestCase):
@@ -119,7 +120,7 @@ class FilesTest(unittest.TestCase):
 
     def test_anything_else_in_it_is_an_error_naming_the_line(self) -> None:
         for text in ("some a\n", "all\n", "ignore \n"):
-            with self.subTest(text=text), self.assertRaisesRegex(ss.SelectionError, "line 1"):
+            with self.subTest(text=text), self.assertRaisesRegex(sel.SelectionError, "line 1"):
                 ss.parse_rules(text)
 
     def test_the_real_files_parse(self) -> None:
@@ -243,7 +244,7 @@ class SuiteEditTest(unittest.TestCase):
         suite = ss.Suite(new)
         graph = ss.Graph(Path("/nonexistent"), [])
         return ss.plan_for(
-            [ss.SUITE], suite.sections, ss.Rules((), ()), graph, suite, ss.SuiteChange(old, hunks)
+            [ss.SUITE], suite.sections, ss.Rules((), ()), graph, suite, sel.FileChange(old, hunks)
         )
 
     def test_a_line_in_a_section_selects_it_and_what_needs_it(self) -> None:
@@ -382,7 +383,7 @@ class SuiteChangeTest(Scratch):
         git(root, "add", "-A")
         change = ss.suite_change(root, "HEAD")
         self.assertEqual((change.old, change.hunks), ("", ((0, 0, 1, 2),)))
-        with self.assertRaisesRegex(ss.SelectionError, "failed"):
+        with self.assertRaisesRegex(sel.SelectionError, "failed"):
             ss.suite_change(root, "no-such-ref")
 
 

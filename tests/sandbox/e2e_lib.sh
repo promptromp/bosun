@@ -1,8 +1,8 @@
 # shellcheck shell=bash
-# What the scenarios on a real Mac share (tests/install_e2e.sh, tests/work_e2e.sh): the checks, a new
-# machine, the piped installer, launchd for real, and an uninstall that keeps your records. Sourced first
-# thing: it changes the machine it runs on, so it refuses to go on anywhere but a GitHub macOS runner or
-# the throwaway Mac of tests/sandbox.sh mac.
+# What the scenarios on a real Mac share (tests/install_e2e.sh, tests/work_e2e.sh, tests/app_e2e.sh): the checks,
+# their parts (tests/sandbox/e2e_parts.sh), a new machine, the piped installer, launchd for real, and an uninstall
+# that keeps your records. Sourced first thing: it changes the machine it runs on, so it refuses to go on
+# anywhere but a GitHub macOS runner or the throwaway Mac of tests/sandbox.sh mac.
 # Checks pass shell snippets to `bash -c '...' _ args`; their $ must not expand here.
 # shellcheck disable=SC2016
 { [ "${GITHUB_ACTIONS:-}" = "true" ] || [ -e /etc/bosun-sandbox ]; } && [ "$(uname -s)" = "Darwin" ] || {
@@ -25,6 +25,8 @@ OUT="$(mktemp -d)"
 GET_SH="$ROOT/get.sh"
 passed=0
 failed=0
+# part, part_chosen, parts_end: the suite's main body is its parts (each suite's `part` lines, tools/vm_select.py).
+source "$(dirname "${BASH_SOURCE[0]}")/e2e_parts.sh" || exit 1
 
 check() { # <description> <command...>: on failure, show the end of its output
   local description="$1" output

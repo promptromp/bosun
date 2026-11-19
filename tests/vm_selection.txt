@@ -1,0 +1,234 @@
+# Which parts of the Mac VM suites a change reaches beyond what the parts' `covers` say (tools/vm_select.py:
+# `tests/sandbox.sh mac --changed <ref>`, CI's install job). One rule per line:
+#
+#   all <suite>[,<suite>...] <glob>   (or `all * <glob>`) a change to it runs those suites whole
+#   none <glob>                       no VM part needs it: the smoke suite and the unit tests are enough
+#   year <glob>                       a change to it gives work's afternoon update a year of data (else 30 days)
+#   minutes <suite>[/<part>] <n>      the estimate a selection prints: a suite's clone and setup, or a part
+#   docker <glob>                     a change to it reaches the Docker sandbox's first day (`tests/sandbox.sh init`,
+#                                     which CI's install job runs then, and when run's parts run)
+#
+# Globs match the path from the repository root, whole: `*` within a folder, `**` through any number of them.
+# `<file>#<function glob>` names functions of a shell file read by function (lib/common.sh): a glob without `#`
+# never matches such a file. The suites: run (tests/install_e2e.sh), work (tests/work_e2e.sh), app
+# (tests/app_e2e.sh), live (tests/sandbox/live.sh, paid).
+#
+# For a changed file the order is: `all` (those suites whole), then the parts that cover it, and if neither,
+# `none` (nothing to run); a file in none of them is unknown, which runs run, work and app whole (never live).
+# tests/unit/test_vm_selection.py fails on a tracked file (or a function of lib/common.sh) that falls in none, and
+# says what to add. Prefer a part's `covers` to `all`, and `all run,work,app` to `none` when unsure.
+
+# --- all: a change here reaches a whole suite --------------------------------------------------------------------
+# The VM itself, and what every part runs through. live is paid: a selection prints it, and runs it with --paid.
+all * tests/sandbox/mac.sh
+all * tests/sandbox.sh
+all * tests/sandbox/e2e_parts.sh
+all run,work,app tests/sandbox/e2e_lib.sh
+# Each suite's own script, and what only it reads.
+all run tests/install_e2e.sh
+all work tests/work_e2e.sh
+all work tests/sandbox/acme_week.sh
+all app tests/app_e2e.sh
+all live tests/sandbox/live.sh
+# The origin with a first release in it, which run and app install from (tests/sandbox/mac.sh, CI's install job).
+all run,app tests/sandbox/release_origin.sh
+# The selection's own code and rules, and the job that runs run in CI: run whole there, which costs nothing here.
+all run .github/workflows/install.yml
+all run tools/vm_select.py
+all run tools/selection.py
+all run tools/shell_library.py
+all run tests/vm_selection.txt
+
+# --- year: the update's freeze, measured on a year of data --------------------------------------------------------
+# What holds bosun's stores still while an update runs (its freeze_ms), and what writes them: a change to it runs
+# work's afternoon update on 365 days of data, else 30 (its freeze check then says it measured 30).
+year lib/update.py
+year lib/update_gate.py
+year lib/update_backups.py
+year lib/journal.py
+year lib/migrations.py
+year lib/ledger_changes.py
+year lib/knowledge_changes.py
+year lib/knowledge_store.py
+year tests/sandbox/acme_year.py
+
+# --- none: no VM part needs these --------------------------------------------------------------------------------
+# Prose and the site (a page a part follows is in its covers: docs/updating.md, for work's ways-back).
+none docs/**
+none *.md
+none mkdocs.yml
+none theme/**
+# CI and the repository's settings (the install job is above), the checks' own settings and pins.
+none .github/**
+none .gitignore
+none .pre-commit-config.yaml
+none pyproject.toml
+none uv.lock
+none .secrets.baseline
+none .gitleaks.toml
+none .editorconfig
+none .shellcheckrc
+none _typos.toml
+# The other suites and their files: the unit tests, the smoke suite, the real-Claude tests, the Docker sandbox, the
+# fixtures (the knowledge base's import is in the covers that read it), the tools (the selection's are above).
+none tests/unit/**
+none tests/llm/**
+none tests/js/**
+none tests/js_check.sh
+none tests/smoke.sh
+none tests/smoke_cache.sh
+none tests/smoke_selection.txt
+none tests/smoke_weights.txt
+none tests/fixtures/**
+none tests/sandbox/Dockerfile
+none tests/sandbox/fresh_user.sh
+none tests/sandbox/inside.sh
+none tests/sandbox/world.sh
+none tests/sandbox/macos/**
+none tests/sandbox/codex-stand-in
+none tools/**
+# Antigravity: `tests/sandbox.sh mac live agy` needs a person to sign in, so it runs by hand, never by selection.
+none tests/sandbox/agy-stand-in
+none tests/sandbox/live_agy.sh
+none agents/**
+none lib/agy_state.py
+none lib/agy_workspace.py
+none lib/connectors_agy.py
+none lib/launch/agy.sh
+none lib/harnesses/agy.sh
+# The menu bar app's tests and lint settings: its own CI job (the app suite's parts cover its sources).
+none app/Tests/**
+none app/.gitignore
+none app/.swift-format
+none app/.swiftlint.yml
+# The console's page and its views (the parts read its API and its token: lib/console_server.py and the views
+# they check are in their covers), the examples, and what only the smoke suite and the unit tests can show.
+none console/**
+none examples/**
+none lib/console_files.py
+none lib/console_kg_graph.py
+none lib/console_kg_sources.py
+none lib/console_learn.py
+none lib/console_ledger.py
+none lib/console_library.py
+none lib/console_state.py
+none lib/console_stats.py
+none lib/impact*.py
+none lib/pr_threads.py
+none lib/review_watch.py
+none lib/workstreams.py
+none lib/ws_summary.py
+none lib/lineage.py
+none lib/tickets.py
+none lib/similar.py
+none lib/repo_mask.py
+none libexec/bosun-attach
+none libexec/bosun-chores
+none libexec/bosun-context
+none libexec/bosun-impact
+none libexec/bosun-my-prs
+none libexec/bosun-orphans
+none libexec/bosun-pr-threads
+none libexec/bosun-resolve
+none libexec/bosun-review-watch
+# A command that needs real hardware: a VM cannot sleep (bosun wake-test, on a real Mac).
+none libexec/bosun-wake-test
+# Functions of lib/common.sh no part rests on: a notification no check reads, and the repository mask.
+none lib/common.sh#notify
+none lib/common.sh#repo_in_mask
+none lib/common.sh#repo_mask_filter
+
+# --- docker: what the Docker sandbox's first day runs (tests/sandbox.sh init, tests/sandbox/fresh_user.sh) -------
+# CI's install job runs it when a changed file is on one of these (`vm_select.py --docker --changed`), or when it
+# runs run's parts. At least what the job's `paths:` started it on before parts (tests/unit/test_vm_selection.py
+# holds this list to that one), and its first day on Codex and agy: their stand-ins, state, launch and plugin.
+docker get.sh
+docker install.sh
+docker uninstall.sh
+docker bin/**
+docker libexec/bosun-init
+docker libexec/bosun-uninstall
+docker libexec/bosun-preflight
+docker libexec/bosun-launch
+docker libexec/bosun-doctor
+docker libexec/bosun-trust
+docker libexec/bosun-start
+docker libexec/bosun-stop
+docker libexec/bosun-refresh
+docker libexec/bosun-setup
+docker libexec/bosun-morning
+docker lib/setup-helpers.sh
+docker lib/login.py
+docker lib/common.sh
+docker lib/agents.sh
+docker lib/preflight.sh
+docker lib/platforms/**
+docker lib/harnesses/**
+docker lib/launch/**
+docker lib/init*.py
+docker lib/uninstall*.py
+docker lib/agent_*.py
+docker lib/claude_state.py
+docker lib/codex_state.py
+docker lib/agy_*.py
+docker lib/connectors_codex.py
+docker lib/connectors_agy.py
+docker agents/**
+docker templates/**
+docker tests/install_e2e.sh
+docker tests/sandbox.sh
+docker tests/sandbox/**
+docker .github/workflows/install.yml
+
+# --- minutes: what a selection prints as its estimate ---------------------------------------------------------------
+# Rough, from the runs of 2026-11-14..18 (about ±30 s a part). A suite's own line is its clone, boot and copies (and
+# live's prepare: Homebrew and the Claude Code cask; app's build of the app here). work/year: what 365 days of data
+# add to the afternoon update over 30.
+minutes run 1.0
+minutes run/install 1.0
+minutes run/console-job 0.3
+minutes run/launchd 0.3
+minutes run/now-job 0.3
+minutes run/login-job 0.1
+minutes run/quit 0.4
+minutes run/releases 0.4
+minutes run/branch 0.3
+minutes run/rerun 0.2
+minutes run/app-tools 0.6
+minutes run/uninstall 0.5
+minutes work 1.0
+minutes work/install 1.0
+minutes work/tokens 0.2
+minutes work/launchd 0.3
+minutes work/week 2.0
+minutes work/afternoon-update 2.4
+minutes work/year 4.9
+minutes work/ways-back 1.5
+minutes work/forgotten 0.2
+minutes work/writers 0.3
+minutes work/clock 0.2
+minutes work/power-cuts 1.8
+minutes work/outside-edits 0.4
+minutes work/launchd-new 0.7
+minutes work/console-kg 0.2
+minutes work/uninstall 1.0
+minutes work/year-on 0.3
+minutes app 1.5
+minutes app/install 1.0
+minutes app/status 1.3
+minutes app/update 0.9
+minutes app/quit 1.8
+minutes app/login-automation 1.0
+minutes app/settings 2.2
+minutes app/reboot 2.1
+minutes live 2.0
+minutes live/install 0.5
+minutes live/windows 1.0
+minutes live/hand-over 1.5
+minutes live/ontology 4.0
+minutes live/plugin-pickup 1.0
+minutes live/update 2.3
+minutes live/connectors 1.2
+minutes live/plugins-windows 0.4
+minutes live/headless 0.5
+minutes live/off-again 0.7

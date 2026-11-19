@@ -355,8 +355,8 @@ knowledge_day_5() {
 
 # ---- a year of work, and a busy afternoon (tests/work_e2e.sh, "a mid-afternoon update") -------------
 
-YEAR_DAYS=365
-STAND_IN="$HOME/.sandbox/claude" # what steers the Claude stand-in in each window (tests/sandbox/claude-stand-in)
+YEAR_DAYS="${E2E_YEAR_DAYS:-365}" # the afternoon update's data: a year, or what tests/sandbox/mac.sh chose (30)
+STAND_IN="$HOME/.sandbox/claude"  # what steers the Claude stand-in in each window (tests/sandbox/claude-stand-in)
 SLACK_STAND_IN="$HOME/.sandbox/slack"
 BACKGROUND_SLEEP="sleep 3333" # the background command a shell window waits on
 T_AFTERNOON=""

@@ -16,7 +16,9 @@
 out is outside every function, cannot be placed, or a side has a problem, and when a line the diff left alone
 is code that a change moved between functions or into or out of one (a `}` moved over top-level code: that
 code no longer runs when the file is sourced). `unchanged_pairs(hunks, old_length, new_length)` is that walk:
-each line the diff left alone, as (old line, new line). A changed line is a change: nothing is compared.
+each line the diff left alone, as (old line, new line). A changed line is a change: nothing is compared, but
+with `prose_is_no_change` a blank line or a comment outside the functions, where a statement could begin (not
+in a quote, a here-document or after a `\\` line), is none (tools/vm_select.py reads lib/common.sh so).
 
 `calls(code, names)` is every word of the code that is one of the names, in strings too (`bash -c '...; f'`):
 loose, so it can only find more calls than there are.
@@ -77,6 +79,7 @@ class Script:
     code: str  # the text with its comments blanked out, line for line
     functions: tuple[Function, ...] = ()
     problems: tuple[str, ...] = ()
+    starts: tuple[bool, ...] = ()  # per line: it begins outside every quote, here-document and `\` line
 
     @cached_property
     def code_lines(self) -> list[str]:
@@ -96,6 +99,15 @@ class Script:
     def has_code(self, line: int) -> bool:
         """Whether line <line> holds code: not blank, not only a comment."""
         return 1 <= line <= len(self.lines) and bool(self.code_lines[line - 1].strip())
+
+    def prose_at(self, line: int) -> bool:
+        """Whether line <line> is prose where a statement could begin: blank or only a comment, and outside
+        every quote and here-document, and not after a line that runs on with `\\` (there a blank line or a
+        comment ends the command, and what follows runs as a command of its own). A `#!` first line is no
+        prose: it says what runs the file."""
+        begins = 1 <= line <= len(self.starts) and self.starts[line - 1]
+        shebang = line == 1 and self.lines[0].startswith("#!")
+        return begins and not shebang and not self.has_code(line)
 
 
 def parse_hunks(diff: str) -> tuple[tuple[int, int, int, int], ...]:
@@ -138,17 +150,19 @@ def unchanged_pairs(
 
 
 def changed_functions(
-    new: Script, hunks: Iterable[tuple[int, int, int, int]], old: Script
+    new: Script, hunks: Iterable[tuple[int, int, int, int]], old: Script, prose_is_no_change: bool = False
 ) -> frozenset[str] | None:
     """The names of the functions <hunks> (from <old> to <new>) changed; None, the whole file, when a line
     they put in or took out is outside every function (top-level code, a comment, a blank line) or past a
     file's end, when a line they left alone is code that moved between functions or into or out of one, or
-    when a side does not read as functions."""
+    when a side does not read as functions. With <prose_is_no_change>, a line outside every function that is
+    prose where a statement could begin (Script.prose_at: a function added with the comment and blank line
+    above it) changes nothing that runs, and is no change."""
     if new.problems or old.problems:
         return None
     hunks = list(hunks)
-    names = functions_at(new, new_lines(hunks))
-    gone = functions_at(old, old_lines(hunks))
+    names = functions_at(new, new_lines(hunks), prose_is_no_change)
+    gone = functions_at(old, old_lines(hunks), prose_is_no_change)
     moved = moved_functions(new, hunks, old)
     if names is None or gone is None or moved is None:
         return None
@@ -172,14 +186,16 @@ def name_of(function: Function | None) -> str | None:
     return function.name if function else None
 
 
-def functions_at(script: Script, lines: Iterable[int]) -> set[str] | None:
-    """The functions <lines> are in; None when one is outside every function or past the file's end."""
+def functions_at(script: Script, lines: Iterable[int], prose_is_no_change: bool = False) -> set[str] | None:
+    """The functions <lines> are in; None when one is outside every function (but for prose where a statement
+    could begin, with <prose_is_no_change>) or past the file's end."""
     names: set[str] = set()
     for number in lines:
         function = script.function_at(number) if 1 <= number <= len(script.lines) else None
-        if function is None:
+        if function is not None:
+            names.add(function.name)
+        elif not (prose_is_no_change and script.prose_at(number)):
             return None
-        names.add(function.name)
     return names
 
 
@@ -625,7 +641,13 @@ def read(text: str) -> Script:
     starts = scan.starts + [True] * (len(lines) + 1 - len(scan.starts))
     problems = list(scan.problems)
     functions = tuple(find_functions(lines, starts, scan, problems))
-    return Script(lines, "".join(scan.code), functions=functions, problems=tuple(problems))
+    return Script(
+        lines,
+        "".join(scan.code),
+        functions=functions,
+        problems=tuple(problems),
+        starts=tuple(starts[: len(lines)]),
+    )
 
 
 def find_functions(

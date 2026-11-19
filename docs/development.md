@@ -326,18 +326,24 @@ the cheapest of these that can show what you changed:
 |---|---|---|---|
 | Logic, config, the wizard | `tests/sandbox.sh` | bosun's logic, on a machine with nothing installed, through a real terminal | 1 minute |
 | Anything else in bosun | `tests/sandbox.sh all` | also the unit tests and the smoke suite | 3 minutes |
-| `get.sh`, `install.sh`, launchd, `pmset`, anything macOS does its own way | `tests/sandbox.sh mac run` | the real thing on real macOS, except sleep | 2 minutes |
-| What a new Mac lacks: Homebrew, Apple's tools | `tests/sandbox.sh mac run --from-nothing` | the same from a Mac with nothing on it | 4 minutes |
-| What the menu bar app (`bosun.app`) does: every state of its menu, every dialog and choice of its Quit and update, Open at Login across a restart, one copy at a time, what macOS says to a quit by Apple Event | `tests/sandbox.sh mac app` | the real app, built here and driven by its test hooks on a clone's desktop session, with launchd, a reboot and the Trash; `--from release` the published, notarized one | about 30 minutes |
-| What an update does to an install in use, its windows, its ledger and knowledge base, and what real use does to them: their journals, ids, writes, privacy | `tests/sandbox.sh mac work` | a week of work on this checkout and a mid-afternoon update on a year of data, on real macOS: launchd, a moving clock, racing writers, writes cut short, files changed outside the journal, going back by hand and with `bosun update --back` | 16 minutes |
-| How an agent behaves: launching it, its screens and files, a task handed to it, an update's prompts, which MCP servers a window reaches | `tests/sandbox.sh mac live claude`, `... live codex` | the real agents from nothing, through setup, sessions, an update and connectors | about 10 minutes and a dollar each (on Claude Code about 12 minutes and a few dollars more, for the ontology) |
+| `get.sh`, `install.sh`, launchd, `pmset`, anything macOS does its own way | `tests/sandbox.sh mac run` | the real thing on real macOS, except sleep | about 4 to 5 minutes whole |
+| What a new Mac lacks: Homebrew, Apple's tools | `tests/sandbox.sh mac run --from-nothing` | the same from a Mac with nothing on it | a few minutes more |
+| What the menu bar app (`bosun.app`) does: every state of its menu, every dialog and choice of its Quit and update, Open at Login across a restart, one copy at a time, what macOS says to a quit by Apple Event | `tests/sandbox.sh mac app` | the real app, built here and driven by its test hooks on a clone's desktop session, with launchd, a reboot and the Trash; `--from release` the published, notarized one | about 12 minutes whole |
+| What an update does to an install in use, its windows, its ledger and knowledge base, and what real use does to them: their journals, ids, writes, privacy | `tests/sandbox.sh mac work` | a week of work on this checkout and a mid-afternoon update on a year of data, on real macOS: launchd, a moving clock, racing writers, writes cut short, files changed outside the journal, going back by hand and with `bosun update --back` | about 20 minutes whole |
+| How an agent behaves: launching it, its screens and files, a task handed to it, an update's prompts, which MCP servers a window reaches, what bosun's headless calls load | `tests/sandbox.sh mac live claude`, `... live codex` | the real agents from nothing, through setup, sessions, an update and connectors | about 10 minutes and a dollar on Codex; about 12 minutes and a few dollars on Claude Code, most of it the ontology |
 | How Antigravity (`agy`) behaves under bosun: its hooks and plugin, its screen, its dialogs, its login | `tests/sandbox.sh mac live agy` | the real `agy` in a VM with a window, where you sign in; then windows started by launchd, Esc, a reviewer's dialog, the plugin's approvals, a slow hook, connectors, uninstall | about 25 minutes, you at the start, and a personal account's free quota |
 | How bosun feels to use, by hand, with the real agents and no setup of yours | `tests/sandbox.sh mac try` | bosun installed, signed in by your key and running in a VM with a window, for you to try until you leave its shell | about 10 minutes to set up, then the key's requests while it runs |
 | The wake itself | `bosun wake-test`, on real hardware | a real sleep and a real wake | 5 minutes |
 
-The first also runs in CI (the second's unit and smoke suites run there natively: the smoke sections a change reaches in the merge queue, everything nightly), and so does the third on
-a clean GitHub macOS runner, whenever the install could have changed (`.github/workflows/install.yml`). The sandboxes' scripts install for real, so they
-refuse to run anywhere else.
+The Mac suites (`run`, `work`, `app`, `live`) are in parts, and a run can take only the parts a change reaches:
+see [Running part of a suite](#running-part-of-a-suite). The first also runs in CI, on a pull request when the third
+does or a file its first day runs changed (the `docker` rules of `tests/vm_selection.txt`) (the second's unit and smoke suites run there natively: the smoke sections a change
+reaches in the merge queue, everything nightly), and so does the
+third on a clean GitHub macOS runner (`.github/workflows/install.yml`): on a pull request, the parts of `run` it
+reaches, chosen as `tests/sandbox.sh mac run --changed` chooses them, from an origin with a release in it as the VM's
+is (so its update to the next release and `--branch` run there too); weekly, all of it. So `mac run` here is for
+`--from-nothing` and for what the runner's own tools could hide (it has tmux already). The sandboxes' scripts install
+for real, so they refuse to run anywhere else.
 
 ### Docker: `tests/sandbox.sh`
 
@@ -386,6 +392,7 @@ tests/sandbox.sh mac shell                # a window, to try the wizard as a new
                                           # and leaving its shell (exit) deletes it
 tests/sandbox.sh mac try                  # the same with bosun set up, signed in by your key and running: see below
 tests/sandbox.sh mac clean                # delete the clones and base images (`tart prune` removes the pulled one)
+tests/sandbox.sh mac --changed main --list  # which parts of each suite your change reaches: see below
 ```
 
 If Homebrew refuses the tap, it wants to be told you trust it. These two are enough, not the whole tap:
@@ -405,6 +412,64 @@ If Homebrew refuses the tap, it wants to be told you trust it. These two are eno
 - **Wait for the login.** ssh answers before the auto-login finishes, and until then launchd has no
   `gui/<uid>` domain and `launchctl bootstrap` fails with error 125. `mac.sh` waits for it; do the same
   if you script a VM by hand.
+
+### Running part of a suite
+
+Each Mac suite is in parts: `run` (`tests/install_e2e.sh`: install, the console's job, launchd, the job that runs
+`--now`, the login job, quit, releases, branch, a re-run, the app's tools, uninstall), `work` (`tests/work_e2e.sh`:
+install, tokens, launchd, the week, the afternoon update, the ways back, a forget, writers, the clock, power cuts,
+outside edits, launchd again, the console's knowledge view, uninstall, a year on), `app` (`tests/app_e2e.sh`: install,
+status, update, quit, Open at Login and Automation, settings, the restart) and `live` (`tests/sandbox/live.sh`: install,
+windows, the hand-over, the ontology, the plugin pick-up, the update, connectors, plugins of repo windows, headless
+calls, off again). Each part is a `part` line at the end of its script, which runs the function `part_<id>`:
+
+```bash
+part releases "the releases: bosun update --check, --skip, ..." needs install covers 'libexec/bosun-update,lib/update.py,...'
+```
+
+`needs` names the parts whose state it starts from, `last` one that runs after the others (an uninstall, a restart),
+`paid` one that calls a real agent's API, and `covers` the files its behaviour on a real Mac rests on: its command,
+its templates, its lib modules. A `lib/common.sh#<function glob>` entry names functions of `lib/common.sh`, which
+changes in a quarter of all commits: it is read function by function, so a change to `render_job` runs the parts that
+render jobs, not every suite.
+
+```bash
+tests/sandbox.sh mac work --only ways-back          # that part and what it needs: install, week, afternoon-update
+tests/sandbox.sh mac run --changed main             # the parts of run your change since main reaches
+tests/sandbox.sh mac app --changed main --list      # only say which, and what they would take; no clone
+tests/sandbox.sh mac --changed main                 # every suite's choice; it runs nothing
+tests/sandbox.sh mac live claude --changed main --paid   # live's chosen parts, which cost money
+tests/sandbox.sh mac work --only power-cuts -x      # -x: no part starts after a failed check
+```
+
+`--changed <ref>` compares with where your branch left `<ref>` (committed, staged, unstaged and untracked files) and
+picks, for each changed file (or function of `lib/common.sh`), the suites a rule of `tests/vm_selection.txt` runs whole
+(`all`), the parts whose `covers` name it and what they need, or nothing for a file no part needs (`none`: the docs,
+the unit tests, what only the smoke suite can show). It matches `covers` directly and follows no imports: the VM runs
+behind the smoke suite and the unit tests, which do. A file nothing names fails closed: `run`, `work` and `app` run
+whole, and the report says which rule to add. `live` is paid, so it is never chosen beyond the parts its `covers` name
+(and the `all *` rules: the VM itself and the parts' machinery), and `--changed` runs them only with `--paid`; a whole
+`live` run or `--only` is asked for by name. A part says in `needs` every part whose state it reads (what that one
+turns on, starts or leaves on disk): `run`'s `quit` and `releases` need `console-job`, which turns the console's job on. A run prints its
+choice first, with an estimate from the `minutes` lines of `tests/vm_selection.txt`, and its summary says it was a
+partial run. Nothing to run for a suite: it says so, and boots nothing. `tools/vm_select.py` makes the choice, and
+`tests/unit/test_vm_selection.py` fails on a file or a function of `lib/common.sh` that no part and no rule names, a part
+without `covers`, a glob that matches nothing, a step called outside every part, code between the part lines, or a part
+with no `part_<id>`. A comment or a blank line added to `lib/common.sh` between its statements is no change (a function
+added with its comment), but one in a string, a here-document or after a line that runs on with `\` is a change. A run
+whose E2E_PARTS names no part of the suite fails.
+
+Two parts changed shape with this. `work`'s afternoon update runs on a year of data (365 days) only when the change
+reaches the update's freeze (the `year` rules: `lib/update.py`, `lib/update_gate.py`, `lib/update_backups.py`, the
+journals and the stores' change files, `tests/sandbox/acme_year.py`); otherwise on 30 days, about five minutes less, and
+its year-scale checks (the freeze, restoring the backup) say they measured 30. A whole run takes the year, and so does
+one a change runs whole (an `all` rule, a file nothing names); `--only` takes 30; `BOSUN_SANDBOX_YEAR_DAYS=<days>` sets
+it. `live`'s plugin pick-up (whether a running Claude picks up a changed command file) is a fact about Claude
+Code: a whole run looks only on a Claude Code other than the one `PICKUP_SEEN_ON` in `live.sh` names, and a run that
+names the part looks whatever the version.
+
+To add a check to a suite, put it in the part it belongs to (or a new one: a `part` line, its `part_<id>`, and a
+`minutes` line in `tests/vm_selection.txt`), and name in that part's `covers` the files it rests on.
 
 ### The menu bar app: `tests/sandbox.sh mac app [--from build|release]`
 
@@ -445,7 +510,8 @@ naming a person and none of my words in the knowledge journal file that can leav
 Two more days follow, then a mid-afternoon update to the next version (this checkout and
 `tests/sandbox/update_patch.sh`: the ledger's format 2 with its migration, a line of `policy.md`, the repo
 windows' hook settings), pushed to the install's origin, on a year of data that
-`tests/sandbox/acme_year.py` writes through the installed bosun's own commands. The Claude stand-in
+`tests/sandbox/acme_year.py` writes through the installed bosun's own commands (30 days in a selection that does not
+reach the update's freeze: see [Running part of a suite](#running-part-of-a-suite)). The Claude stand-in
 (`tests/sandbox/claude-stand-in`) behaves where bosun can see it as Claude Code does: its session record,
 a transcript a restart resumes, its hooks, and the update's prompts answered with `bosun update note`.
 One window is idle, one waits on a background `sleep` (`shell`), one is in a long turn (busy), and a shell
@@ -523,7 +589,8 @@ BOSUN_SANDBOX_CODEX_MODEL=<a cheap model> tests/sandbox.sh mac live codex
 ```
 
 On a clone of the developer's Mac it does what a new user does, following only what the installer prints:
-it stops for what is missing, runs the line it gave, logs in, goes through Claude Code's first screens, and
+it stops for what is missing, runs the line it gave, logs in, goes through Claude Code's first screens (and Claude in
+Chrome's, where this Claude Code shows one: one that shows none goes on as soon as its input box shows), and
 installs. The world it installs for is fictional acme's (`tests/sandbox/live/`): three small repositories
 (`exporter`, `pdf-renderer`, `ledger-sync`), each with a README, a `CODEOWNERS`, tests and a scripted history of
 a few commits by different people (`history.sh`), each a window, and the ontology about them
@@ -558,13 +625,15 @@ person's words. Four scenarios, each checked in what the agents did:
 The step also prints, as notes and never as checks, what the ontology cost: each brief's section (the pack line
 `bosun delegate` writes in `delegate-<date>.log`: targets, facts, estimated tokens) and the number of `bosun kg`
 calls each window made, in all and per scenario (counted in the Bash calls of the windows' transcripts). It adds about
-12 minutes and a few dollars; `BOSUN_SANDBOX_LIVE_STEP=ontology tests/sandbox.sh mac live claude` runs only the
-install, the windows and this step.
+4 minutes and most of the run's dollars; `tests/sandbox.sh mac live claude --only ontology` runs only the install, the
+windows and this step.
 
 Then an update with the agents at work. First, whether a running Claude picks up a changed command file of
 its plugin: a Claude on the smallest model runs with `--plugin-dir` through a link, as the orchestrator does
 through the install link, and its one command is asked for before and after the link is switched to another
-folder, and after the file in the folder it started from changes in place. Then the repo window is given a background command
+folder, and after the file in the folder it started from changes in place. That is a fact about Claude Code, so a
+whole run looks only on a Claude Code other than the one `PICKUP_SEEN_ON` in `live.sh` names (set it once you have
+read the notes), and `--only plugin-pickup` looks whatever the version. Then the repo window is given a background command
 (`sleep 300`), and `bosun update` goes to the next version (this checkout and `tests/sandbox/update_patch.sh`,
 bundled in the VM as the head of the install's branch). The orchestrator only re-reads `policy.md`; on Claude
 Code the repo window, waiting on its background command, takes stock first, is restarted, and must start the
@@ -584,6 +653,12 @@ test makes), which a list that does not name it must keep from starting by switc
 a list that names it must keep. What a window reaches is read from the agent (which servers it started, its `/mcp`), never
 from what its model says: a model leaves deferred tools out of a list. This part adds about three minutes and
 a few cents.
+
+On Claude Code, then plugins of mine, with a local plugin (`probe-hook`, whose `SessionStart` hook notes where a
+session started) installed and on in the user's settings: the repo window keeps it and the orchestrator loads none of
+it (the part `plugins-windows`), and bosun's headless calls load none of it either: a real learning analysis (a dry run
+on the smallest model), the Slack watcher's call against a local server standing for Slack's, and a login check (the
+part `headless`, which needs only the install: `--only headless` is about three minutes and cents).
 
 **`live agy`** is different in how it starts. Antigravity's login is a browser sign-in whose result is a
 Keychain item that `agy` reads only in the desktop session, never over ssh. So the clone boots with its

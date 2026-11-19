@@ -44,7 +44,6 @@ from __future__ import annotations
 
 import argparse
 import re
-import subprocess
 import sys
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
@@ -53,13 +52,25 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import shell_library
-
-
-SECTION_MARKER = re.compile(
-    r"^\s*section\s+(?P<id>[a-z0-9-]+)\s+\"(?P<name>[^\"]*)\""
-    r"(?:\s+needs\s+(?P<needs>[a-z0-9,-]+))?"
-    r"(?:\s+covers\s+'(?P<covers>[^']*)')?\s*$"
+from selection import (
+    FileChange,
+    Marker,
+    SelectionError,
+    changed_files,
+    file_change,
+    first_match,
+    marker_lines,
+    matches,
+    merge_base,
+    needed,
+    rule_lines,
+    tracked_files,
 )
+
+
+# The suite's marker lines: `section <id> "<name>" [needs <id>,...] [covers '<glob>,...']`, each a Section.
+SECTION = "section"
+Section = Marker
 COMMON = "lib/common.sh"  # sourced by every command: what it names under lib/ runs in every section
 SUITE = "tests/smoke.sh"  # read section by section (Suite)
 ALWAYS_RUN = re.compile(r"^\s*always_run(?:\s|$)")
@@ -91,18 +102,6 @@ WHOLE_SUITE_HINT = (
 )
 
 
-class SelectionError(Exception):
-    """Git or the files said something that means the whole suite should run."""
-
-
-@dataclass(frozen=True)
-class Section:
-    id: str
-    name: str
-    needs: tuple[str, ...]
-    covers: tuple[str, ...]
-
-
 @dataclass(frozen=True)
 class Rules:
     everything: tuple[str, ...]
@@ -129,26 +128,15 @@ def parse_sections(text: str) -> list[Section]:
 
 
 def section_lines(text: str) -> list[tuple[int, Section]]:
-    """Each section's marker line (from 1) and the section it begins."""
-    found = []
-    for number, line in enumerate(text.splitlines(), 1):
-        match = SECTION_MARKER.match(line) if re.match(r"^\s*section\s", line) else None
-        if match is None:
-            # `section() {`; a section line that does not parse is caught by test_smoke_sections.py
-            continue
-        needs = tuple(match["needs"].split(",")) if match["needs"] else ()
-        covers = tuple(g.strip() for g in (match["covers"] or "").split(",") if g.strip())
-        found.append((number, Section(match["id"], match["name"], needs, covers)))
-    return found
+    """Each section's marker line (from 1) and the section it begins (a line that does not parse is caught by
+    test_smoke_sections.py)."""
+    return marker_lines(text, SECTION)
 
 
 def parse_rules(text: str) -> Rules:
     everything: list[str] = []
     ignore: list[str] = []
-    for number, raw in enumerate(text.splitlines(), 1):
-        line = raw.split("#", 1)[0].strip()
-        if not line:
-            continue
+    for number, raw, line in rule_lines(text):
         kind, _, glob = line.partition(" ")
         glob = glob.strip()
         if kind not in ("all", "ignore") or not glob:
@@ -157,89 +145,9 @@ def parse_rules(text: str) -> Rules:
     return Rules(tuple(everything), tuple(ignore))
 
 
-def glob_regex(glob: str) -> re.Pattern[str]:
-    out = []
-    i = 0
-    while i < len(glob):
-        if glob.startswith("**/", i):
-            out.append("(?:.*/)?")
-            i += 3
-        elif glob.startswith("**", i):
-            out.append(".*")
-            i += 2
-        elif glob[i] == "*":
-            out.append("[^/]*")
-            i += 1
-        elif glob[i] == "?":
-            out.append("[^/]")
-            i += 1
-        else:
-            out.append(re.escape(glob[i]))
-            i += 1
-    return re.compile("".join(out) + r"\Z")
-
-
-def matches(path: str, glob: str) -> bool:
-    return glob_regex(glob).match(path) is not None
-
-
-def first_match(path: str, globs: Sequence[str]) -> str | None:
-    return next((g for g in globs if matches(path, g)), None)
-
-
-def git(root: Path, *args: str) -> str:
-    try:
-        done = subprocess.run(
-            ["git", "-C", str(root), *args],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=60,
-        )
-    except (OSError, subprocess.SubprocessError) as error:
-        raise SelectionError(f"git did not run: {error}") from error
-    if done.returncode != 0:
-        raise SelectionError(f"git {' '.join(args)} failed: {done.stderr.strip() or done.returncode}")
-    return done.stdout
-
-
-def merge_base(root: Path, ref: str) -> str:
-    base = git(root, "merge-base", ref, "HEAD").strip()
-    if not base:
-        raise SelectionError(f"no merge-base of {ref} and HEAD")
-    return base
-
-
-def changed_files(root: Path, base: str) -> list[str]:
-    """What differs from <base>, where this branch left the ref: committed since, staged, unstaged, and
-    untracked (not ignored) files, since the tree on disk is what runs. A rename is its two paths."""
-    names: set[str] = set()
-    names.update(git(root, "diff", "--name-only", "--no-renames", "-z", base).split("\0"))
-    names.update(git(root, "ls-files", "--others", "--exclude-standard", "-z").split("\0"))
-    return sorted(n for n in names if n)
-
-
-@dataclass(frozen=True)
-class SuiteChange:
-    """How tests/smoke.sh changed since the base: its text there ("" if it was not), and the hunks of
-    `git diff -U0` from there to the file on disk."""
-
-    old: str
-    hunks: tuple[tuple[int, int, int, int], ...]
-
-
-def suite_change(root: Path, base: str) -> SuiteChange:
-    """tests/smoke.sh at <base> (none when it was not there; git failing otherwise is an error: the whole
-    suite), and the hunks since."""
-    there = git(root, "ls-tree", "--name-only", base, "--", SUITE).strip()
-    old = git(root, "show", f"{base}:{SUITE}") if there else ""
-    diff = git(root, "diff", "-U0", "--no-renames", "--no-ext-diff", base, "--", SUITE)
-    return SuiteChange(old, shell_library.parse_hunks(diff))
-
-
-def tracked_files(root: Path) -> list[str]:
-    names = git(root, "ls-files", "--cached", "--others", "--exclude-standard", "-z").split("\0")
-    return sorted(n for n in names if n)
+def suite_change(root: Path, base: str) -> FileChange:
+    """tests/smoke.sh at <base> and the hunks since (file_change)."""
+    return file_change(root, base, SUITE)
 
 
 def is_prose(path: str) -> bool:
@@ -472,7 +380,7 @@ class Suite:
         return {sid for _, sid in nodes}
 
 
-def suite_sections(suite: Suite | None, change: SuiteChange | None) -> set[str] | str:
+def suite_sections(suite: Suite | None, change: FileChange | None) -> set[str] | str:
     """The sections a change to tests/smoke.sh reaches, with those that need them; or why that is the whole
     suite (suite_reach says what it reaches)."""
     if suite is None or change is None or not change.hunks:
@@ -482,7 +390,7 @@ def suite_sections(suite: Suite | None, change: SuiteChange | None) -> set[str] 
     return reached_in_suite(suite, change)
 
 
-def reached_in_suite(suite: Suite, change: SuiteChange) -> set[str] | str:
+def reached_in_suite(suite: Suite, change: FileChange) -> set[str] | str:
     ids: set[str] = set()
     for found in suite_reach(Suite(change.old) if change.old else None, suite, change.hunks):
         if isinstance(found, str):
@@ -565,7 +473,7 @@ def plan_for(
     rules: Rules,
     graph: Graph,
     suite: Suite | None = None,
-    change: SuiteChange | None = None,
+    change: FileChange | None = None,
 ) -> Plan:
     """The plan for <changed>; <suite> (as it is) and <change> say how tests/smoke.sh changed, when it did."""
     plan = Plan()
@@ -574,7 +482,7 @@ def plan_for(
         whole = whole_suite(path, graph, rules) or place(path, plan, sections, rules, graph, in_suite)
         if whole is not None:
             return whole
-    plan.needed = needed_sections(sections, plan.picked)
+    plan.needed = needed(sections, plan.picked)
     return plan
 
 
@@ -597,19 +505,6 @@ def place(
         return Plan(full=True, unknown=True, reason=f"no section covers {path}: {WHOLE_SUITE_HINT}")
     plan.ignored.append(path)
     return None
-
-
-def needed_sections(sections: Sequence[Section], picked: dict[str, list[str]]) -> list[str]:
-    """The sections the picked ones need, in file order, and what those need in turn."""
-    needs = {s.id: s.needs for s in sections}
-    want = set(picked)
-    queue = list(picked)
-    while queue:
-        for need in needs.get(queue.pop(), ()):
-            if need not in want:
-                want.add(need)
-                queue.append(need)
-    return [s.id for s in sections if s.id in want and s.id not in picked]
 
 
 def report(plan: Plan, changed: Sequence[str]) -> list[str]:
