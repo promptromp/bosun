@@ -207,6 +207,7 @@ impacted_map = [
     "tests/llm/*.py=tests/unit/test_learn_digest.py",
     "tests/llm/gh_stand_in.py=tests/unit/test_gh_stand_in.py",
     "tests/sandbox/mcp_probe_server.py=tests/unit/test_mcp_probe_server.py",
+    "tests/sandbox/release_origin.sh=tests/unit/test_release_origin.py",
     # What no unit test reads or runs: CI, the repository's own settings, the other suites.
     ".github/**=tests/unit/test_impacted_rules.py",
     ".*=tests/unit/test_impacted_rules.py",
