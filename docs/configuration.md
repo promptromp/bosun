@@ -237,8 +237,13 @@ What an `agy` window does:
   Codex's.
 - When the first `agy` window starts, bosun installs a small plugin of its own into `agy`. It is recorded, and
   `bosun uninstall` takes it back. In a bosun window the plugin lets exactly allow-listed `git`, `gh` and `bosun`
-  commands run past `agy`'s sandbox, so that pushes and `gh` work; every other command is left to `agy`. In your
-  own `agy` sessions the plugin does nothing.
+  commands run past `agy`'s sandbox, so that pushes and `gh` work; every other command is left to `agy`. Since
+  `agy` 1.5.13 such an approval is final (`agy`'s own reviewer no longer looks at it), so the list leaves out what
+  a repo session never does: a push that forces, deletes, names no branch or writes the default branch, and
+  `gh pr merge` or `close`. In your own `agy` sessions the plugin does nothing.
+- A window is refused when its folder, or one up to its repo's root, has `agy` hooks of its own: an
+  `.agents/hooks.json`, a plugin with hooks in `.agents/plugins/`, or an `.agents/plugins.json`. `agy` would run
+  them outside its sandbox at every start.
 - Repo git hooks do not run in an `agy` window: an approved commit would otherwise run the repo's own hook code
   outside the sandbox. Pre-commit-style checks therefore run in CI only.
 - Its status comes from `agy`'s hooks and, while a window is busy, from its screen (Esc, and `agy`'s dialogs).
