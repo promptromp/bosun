@@ -2060,7 +2060,7 @@ rm -f "$HOME/.local/bin/python3"
 check "doctor says once that the windows' agents could not be asked, and why, and nothing of each window's trust" bash -c '
   [ "$(grep -c "FAIL  could not ask the windows.* agents whether they trust their folders" <<<"$1")" = 1 ] &&
     grep -q "(lib/agent_state.py windows): acme: agent_state could not start$" <<<"$1" &&
-    ! grep -qE "does not trust|no session with this exact name" <<<"$1"' _ "$out_unasked"
+    ! grep -qE "does not trust|none by that name yet" <<<"$1"' _ "$out_unasked"
 # ... and one that answers too few lines and says nothing on stderr is told by what it did.
 printf '#!/bin/sh\ncase "$1 $2" in */agent_state.py\\ windows) exit 0 ;; esac\nexec "%s" "$@"\n' "$(command -v python3)" >"$HOME/.local/bin/python3"
 chmod +x "$HOME/.local/bin/python3"
@@ -2758,6 +2758,18 @@ check "doctor lists what the last update left to you: a change to make by hand i
 check "... and each new key bosun.env does not set, with the value it has now" contains "$out" "ok    new key, not set in bosun.env: BOSUN_WAKE_DELAY_MINUTES (now '1')"
 check "... but not one it sets" not_contains "$out" "bosun.env: BOSUN_DRAIN_PROMPT"
 rm -f "$BOSUN_STATE_DIR/update.json" "$BOSUN_CONFIG_DIR/bosun.env"
+# A window's session running in that very window is every window on a working day: no warning. One open outside
+# bosun's windows (this run's own process holds beta's) warns, since launch starts no second copy of it.
+alpha_pid="$(fake_claude alpha idle 2.0.0 60)"
+printf '{"pid":%d,"status":"idle","version":"2.0.0","statusUpdatedAt":%d,"name":"alpha","cwd":"%s","sessionId":"11111111-0000-0000-0000-000000000002"}' \
+  "$alpha_pid" $((($(date +%s) - 60) * 1000)) "$REPO_A" >"$HOME/.claude/sessions/$alpha_pid.json"
+out="$("$BOSUN" doctor 2>&1)"
+check "doctor is content with a window's session running in its own window" contains "$out" \
+  "ok    alpha: running alpha (11111111-0000-0000-0000-000000000002) in its window (pid $alpha_pid)"
+check "... and warns of one open outside bosun's windows, which launch would not start a second copy of" contains "$out" \
+  "warn  beta: beta (22222222-0000-0000-0000-000000000001) is open outside bosun's window (pid $$, another terminal?)"
+kill "$alpha_pid" 2>/dev/null
+rm -f "$HOME/.claude/sessions/$alpha_pid.json"
 orch_status() { # <status> <seconds in it> [name]
   printf '{"pid":%d,"status":"%s","version":"2.0.0","statusUpdatedAt":%d,"name":"%s"}' "$orch_pid" "$1" $((($(date +%s) - $2) * 1000)) "${3:-orch-$(date +%F)}" >"$HOME/.claude/sessions/$orch_pid.json"
 }

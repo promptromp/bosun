@@ -65,9 +65,11 @@ check_tools() {
 
 # One window from the window list: its folder, trust, and which session it will resume. Its agent is the list's
 # (window_harness, read from the line in hand), and what that agent says of it was asked for every window at once
-# (check_config).
-check_window() { # <name> <dir> <kind> <harness> <session name> <trusted<TAB>session<TAB>pid, from agent_state windows>
-  local name="$1" dir="$2" kind="$3" harness="$4" session_name="$5" trusted id pid
+# (check_config). A session that runs now is fine when it runs in bosun's own window of that name (<own pid>, the
+# agent in it, empty for none): that is every window on a working day. Only one open elsewhere (another terminal)
+# warns, since launch then refuses to start a second copy of it.
+check_window() { # <name> <dir> <kind> <harness> <session name> <trusted<TAB>session<TAB>pid, from agent_state windows> <own pid>
+  local name="$1" dir="$2" kind="$3" harness="$4" session_name="$5" own_pid="${7:-}" trusted id pid
   IFS=$'\t' read -r trusted id pid <<<"$6"
   [ "$kind" = "checkin" ] && return
   if [ ! -d "$dir" ]; then
@@ -77,15 +79,17 @@ check_window() { # <name> <dir> <kind> <harness> <session name> <trusted<TAB>ses
   [ "$trusted" = yes ] ||
     fail "$name: $(agent_display_name "$harness") does not trust $dir yet, so an unattended start would stall at the trust prompt: run 'bosun trust $dir'"
   if [ "$id" != - ]; then
-    if [ "$pid" != - ]; then
-      warn "$name: resumes $id, but it is running now (pid $pid); launch will skip it while that runs"
+    if [ "$pid" != - ] && [ "$pid" = "$own_pid" ]; then
+      ok "$name: running $session_name ($id) in its window (pid $pid)"
+    elif [ "$pid" != - ]; then
+      warn "$name: $session_name ($id) is open outside bosun's window (pid $pid, another terminal?); bosun starts no second copy of it while that runs"
     else
       ok "$name: resumes $session_name ($id) in $dir"
     fi
   elif is_orchestrator "$name"; then
     ok "$name: will start today's conversation '$session_name' in $dir"
   else
-    warn "$name: no session with this exact name in $dir; a new one will be created"
+    ok "$name: will start a new conversation '$session_name' in $dir (none by that name yet)"
   fi
 }
 
@@ -116,7 +120,7 @@ check_config_keys() {
 }
 
 check_config() {
-  local name dir kind harness queries="" fact answer answered=0 reason i=0
+  local name dir kind harness queries="" fact answer answered=0 reason own i=0
   local -a names=() facts=()
   if [ -f "$BOSUN_CONFIG_DIR/bosun.env" ]; then ok "bosun.env"; else warn "no bosun.env; using defaults"; fi
   check_config_keys
@@ -143,9 +147,12 @@ check_config() {
     fail "could not ask the windows' agents whether they trust their folders and which session each resumes (lib/agent_state.py windows): ${reason:-it exited $answered with ${#facts[@]} line(s) for $i window(s)}"
     return
   fi
+  # The agent running in each of bosun's own windows, by name (none while bosun is stopped).
+  own="$(window_agent_pids 2>/dev/null)" || own=""
   i=0
   while IFS=$'\t' read -r name dir kind _ _ harness; do
-    check_window "$name" "$dir" "$kind" "$harness" "${names[$i]}" "${facts[$i]}"
+    check_window "$name" "$dir" "$kind" "$harness" "${names[$i]}" "${facts[$i]}" \
+      "$(awk -F'\t' -v name="$name" '$1 == name { print $2; exit }' <<<"$own")"
     i=$((i + 1))
   done <<<"$SPECS"
 }
