@@ -34,7 +34,7 @@ WT_WINDOW="freshwt"
 WT_REPO="$HOME/Development/factrepo-wt" # a worktree of FACT_REPO: its .git is a file
 HOOK_MARKER="$HOME/pre-commit-hook-ran"
 WS_PLUGIN_MARKER="$HOME/workspace-plugin-hook-ran"
-WS_PLUGIN_SERVERS="$HOME/workspace-plugin-servers.log"
+WSP_REPO="$HOME/Development/wsprepo" # a repo with a plugin of its own in .agents/plugins/
 SIGN_IN_SECONDS=900
 CODE_WORD="ZEBRAFISH"
 
@@ -450,13 +450,6 @@ agy_approvals() {
   agy_command_fact git-commit-answer '^git commit'
 }
 
-agy_waits_at_dialog() {
-  agy_ask "$PUSH_MAIN_PROMPT" 360 || return 1
-  [ "$(window "$AGY_WINDOW" status)" = waiting ] || {
-    echo "it reads $(window "$AGY_WINDOW" status): $(tr '\n' ' ' <"$OUT/seen")"
-    return 1
-  }
-}
 agy_send_refused() {
   if bosun send --no-item "$AGY_WINDOW" "hello" >"$OUT/refused.txt" 2>&1; then
     echo "bosun send delivered into a window at a dialog"
@@ -467,14 +460,23 @@ agy_send_refused() {
     return 1
   }
 }
+# A push to main: bosun's plugin gives it no answer (the tasks never push to the default branch), and agy then
+# handles it itself. agy 1.5.5's reviewer asked; 1.5.13's let one to a remote in /tmp through without a dialog
+# (2026-11-20), so what it does is recorded, and the checks of a dialog run when there is one.
 agy_dialog() {
-  echo "agy's own reviewer: a push to main"
-  check "a push to main stops at agy's own dialog: the window reads waiting" agy_waits_at_dialog
+  echo "a push to main: no answer from bosun's plugin, then agy's own reviewer"
+  date +%s >"$OUT/approvals-since"
+  agy_ask "$PUSH_MAIN_PROMPT" 360 >"$OUT/main-push.txt" 2>&1
   agy_note_seen
-  agy_screen | grep -v '^[[:space:]]*$' | tail -8 | cut -c1-100 | sed 's/^/  dialog  /'
-  check "bosun send refuses a window at a dialog" agy_send_refused
-  agy_command_fact main-push-answer '^git push .*main'
-  check "Esc ends the dialog, and the window reads idle again" agy_dismiss "$AGY_WINDOW"
+  check "bosun's plugin gives a push to main no answer" agy_answered '^git push .*main' none
+  if [ "$(window "$AGY_WINDOW" status)" = waiting ]; then
+    fact main-push "agy's reviewer asked: the window read waiting"
+    agy_screen | grep -v '^[[:space:]]*$' | tail -8 | cut -c1-100 | sed 's/^/  dialog  /'
+    check "bosun send refuses a window at a dialog" agy_send_refused
+    check "Esc ends the dialog, and the window reads idle again" agy_dismiss "$AGY_WINDOW"
+  else
+    fact main-push "no dialog; the remote's main is now: $(git -C "$HOME/remotes/exporter.git" log -1 --format=%s main 2>&1)"
+  fi
 }
 
 agy_env_is_set() { # what the launch set, as the repo window's hooks saw it
@@ -517,24 +519,33 @@ agy_fact_repo() { # a repo with: a nested one, a bare one and a remote of it, an
   git config -f "$FACT_REPO/.git/modules/planted/config" core.fsmonitor "$HOME/fsmon.sh"
   printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$HOOK_MARKER" >"$FACT_REPO/.git/hooks/pre-commit" &&
     chmod +x "$FACT_REPO/.git/hooks/pre-commit" || return 1
-  agy_workspace_plugin || return 1
   git -C "$FACT_REPO" worktree add -q "$WT_REPO" -b wt-probe
 }
-# A plugin in the repo's own .agents/plugins/ (agy's docs say it is found there and loaded), which bosun's checks do
-# not look for: `agy plugin list --json` does not list it (seen on 1.5.13), and its hooks.json is not the
-# .agents/hooks.json a launch refuses. Its SessionStart hook leaves a marker and its server logs that it started.
-agy_workspace_plugin() {
-  local dir="$FACT_REPO/.agents/plugins/ws-probe"
-  rm -f "$WS_PLUGIN_MARKER" "$WS_PLUGIN_SERVERS"
-  mkdir -p "$dir" || return 1
+# A repo with a plugin in its own .agents/plugins/: agy 1.5.13 runs its hooks (a session showed it, 2026-11-20)
+# though `agy plugin list --json` does not list it, so bosun refuses to start a window there.
+agy_workspace_plugin_repo() {
+  local dir="$WSP_REPO/.agents/plugins/ws-probe"
+  rm -rf "$WSP_REPO" "$WS_PLUGIN_MARKER"
+  mkdir -p "$dir" && git -C "$WSP_REPO" init -q || return 1
   echo '{"name": "ws-probe", "version": "0.0.1"}' >"$dir/plugin.json"
   jq -n --arg marker "$WS_PLUGIN_MARKER" '{"ws-probe": {SessionStart: [{type: "command", command: "touch \($marker)"}]}}' \
     >"$dir/hooks.json"
-  jq -n --arg python "$(command -v python3)" --arg server "$ROOT/tests/sandbox/mcp_probe_server.py" --arg log "$WS_PLUGIN_SERVERS" \
-    '{mcpServers: {"ws-plug": {command: $python, args: [$server, "wsplug", $log]}}}' >"$dir/mcp_config.json"
 }
-agy_workspace_plugin_fact() {
-  fact workspace-plugin "a plugin in the repo's .agents/plugins/: its SessionStart hook $(ran_marker "$WS_PLUGIN_MARKER" RAN "did not run"); its MCP server $(if grep -q '^wsplug initialize' "$WS_PLUGIN_SERVERS" 2>/dev/null; then echo STARTED; else echo "did not start"; fi); agy plugin list --json in the repo: $(cd "$FACT_REPO" && agy plugin list --json 2>&1 | jq -c '[.[].name]' 2>/dev/null || echo "no JSON")"
+agy_refuses_workspace_plugin() {
+  agy_workspace_plugin_repo || return 1
+  if bosun send --new wsp "$WSP_REPO" "Reply with just: ready" >"$OUT/wsp.txt" 2>&1; then
+    echo "a window started on a repo with a plugin in .agents/plugins/"
+    return 1
+  fi
+  sleep 5
+  [ ! -e "$WS_PLUGIN_MARKER" ] || {
+    echo "the workspace plugin's hook ran"
+    return 1
+  }
+  grep -qF "would run outside agy's sandbox" "$STATE"/logs/launch-*.log || {
+    tail -5 "$OUT/wsp.txt"
+    return 1
+  }
 }
 agy_fact_turn() { # <prompt> [window]: a turn in the fact window; a dialog it stops at is left with Esc, and said
   local window="${2:-$FACT_WINDOW}"
@@ -569,7 +580,7 @@ agy_facts_window() {
   check "a window on that repo starts, new" bash -c 'bosun send --new "$1" "$2" "Reply with just: ready" >"$3" 2>&1 || { cat "$3"; exit 1; }' _ "$FACT_WINDOW" "$FACT_REPO" "$OUT/fresh.txt"
   check "... and reads idle" wait_for 120 idle "$FACT_WINDOW"
   check "... with agy's footer on its screen" wait_for 150 agy_ui_ready "$FACT_WINDOW"
-  agy_workspace_plugin_fact
+  check "a window on a repo with a plugin of its own in .agents/plugins/ is refused, and its hook never runs" agy_refuses_workspace_plugin
   agy_fact_turn "$CWD_PROMPT"
   agy_fact_turn "$GIT_DIR_PROMPT"
   fact sandbox-git-dirs "the top .git: $(written "$FACT_REPO/.git/probe-top"); a nested .git: $(written "$FACT_REPO/nested/.git/probe-nested"); the window asked: $(asked_word)"

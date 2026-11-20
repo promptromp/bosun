@@ -1,0 +1,22 @@
+{
+  "artifactDirectoryPath": "/Users/me/.gemini/antigravity-cli/brain/00000001-0000-4000-8000-000000000001",
+  "conversationId": "00000001-0000-4000-8000-000000000001",
+  "cwd": "/Users/me/Development/exporter",
+  "hookEventName": "PreToolUse",
+  "lastUserInput": "In this repo, do these steps in order. Run each as its own shell command with your command-running tool (never your file tools, never two steps in one command), and do not ask me anything. 1. git checkout -b feature-live 2. echo feature > FEATURE.txt 3. git add FEATURE.txt 4. git commit -m 'a feature' 5. git push origin feature-live 6. gh pr list 7. ls. Then reply with just: done",
+  "modelName": "gemini-4-argon-medium",
+  "stepIdx": 18,
+  "toolCall": {
+    "args": {
+      "CommandLine": "git push origin feature-live",
+      "WaitMsBeforeAsync": 5000,
+      "toolSummary": "Push feature-live branch"
+    },
+    "id": "call_10971969990992817912",
+    "name": "run_command"
+  },
+  "transcriptPath": "/Users/me/.gemini/antigravity-cli/brain/00000001-0000-4000-8000-000000000001/.system_generated/logs/transcript_full.jsonl",
+  "workspacePaths": [
+    "/Users/me/Development/exporter"
+  ]
+}

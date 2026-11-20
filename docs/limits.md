@@ -32,14 +32,17 @@ your setup, or when something behaves unexpectedly. Planned work and open questi
   but the live run on the real `agy` (`tests/sandbox.sh mac live agy`, which needs a person to sign in inside the
   throwaway VM) has not passed yet. They rely on `agy` internals that are not a public API, all in
   `lib/agy_state.py`: its hooks' JSON, its conversation files and `agy-sessions.json`'s source, the Keychain item of
-  its login, `~/.gemini/config/` and its screens. Verified on `agy` 1.5.5. Google has said nothing about another
+  its login, `~/.gemini/config/` and its screens. Verified on `agy` 1.5.5 (the VM), and its sessions on 1.5.13. Google has said nothing about another
   program driving `agy` unattended, and an `agy` account has been reported suspended under its terms.
 - **What an `agy` window cannot do.** It runs repo git hooks nowhere: an approved commit would otherwise run the
   repo's own hook code outside `agy`'s sandbox, so checks that a pre-commit hook makes run in CI only. Its login
   reaches only a desktop session, never ssh. A window starts only if `agy` has no MCP server its connectors list does
-  not name, the Antigravity app's included. It does not start in a folder with an `.agents/hooks.json` (in it or any
-  folder up to its repo's root), whose hooks `agy` would run outside its sandbox, nor with a log folder
-  (`BOSUN_LOG_DIR`) that has a space in its path.
+  not name, the Antigravity app's included. It does not start in a folder with an `.agents/hooks.json`, a plugin with
+  hooks in `.agents/plugins/` or an `.agents/plugins.json` (in it or any folder up to its repo's root), whose hooks
+  `agy` would run outside its sandbox, nor with a log folder (`BOSUN_LOG_DIR`) that has a space in its path. bosun's
+  plugin lets past `agy`'s sandbox only the `git`, `gh` and `bosun` commands of its list, and since `agy` 1.5.13 such
+  an approval is final (`agy`'s own reviewer no longer looks), so the list leaves out what a repo session never does:
+  a push that forces, deletes or writes the default branch, and `gh pr merge` or `close`.
 
 ## Starting work
 

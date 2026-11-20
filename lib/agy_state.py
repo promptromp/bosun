@@ -36,48 +36,63 @@ showed with no login (2026-11-20, `tests/fixtures/agy/no-login-1.5.13.txt`) is m
     not carry over to another HOME: agy there asks for a browser sign-in.
   - A launch gives agy its folder for the session, so bosun never writes agy's trust.
   - bosun's plugin (`agents/agy-plugin/`: plugin.json and hooks.json at its root, one named hook with the
-    events SessionStart, PreInvocation, Stop and, grouped under a matcher, PreToolUse) is installed with
-    `agy plugin install <dir>`, which copies it to <home>/config/plugins/bosun/ and asks nothing, and taken
-    back with `agy plugin uninstall bosun`, which leaves import_manifest.json (its imports null) behind, and
-    an empty <cli>/plugin_data/bosun/ (1.5.5) or, with no session run, an empty config/plugins/ (1.5.13).
-    `agy plugin list --json` lists only the installed plugins: not one in a workspace's .agents/plugins/,
-    which agy's own docs say it loads, nor its built-in ones (1.5.13). Its hooks run in every agy session of
+    events SessionStart, PreInvocation, Stop and, grouped under a matcher, PreToolUse) is installed with `agy
+    plugin install <dir>`, which copies it to <home>/config/plugins/bosun/ and asks nothing, and taken back
+    with `agy plugin uninstall bosun`, which leaves import_manifest.json (its imports null) behind, and an
+    empty <cli>/plugin_data/bosun/ (1.5.5) or, with no session run, an empty config/plugins/ (1.5.13). `agy
+    plugin list --json` lists only the installed plugins: not one in a workspace's .agents/plugins/, whose
+    hooks agy runs all the same (a 1.5.13 session, with PLUGIN_ROOT set and no PLUGIN_DATA; a launch therefore
+    refuses such a folder, lib/agy_workspace.py), nor its built-in ones. Its hooks run in every agy session of
     the machine, so each prints nothing and exits 0 without BOSUN_HOOK_CMD; a handler is a shell command, run
-    with agy's environment.
-    The payloads have conversationId, cwd, workspacePaths, lastUserInput and, for PreToolUse, toolCall.
-    SessionStart fires at a new conversation's first prompt and never on a resume, PreInvocation before each
-    model call, Stop at the end of a turn with fullyIdle false while a background command runs. A
-    PreToolUse answer approves the tool (and lifts the sandbox) only as exactly
+    with agy's environment. The payloads have conversationId, cwd, workspacePaths, lastUserInput and, for
+    PreToolUse, toolCall. SessionStart fires at a new conversation's first prompt and never on a resume,
+    PreInvocation before each model call, Stop at the end of a turn with fullyIdle false while a background
+    command runs. A PreToolUse answer approves the tool (and lifts the sandbox) only as exactly
     {"decision":"auto_approve","overwrite":{"BypassSandbox":true}}: {}, a blank decision and any exit but 0
     refuse the tool. PreInvocation's {"injectSteps":[{"errorMessage":{"userMessage":...}}],
-    "terminationBehavior":"terminate"} ends the turn before its model call. agy's own docs (1.5.13, in
-    <cli>/builtin/skills/agy-customizations/docs/hooks.md) add transcriptPath, modelName and hookEventName to
-    every payload, and terminationReason and continuationActive to Stop's; a hook runs in its plugin's folder
-    with PLUGIN_ROOT and PLUGIN_DATA set; they list allow, deny, ask and force_ask, not auto_approve.
+    "terminationBehavior":"terminate"} ends the turn before its model call. In 1.5.13 (a session, the payloads
+    in tests/fixtures/agy/hooks/*-1.5.13.json) every payload also has transcriptPath, artifactDirectoryPath,
+    modelName and hookEventName, Stop's terminationReason, executionNum and continuationActive,
+    PreInvocation's invocationNum and initialNumSteps, and a run_command's args are CommandLine,
+    WaitMsBeforeAsync and toolSummary (no folder). A hook runs in its plugin's folder; one past its timeout
+    (seconds) is killed and its tool fails ("signal: killed"), as a refusal. An auto_approve is final: agy's
+    reviewer, which asked for a push to main in 1.5.5, asks nothing once a hook approved (its docs list allow,
+    deny, ask and force_ask, not auto_approve, which still works). `--conversation` with an id agy does not
+    have logs "not found, ignoring --conversation flag" and starts a new conversation, whose SessionStart
+    fires.
 What passes the sandbox: in a bosun window the PreToolUse hook lifts agy's sandbox (network, writes anywhere)
 for a run_command only when the line reads the same to every shell, runs in the payload's workspace with no
 folder of its own in its args, and each of its simple commands is `git`, `gh` or `bosun` followed at once by a
 subcommand of that program's allow-list (GIT, GH, BOSUN) whose words pass that subcommand's rule. Everything
 else gets no answer, and agy handles it as it would without bosun. It is an allow-list because git and gh have
 too many ways to run another program or write outside the workspace (global options, aliases, globs, glued
-values, transports, a repository or submodule the agent wrote) for a list of dangers ever to be complete.
-Each of the three must also resolve, on the hook's PATH, to a full path outside the workspaces.
+values, transports, a repository or submodule the agent wrote) for a list of dangers ever to be complete. Each
+of the three must also resolve, on the hook's PATH, to a full path outside the workspaces. Since an approval
+is final (1.5.13), nothing the tasks never do is approved: no push that forces, deletes, pushes every branch,
+names no branch or writes main, master or the remote's default branch, and no `gh pr merge` or `close`. In the
+sandbox (1.5.13) each run_command gets a shell of its own, a worktree's `.git` file cannot be written, the
+network answers through a proxy (403 for what it refuses), and git's environment pins reach an approved
+command (`git rev-parse --git-path hooks` printed /dev/null, a planted pre-commit hook did not run).
 The screen:
   - The input box is the line starting with `>` between two lines of `─` (the rules, drawn grey,
     `ESC[90m`), and the lines under it down to the second rule. The empty box is the mark alone
     (`ESC[94m>ESC[39m`). Earlier messages in the history are drawn with the same mark under a rule too,
     so the last such line is the box, if a second rule closes it with the footer right under it. A dialog
     has a rule above its choices with a blank line under it, and the trust screen none: no box.
-  - Under the box a footer line says what agy is doing: it starts with `? for shortcuts` when it is idle
-    and `esc to cancel` when a turn runs. Text in the box blanks the hint. A background task adds `task(s)`
-    and `/tasks` to the idle footer (`· 1 task(s) · /tasks`), and a message queued with a turn running
-    changes it to `Press up to edit queued messages`. The model name, drawn faint, ends the line.
+  - Under the box a footer line says what agy is doing: it starts with `? for shortcuts` when it is idle and
+    `esc to cancel` when a turn runs (already when PreInvocation runs). 1.5.13 draws the idle hint, and a
+    placeholder in the empty box of a session that has had no prompt yet ("Auto mode: edits & safe commands
+    auto-approved (shift+tab to cycle)"), in a 256-colour grey (246): the placeholder is no typed text, and
+    the footer is read with its escapes taken off. The mode starts the model part (`auto · ...`). Text in the
+    box blanks the hint. A background task adds `task(s)` and `/tasks` to the idle footer (`· 1 task(s) ·
+    /tasks`), and a message queued with a turn running changes it to `Press up to edit queued messages`. The
+    model name, drawn faint, ends the line.
   - A dialog (running a command, say) shows "Run this command?", numbered choices with the mark on the
     selected one and `↑/↓ Navigate · ...`. Enter answers it. Its footer also says `esc to cancel`, so a
     dialog is looked for before the footer is read. The trust screen ("Do you trust the contents of this
     project?") and the sign-in screen ("You are currently not signed in") have the same `↑/↓ Navigate` line.
-  - Pressing Esc in a turn leaves "Interrupted" and the idle footer, and fires no hook, so the screen is
-    how a window that still reads busy is told from one that was cancelled (`screen_status`).
+  - Pressing Esc in a turn leaves "Interrupted" and the idle footer, and fires no hook (1.5.13 too), so the
+    screen is how a window that still reads busy is told from one that was cancelled (`screen_status`).
 """
 
 from __future__ import annotations
@@ -179,6 +194,11 @@ def agy_typed_text(lines: list[str]) -> str | None:
     return "\n".join([first, *(text.removeprefix(BOX_INDENT) for text in rest)]).strip()
 
 
+def plain_text(line: str) -> str:
+    """<line> without its escape sequences, faint runs kept."""
+    return OTHER_ESCAPES.sub("", SGR.sub("", line))
+
+
 def agy_question(capture: str) -> bool:
     """Whether agy is asking something on this screen (a dialog, the trust or the sign-in screen). A capture
     with escape sequences is read as the text it draws: they split `↑/↓ Navigate`, whose key is bold and
@@ -196,7 +216,9 @@ def screen_status(capture: str) -> str | None:
     lines = capture.splitlines()
     if agy_typed_text(lines) != "":
         return None
-    footer = next((visible(line).strip() for line in reversed(lines) if line.strip()), "")
+    # The footer is agy's own hint, never typed text, and 1.5.13 draws it grey (256-colour 246), which
+    # visible() drops as a placeholder: so it is read with every escape taken off.
+    footer = next((plain_text(line).strip() for line in reversed(lines) if plain_text(line).strip()), "")
     if not footer.startswith(IDLE_HINT):
         return None
     return "shell" if TASK_HINT in footer else "idle"
@@ -797,13 +819,15 @@ class Flags(NamedTuple):
 
 
 SENDING = frozenset({"verbose", "quiet", "progress", "dry-run", "force", "atomic", "ipv4", "ipv6"})
+# A push may not force (-f, --force, --force-with-lease, --force-if-includes), delete (-d, --delete,
+# --prune) or push every branch (--all, --branches, --mirror): what the tasks say a repo session never does,
+# and which agy's reviewer no longer stops once a hook approves a command (agy 1.5.13).
 PUSH_FLAGS = Flags(
-    "vqdnfu46",  # -u is --set-upstream here
-    SENDING
-    | {"all", "branches", "delete", "tags", "porcelain", "force-with-lease", "force-if-includes", "prune"}
-    | {"set-upstream", "verify", "follow-tags", "thin"},
-    frozenset({"force-with-lease="}),
+    "vqnu46",  # -u is --set-upstream here
+    (SENDING - {"force"}) | {"tags", "porcelain", "set-upstream", "verify", "follow-tags", "thin"},
+    frozenset(),
 )
+PROTECTED_BRANCHES = frozenset({"main", "master", "HEAD"})  # never a push's destination; nor the remote's own
 FETCH_FLAGS = Flags(
     "vqaftnpPk46",  # not -u (--upload-pack in clone), -m (every word a repository), -j or -o (take a value)
     SENDING
@@ -828,6 +852,47 @@ def names_a_remote(flags: Flags, words: list[str], cwd: str) -> bool:
     options = [word for word in words if word.startswith("-")]
     others = [word for word in words if not word.startswith("-")]
     return all(map(flags.allows, options)) and (not others or plain_remote(others[0], cwd))
+
+
+def remote_default_branch(remote: str, cwd: str) -> str:
+    """The branch <remote>'s HEAD names in the repository in <cwd> (`main` for origin/main), or ""."""
+    try:
+        done = subprocess.run(
+            ["git", "-C", cwd, "symbolic-ref", "--quiet", "--short", f"refs/remotes/{remote}/HEAD"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=REMOTE_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    found = done.stdout.strip() if done.returncode == 0 else ""
+    return found.removeprefix(f"{remote}/")
+
+
+def push_destination(refspec: str) -> str | None:
+    """The branch a push's <refspec> writes, None for one that forces (`+`), deletes (`:dst`), globs, or
+    names no destination of its own (`HEAD`, which is whatever is checked out)."""
+    if refspec.startswith(("+", ":")) or "*" in refspec:
+        return None
+    source, _, destination = refspec.partition(":")
+    branch = (destination or source).removeprefix("refs/heads/")
+    return None if not branch or branch in PROTECTED_BRANCHES else branch
+
+
+def push_shape(words: list[str], cwd: str) -> bool:
+    """`git push [<options>] <remote> <refspec>...`: a remote by its name, and each refspec a branch of its
+    own that is not main, master or the remote's default branch. A push with no refspec writes whatever
+    push.default and the upstream say (the default branch too), so it gets no approval either."""
+    if not names_a_remote(PUSH_FLAGS, words, cwd):
+        return False
+    remote, *refspecs = [word for word in words if not word.startswith("-")] or [""]
+    if not refspecs:
+        return False
+    default = remote_default_branch(remote, cwd)
+    destinations = [push_destination(refspec) for refspec in refspecs]
+    return all(branch is not None and branch != default for branch in destinations)
 
 
 def remote_shape(words: list[str], cwd: str) -> bool:
@@ -892,8 +957,8 @@ GIT: dict[str, GitRule] = {
     "tag": GitRule("F", MESSAGE_FILE),  # not -F/--file, which reads any file into a tag a push sends
     "fetch": GitRule(words=partial(names_a_remote, FETCH_FLAGS)),  # from a remote by its name only
     "pull": GitRule(STRATEGY, words=partial(names_a_remote, PULL_FLAGS)),  # likewise, and no strategy
-    "push": GitRule(words=partial(names_a_remote, PUSH_FLAGS)),  # to a remote by its name only: never a
-    # repository the agent wrote, whose hooks would run
+    "push": GitRule(words=push_shape),  # to a remote by its name only (never a repository the agent wrote,
+    # whose hooks would run), and a branch of its own: never the default one, never forced or deleted
     "rev-parse": GitRule(),  # reads
     "ls-files": GitRule(),  # reads
     "blame": GitRule(),  # reads
@@ -930,8 +995,8 @@ class GhRule(NamedTuple):
 # within their decision that gh may pass.
 GH: dict[str, GhRule] = {
     "pr": GhRule(  # reads and changes pull requests
-        frozenset({"view", "list", "status", "create", "checkout", "merge", "review", "comment", "diff"})
-        | {"ready", "edit", "close", "reopen", "checks"}
+        frozenset({"view", "list", "status", "create", "checkout", "review", "comment", "diff"})
+        | {"ready", "edit", "reopen", "checks"}  # never merge or close, which the tasks never do
     ),
     "issue": GhRule(  # reads and changes issues
         frozenset({"view", "list", "create", "comment", "edit", "close", "reopen", "status"})

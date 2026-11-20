@@ -173,6 +173,42 @@ class ServersTest(AgyCase):
         self.assertEqual(connectors_agy.servers(str(self.below), str(self.agent)), ["probe-dummy"])
 
 
+class WorkspacePluginTest(AgyCase):
+    """A plugin in the repo's own .agents/plugins/, which agy loads (1.5.13) though `agy plugin list` does not
+    list it."""
+
+    def plugin(self, folder: Path, name: str, servers: dict[str, object]) -> Path:
+        plugin = folder / ".agents" / "plugins" / name
+        plugin.mkdir(parents=True)
+        (plugin / "plugin.json").write_text(json.dumps({"name": f"{name}-kit"}))
+        self.write_servers(plugin, servers)
+        return plugin
+
+    def test_its_servers_are_named_for_the_plugin(self) -> None:
+        self.plugin(self.repo, "probe", {"docs": stdio(), "off": stdio(disabled=True)})
+        self.assertEqual(connectors_agy.servers(str(self.below), str(self.agent)), ["probe-kit_docs"])
+        code, _out, err = self.run_main("")
+        self.assertEqual(code, 1)
+        self.assertIn("probe-kit_docs", err)
+        self.assertIn("workspace plugin", err)
+        self.assertNotIn(NEVER_SHOWN, err)
+        self.assertEqual(self.run_main("probe-kit_docs")[0], 0)
+
+    def test_a_plugin_without_a_name_goes_by_its_folder(self) -> None:
+        plugin = self.plugin(self.below, "bare", {"docs": stdio()})
+        (plugin / "plugin.json").write_text("{}")
+        self.assertEqual(connectors_agy.servers(str(self.below), str(self.agent)), ["bare_docs"])
+
+    def test_a_plugins_json_refuses(self) -> None:
+        (self.repo / ".agents").mkdir()
+        (self.repo / ".agents" / "plugins.json").write_text('{"entries": []}')
+        code, _out, err = self.run_main("all")
+        self.assertEqual(code, 0)  # all: nothing is looked up
+        code, _out, err = self.run_main("")
+        self.assertEqual(code, 1)
+        self.assertIn("plugins.json", err)
+
+
 class RefusalTest(AgyCase):
     def test_a_global_server_not_listed_refuses(self) -> None:
         self.write_servers(self.config, {"acme-docs": stdio(), "acme-mail": stdio()})

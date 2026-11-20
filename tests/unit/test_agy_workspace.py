@@ -63,6 +63,22 @@ class WorkspaceHooksTest(unittest.TestCase):
         link.symlink_to(self.root / "nowhere.json")
         self.assertEqual(agy_workspace.workspace_hooks(self.deep), [link])
 
+    def test_a_plugins_hooks_in_the_workspace_count(self) -> None:
+        """agy 1.5.13 runs the hooks of a plugin in a workspace's .agents/plugins/ (seen 2026-11-20)."""
+        plugin = self.repo / ".agents" / "plugins" / "probe"
+        plugin.mkdir(parents=True)
+        (plugin / "plugin.json").write_text('{"name": "probe"}')
+        self.assertEqual(agy_workspace.workspace_hooks(self.deep), [])  # a plugin with no hooks runs none
+        (plugin / "hooks.json").write_text("{}")
+        self.assertEqual(agy_workspace.workspace_hooks(self.deep), [plugin / "hooks.json"])
+
+    def test_a_plugins_json_counts(self) -> None:
+        (self.deep / ".agents").mkdir()
+        registry = self.deep / ".agents" / "plugins.json"
+        registry.write_text('{"entries": [{"path": "/elsewhere"}]}')
+        planted = self.plant(self.deep)
+        self.assertEqual(agy_workspace.workspace_hooks(self.deep), [planted, registry])
+
     def test_the_command_prints_each_path_and_exits_0(self) -> None:
         planted = self.plant(self.repo)
         out = io.StringIO()

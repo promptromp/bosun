@@ -1,0 +1,12 @@
+{
+  "artifactDirectoryPath": "/Users/me/.gemini/antigravity-cli/brain/00000001-0000-4000-8000-000000000001",
+  "conversationId": "00000001-0000-4000-8000-000000000001",
+  "cwd": "/Users/me/Development/exporter",
+  "hookEventName": "SessionStart",
+  "lastUserInput": "This is bosun's exporter window, with nothing to do yet. Reply with just: ready",
+  "modelName": "gemini-4-argon-medium",
+  "transcriptPath": "/Users/me/.gemini/antigravity-cli/brain/00000001-0000-4000-8000-000000000001/.system_generated/logs/transcript_full.jsonl",
+  "workspacePaths": [
+    "/Users/me/Development/exporter"
+  ]
+}

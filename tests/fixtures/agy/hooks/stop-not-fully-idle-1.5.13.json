@@ -1,0 +1,17 @@
+{
+  "artifactDirectoryPath": "/Users/me/.gemini/antigravity-cli/brain/00000001-0000-4000-8000-000000000001",
+  "continuationActive": false,
+  "conversationId": "00000001-0000-4000-8000-000000000001",
+  "cwd": "/Users/me/Development/exporter",
+  "error": "",
+  "executionNum": 0,
+  "fullyIdle": false,
+  "hookEventName": "Stop",
+  "lastUserInput": "Start the command 'sleep 40' with your command-running tool as a background command (asynchronously: do not wait for it to finish), then reply with just: started",
+  "modelName": "gemini-4-argon-medium",
+  "terminationReason": "NO_TOOL_CALL",
+  "transcriptPath": "/Users/me/.gemini/antigravity-cli/brain/00000001-0000-4000-8000-000000000001/.system_generated/logs/transcript_full.jsonl",
+  "workspacePaths": [
+    "/Users/me/Development/exporter"
+  ]
+}

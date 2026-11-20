@@ -1,6 +1,6 @@
 """lib/agy_state.py's screen readers, over captures of real Antigravity CLI (agy) 1.5.5 in
-tests/fixtures/agy/screens/ (`.ansi` as `tmux capture-pane -e` gives them, `.txt` plain), and the sign-in
-screen of 1.5.13 (`sign-in-1.5.13`, captured with no login on 2026-11-20)."""
+tests/fixtures/agy/screens/ (`.ansi` as `tmux capture-pane -e` gives them, `.txt` plain), and those of 1.5.13
+(`*-1.5.13`: the sign-in screen with no login, the rest from a session; 2026-11-20)."""
 
 from __future__ import annotations
 
@@ -87,6 +87,29 @@ class QuestionTest(unittest.TestCase):
         for name in ("idle", "typed", "busy", "queued", "task", "cancelled"):
             with self.subTest(name):
                 self.assertFalse(agy_state.agy_question(plain(name)))
+
+
+class Screens1513Test(unittest.TestCase):
+    """agy 1.5.13's screens (2026-11-20, a simulated bosun window, masked): it draws the idle footer and the
+    box's placeholder in a 256-colour grey, which the footer's reading must keep and the box's must drop."""
+
+    def test_each_capture(self) -> None:
+        expected = {
+            "idle": ("idle", ""),  # the placeholder "Auto mode: ..." is no typed text
+            "idle-after-turn": ("idle", ""),
+            "busy": (None, ""),
+            "cancelled": ("idle", ""),  # Esc: Interrupted, and no hook
+            "task": ("shell", ""),
+            "typed": (None, "Remember the word PELICAN for later."),
+            "queued": (None, ""),
+            "dialog": ("waiting", None),
+            "other-conversation": ("idle", ""),  # bosun's guard stopped the turn
+        }
+        for name, (status, typed) in expected.items():
+            with self.subTest(name):
+                capture = "\n".join(ansi(f"{name}-1.5.13"))
+                self.assertEqual(agy_state.screen_status(capture), status)
+                self.assertEqual(agy_state.agy_typed_text(capture.splitlines()), typed)
 
 
 class ScreenStatusTest(unittest.TestCase):

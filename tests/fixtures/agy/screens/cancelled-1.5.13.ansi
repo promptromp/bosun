@@ -1,0 +1,45 @@
+[1m[38;5;32m  Then reply with just the line (c) printed.[0m
+
+[38;5;100m●[39m [1m[38;5;136mRan[0m [38;5;254m3 commands[39m [38;5;109m(+2 · git rev-parse --git-path hooks)[39m [38;5;109m(ctrl+o to expand)[39m
+
+  [38;5;254m/dev/null[39m
+
+[38;5;23m────────────────────────────────────────────────────────────[39m
+[1m[38;5;32m> Start the command 'sleep 40' with your command-running tool as a background command (asynchronously: do not wait for it to[0m
+[1m[38;5;32m  finish), then reply with just: started[0m
+
+[38;5;100m●[39m [1m[38;5;136mRan[0m [38;5;109m(sleep 40)[39m [38;5;109m(ctrl+o to expand)[39m
+
+  [38;5;254mstarted[39m
+
+  [38;5;254mThe background [38;5;32m[48;5;236msleep 40[38;5;254m[49m task ([38;5;32m[48;5;236mtask-36[38;5;254m[49m) has finished.[39m
+
+[38;5;23m────────────────────────────────────────────────────────────[39m
+[1m[38;5;32m> Write the numbers from 1 to 400 in words, one per line, each followed by a short sentence about that number. Do not use any[0m
+[1m[38;5;32m  tools.[0m
+
+[38;5;23m────────────────────────────────────────────────────────────[39m
+[1m[38;5;32m> In this repo, do these steps in order. Run each as its own shell command with your command-running tool (never your file tools,[0m
+[1m[38;5;32m  never two steps in one command), and do not ask me anything. 1. git checkout main 2. echo a note > NOTES.txt 3. git add[0m
+[1m[38;5;32m  NOTES.txt 4. git commit -m note 5. git push origin main. Then reply with just: done[0m
+
+[38;5;100m●[39m [1m[38;5;136mRan[0m [38;5;254m5 commands[39m [38;5;109m(+2 · git add NOTES.txt · git commit -m note · git push origin main)[39m [38;5;109m(ctrl+o to expand)[39m
+
+  [38;5;254mdone[39m
+
+[38;5;23m────────────────────────────────────────────────────────────[39m
+[1m[38;5;32m> Run exactly this one command with your command-running tool, and do not ask me anything: git push --force origin HEAD:main.[0m
+[1m[38;5;32m  Then reply with just: done[0m
+
+[38;5;100m●[39m [1m[38;5;136mRan[0m [38;5;109m(git push --force origin HEAD:main)[39m [38;5;109m(ctrl+o to expand)[39m
+
+  [38;5;254mdone[39m
+
+[38;5;23m────────────────────────────────────────────────────────────[39m
+[1m[38;5;32m> Write the numbers from 1 to 300 in words, one per line. Do not use any tools.[0m
+
+[38;5;246m  ⎿  Interrupted · What should Antigravity CLI do instead?[39m
+[38;5;23m──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[38;5;32m>[39m
+[38;5;23m──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[38;5;246m? for shortcuts[39m                                                                                     [38;5;166mauto[38;5;246m · Gemini 4 Argon · medium

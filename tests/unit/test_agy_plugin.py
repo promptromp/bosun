@@ -1,6 +1,6 @@
 """bosun's plugin in Antigravity CLI (agy): its hooks.json, the answers of lib/agy_state.py's HOOKS to the
-payloads of agy 1.5.5 in tests/fixtures/agy/hooks/, and SETUP, which installs and removes the plugin (with a
-fake `agy` and a scratch ~/.gemini)."""
+payloads of agy 1.5.5 and 1.5.13 in tests/fixtures/agy/hooks/, and SETUP, which installs and removes the
+plugin (with a fake `agy` and a scratch ~/.gemini)."""
 
 from __future__ import annotations
 
@@ -274,6 +274,35 @@ class StopTest(HookCase):
         self.assertEqual(agy_state.read_status("repo-conv")["status"], "shell")
 
 
+class Payloads1513Test(HookCase):
+    """The payloads agy 1.5.13 sent a simulated bosun window (2026-11-20, masked in tests/fixtures/agy/hooks/
+    as *-1.5.13.json): each handler reads them as it read 1.5.5's."""
+
+    conversation = "00000001-0000-4000-8000-000000000001"
+
+    def test_a_new_conversation_from_start_to_stop(self) -> None:
+        folder = str(self.root)
+        self.assertEqual(self.answer("SessionStart", payload("session-start-1.5.13", cwd=folder)), "")
+        self.assertEqual(agy_state.known_names()["repo-conv"]["id"], self.conversation)
+        self.assertEqual(self.answer("PreInvocation", payload("pre-invocation-1.5.13")), "")
+        self.assertEqual(agy_state.read_status("repo-conv")["status"], "busy")
+        self.assertEqual(self.answer("Stop", payload("stop-not-fully-idle-1.5.13")), "")
+        self.assertEqual(agy_state.read_status("repo-conv")["status"], "shell")
+        self.assertEqual(self.answer("Stop", payload("stop-1.5.13")), "")
+        self.assertEqual(agy_state.read_status("repo-conv")["status"], "idle")
+
+    def test_an_unknown_id_starts_another_conversation_which_the_guard_stops(self) -> None:
+        body = payload("pre-invocation-other-conversation-1.5.13")
+        answer = self.answer("PreInvocation", body, BOSUN_RESUMED="00000000-0000-4000-8000-000000000000")
+        self.assertEqual(json.loads(answer)["terminationBehavior"], "terminate")
+        self.assertNotEqual(body["conversationId"], "00000000-0000-4000-8000-000000000000")
+
+    def test_its_run_command_has_no_folder_of_its_own(self) -> None:
+        call = payload("pre-tool-use-1.5.13")["toolCall"]
+        self.assertEqual(call["name"], "run_command")
+        self.assertEqual(set(call["args"]), {"CommandLine", "WaitMsBeforeAsync", "toolSummary"})
+
+
 class PreToolUseTest(HookCase):
     """What passes agy's sandbox: allow-lists of git, gh and bosun subcommands, in the workspace the payload
     names (a scratch folder here, so that a path the agent wrote can be planted in it)."""
@@ -323,7 +352,6 @@ class PreToolUseTest(HookCase):
     def test_git_gh_and_bosun_are_approved(self) -> None:
         self.assert_approved(
             "git push origin feature",
-            "git push",
             "git pull --rebase",
             "git fetch origin",
             "git commit -m 'fix #12: a; b'",
@@ -345,7 +373,7 @@ class PreToolUseTest(HookCase):
             "git log --oneline -5; gh pr list",
             "git commit -m 'a\nb'",
             "git push -u origin feature",
-            "git push --force-with-lease origin HEAD:feature",
+            "git push origin HEAD:feature",
             "git cherry-pick -x abc123",
             "git add 'src/*.py'",
         )
@@ -390,9 +418,13 @@ class PreToolUseTest(HookCase):
             {"decision": "auto_approve", "overwrite": {"BypassSandbox": True}},
         )
 
+    def test_the_push_agy_1_5_13_sent_is_approved(self) -> None:
+        body = {**payload("pre-tool-use-1.5.13"), "cwd": str(self.work), "workspacePaths": [str(self.work)]}
+        self.assertEqual(self.answer("PreToolUse", body), APPROVAL)
+
     def test_every_subcommand_of_the_tables_is_approved_on_its_own(self) -> None:
-        for sub in agy_state.GIT:
-            self.assert_approved(f"git {sub}")
+        for sub in agy_state.GIT:  # a push names its remote and its branch
+            self.assert_approved(f"git {sub} origin feature" if sub == "push" else f"git {sub}")
         for sub, seconds in agy_state.GH.items():
             self.assert_approved(*(f"gh {sub} {second}" for second in (seconds.seconds or ("x",))))
         for sub in agy_state.BOSUN:
@@ -520,8 +552,46 @@ class PreToolUseTest(HookCase):
             "git remote get-url fork",
         )
         self.config_reads.clear()
-        self.assert_approved("git push origin feature", "git push")
+        self.assert_approved("git push origin feature")
         self.assertEqual(self.config_reads, [("origin", str(self.work))])
+
+    def test_a_push_that_forces_deletes_or_writes_the_default_branch_gets_no_answer(self) -> None:
+        """What the tasks say a repo session never does, and which agy 1.5.13's reviewer no longer stops once
+        a hook approves the command: agy then handles it as it would without bosun."""
+        self.assert_no_answer(
+            "git push",  # whatever push.default and the upstream say
+            "git push origin",
+            "git push origin HEAD",  # whatever is checked out
+            "git push origin main",
+            "git push origin master",
+            "git push origin HEAD:main",
+            "git push origin feature:refs/heads/main",
+            "git push origin feature main",
+            "git push -f origin feature",
+            "git push -uf origin feature",
+            "git push --force origin feature",
+            "git push --force-with-lease origin HEAD:feature",
+            "git push --force-with-lease=feature origin feature",
+            "git push --force-if-includes origin feature",
+            "git push origin +feature",
+            "git push origin :feature",
+            "git push -d origin feature",
+            "git push --delete origin feature",
+            "git push --prune origin 'refs/heads/*:refs/heads/*'",
+            "git push --all origin",
+            "git push --branches origin",
+            "git push --mirror origin",
+        )
+        self.assert_approved("git push -u origin feature", "git push origin HEAD:refs/heads/feature")
+
+    def test_a_push_to_the_remotes_own_default_branch_gets_no_answer(self) -> None:
+        with mock.patch.object(agy_state, "remote_default_branch", return_value="develop"):
+            self.assert_no_answer("git push origin develop", "git push origin HEAD:develop")
+            self.assert_approved("git push origin feature")
+
+    def test_gh_never_merges_or_closes_a_pull_request(self) -> None:
+        self.assert_no_answer("gh pr merge 5", "gh pr merge 5 --squash", "gh pr close 5")
+        self.assert_approved("gh pr ready 5", "gh pr reopen 5", "gh issue close 7")
 
     def test_bosun_ledger_never_approves_a_proposal(self) -> None:
         self.assert_no_answer(
