@@ -198,9 +198,11 @@ sandbox.
     (local branches and the remote's tracking refs), may differ from it only in case: on a case-insensitive
     disk git reads one's tracking ref and reflog for the other's. The push's commits since the default
     branch's tip may not touch anything under `.github/` (in any case; a workflow that runs on a push can hold
-    the repository's secrets) nor add or change a symlink, and that tip must be here to tell. Nothing in git's
+    the repository's secrets) nor add or change a symlink or a submodule (`.gitmodules`, a gitlink), and that
+    tip must be here to tell. Nothing in git's
     config may push elsewhere or more (`push.default` upstream or tracking, a remote's `push`, `pushurl` or
-    `mirror`, more than one `url`, any `url.*.insteadOf` or `pushInsteadOf`, `core.sshCommand` or `GIT_SSH_COMMAND`,
+    `mirror`, `receivepack` or `uploadpack`, more than one `url`, any `url.*.insteadOf` or `pushInsteadOf`,
+    `core.sshCommand` or `GIT_SSH_COMMAND`,
     `push.followTags`, `push.recurseSubmodules`, `submodule.recurse`).
     It can only write `refs/heads/<branch>`; tests run approved pushes against a real bare remote to show it.
     The cost: a fix-my-pr push to a PR branch the window did not create (someone else's, or one this clone
@@ -209,7 +211,8 @@ sandbox.
     `reset`, `commit`, `checkout`, `switch`, `merge`, `rebase`, `cherry-pick`, `revert`, `stash`, `rev-parse`,
     `ls-files`, `blame`, `describe`, `merge-base`, `remote` (listing only), `branch` only to make or list one
     (never delete, rename, copy, force, track or set an upstream), and `git fetch|pull [-q] [<remote>
-    [<branch>...]]` with plain branch names only (no `+`, `*`, `:`, `refs/`, `tag`, and no `--prune`, `--all`,
+    [<branch>...]]` with plain branch names only, and no remote with an `uploadpack` (no `+`, `*`, `:`, `refs/`,
+    `tag`, and no `--prune`, `--all`,
     `--multiple`, `--depth`, `-u` or `--recurse-submodules`, which can delete or overwrite local branches; `pull`
     also takes `--rebase`, `--no-rebase`, `--ff`, `--ff-only`, `--no-ff`). Never `tag`, `config`, `update-ref` or
     `symbolic-ref`. These local approvals stay: the sessions on a Mac approved every git command through the
@@ -302,9 +305,11 @@ window on `agy`.
   - the connector refusal with a server set up, and with none;
   - the morning `agy update` with automatic updates off;
   - a window on a repo with a plugin of its own in `.agents/plugins/` refused, its hook never run;
-  - whether `agy` picks up a workspace hooks file written while a window runs, reads `~/.agent` or a workspace
-    `.agents/config.json`, and, with bosun's approval withheld, runs a local `git checkout -b` and `git commit`
-    in auto mode on its own (each recorded as a fact).
+  - whether `agy` picks up a workspace hooks file written while a window runs, reads `~/.agent`, a workspace
+    `.agents/config.json` or a Gemini CLI extension in `.gemini/extensions/`, whether a hook sees the same
+    `GIT_*` variables as a command, and, with bosun's approval withheld, whether auto mode runs a local `git
+    checkout -b` and `git commit` on its own (each recorded as a fact: `midsession-hooks`, `home-agent`,
+    `workspace-config`, `gemini-extension`, `git-env`, `auto-local-git`).
 - **Rechecked on `agy` 1.5.13 with no login** (2026-11-20, `tests/fixtures/agy/no-login-1.5.13.txt`; a login does
   not carry over to another HOME, so only what needs none). Unchanged: `--version`'s bare `1.5.13`; every flag a
   launch passes is there, an unknown one is refused at start, and a value of `--effort` or `--mode` is not checked

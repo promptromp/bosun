@@ -329,6 +329,10 @@ class PreToolUseTest(HookCase):
         context = mock.patch.object(agy_state, "push_context", lambda _remote, _branch, _cwd: self.push)
         context.start()
         self.addCleanup(context.stop)
+        self.uploadpack = False  # whether a remote has an uploadpack (FetchRealTest reads a real config)
+        uploadpack = mock.patch.object(agy_state, "uploadpack_set", lambda _cwd: self.uploadpack)
+        uploadpack.start()
+        self.addCleanup(uploadpack.stop)
 
     @staticmethod
     def context(current: str = "feature", default: str = "main", **changes: Any) -> agy_state.PushContext:
@@ -923,6 +927,11 @@ class PreToolUseTest(HookCase):
             "git pull --ff-only",
         )
 
+    def test_a_fetch_with_an_uploadpack_set_gets_no_answer(self) -> None:
+        """Review round 4, R4-1."""
+        self.uploadpack = True
+        self.assert_no_answer("git fetch origin", "git fetch", "git pull --rebase origin main")
+
     def test_a_name_another_ref_has_in_another_case(self) -> None:
         """Review round 3, R3-1."""
         self.push = self.context(collides=True)
@@ -1394,6 +1403,8 @@ class DivergenceTest(RealGitCase):
             [f"url.{elsewhere}.pushInsteadOf", str(self.remote)],
             [f"url.{elsewhere}.insteadOf", "nothing:"],
             ["core.sshCommand", "ssh -o BatchMode=yes"],
+            ["remote.origin.receivepack", "git-receive-pack"],  # review round 4, R4-1
+            ["remote.origin.uploadpack", "git-upload-pack"],
         ):
             with self.subTest(args):
                 self.git(self.clone, "config", *args)
@@ -1419,6 +1430,16 @@ class FetchRealTest(RealGitCase):
             self.git(self.clone, *command.split()[1:])
         self.assertEqual(self.git(self.clone, "for-each-ref", "refs/heads"), before)
         self.assert_no_answer("git fetch --prune origin 'refs/heads/zz/*:refs/heads/*'")
+
+    def test_an_uploadpack_of_any_remote_refuses_a_fetch(self) -> None:
+        """Review round 4, R4-1: a program a fetch runs at the other end."""
+        self.git(self.clone, "config", "remote.origin.uploadpack", "git-upload-pack")
+        self.assert_no_answer("git fetch origin", "git fetch", "git pull --rebase origin main")
+        self.git(self.clone, "config", "--unset", "remote.origin.uploadpack")
+        self.git(self.clone, "config", "remote.other.uploadpack", "git-upload-pack")
+        self.assert_no_answer("git fetch origin")
+        self.git(self.clone, "config", "--unset", "remote.other.uploadpack")
+        self.assertEqual(self.asked("git fetch origin"), APPROVAL)
 
 
 class WorkflowPushTest(RealGitCase):
@@ -1466,6 +1487,23 @@ class WorkflowPushTest(RealGitCase):
         self.git(self.clone, "add", "-A")
         self.git(self.clone, "commit", "-q", "-m", "workflows as a link")
         self.assert_no_answer("git push origin nested")
+
+    def test_a_submodule_added_or_repointed(self) -> None:
+        """Review round 4, R4-2: .gitmodules changed, or a gitlink (mode 160000) added or changed."""
+        tip = self.git(self.clone, "rev-parse", "HEAD").strip()
+        for name, args in (
+            ("gitlink", ["update-index", "--add", "--cacheinfo", f"160000,{tip},vendor/x"]),
+            ("gitmodules", None),
+        ):
+            with self.subTest(name):
+                self.git(self.clone, "switch", "-q", "-C", f"sub-{name}", "origin/main")
+                if args:
+                    self.git(self.clone, *args)
+                    self.git(self.clone, "commit", "-q", "-m", "a gitlink")
+                else:
+                    self.commit_file(".gitmodules")
+                self.assert_no_answer(f"git push origin sub-{name}")
+                self.assertTrue(self.context_of(f"sub-{name}").workflows)
 
     def test_a_default_tip_this_clone_has_not_fetched_refuses(self) -> None:
         other = self.root / "other"

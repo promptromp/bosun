@@ -36,6 +36,8 @@ HOOK_MARKER="$HOME/pre-commit-hook-ran"
 MIDSESSION_MARKER="$HOME/midsession-hook-ran"
 CONFIG_MARKER="$HOME/workspace-config-hook-ran"
 HOME_AGENT_MARKER="$HOME/home-agent-hook-ran"
+EXTENSION_MARKER="$HOME/gemini-extension-hook-ran"
+EXTENSION_SERVERS="$HOME/gemini-extension-servers.log"
 WS_PLUGIN_MARKER="$HOME/workspace-plugin-hook-ran"
 WSP_REPO="$HOME/Development/wsprepo" # a repo with a plugin of its own in .agents/plugins/
 SIGN_IN_SECONDS=900
@@ -530,16 +532,38 @@ agy_fact_repo() { # a repo with: a nested one, a bare one and a remote of it, an
 # that leaves a marker; whether agy runs it is recorded (agy_unread_places_fact).
 marker_hooks() { jq -n --arg m "$1" '{probe: {PreInvocation: [{type: "command", command: "touch \($m)"}]}}'; } # <marker>
 agy_unread_places() {
-  rm -f "$CONFIG_MARKER" "$HOME_AGENT_MARKER"
-  mkdir -p "$FACT_REPO/.agents" "$HOME/.agent"
+  local extension="$FACT_REPO/.gemini/extensions/probe"
+  rm -f "$CONFIG_MARKER" "$HOME_AGENT_MARKER" "$EXTENSION_MARKER" "$EXTENSION_SERVERS"
+  mkdir -p "$FACT_REPO/.agents" "$HOME/.agent" "$extension"
   marker_hooks "$CONFIG_MARKER" | jq '{hooks: .}' >"$FACT_REPO/.agents/config.json"
   marker_hooks "$HOME_AGENT_MARKER" >"$HOME/.agent/hooks.json"
+  # Gemini CLI's layout of a workspace extension: its servers and hooks in gemini-extension.json.
+  marker_hooks "$EXTENSION_MARKER" | jq --arg python "$(command -v python3)" \
+    --arg server "$ROOT/tests/sandbox/mcp_probe_server.py" --arg log "$EXTENSION_SERVERS" \
+    '{name: "probe", version: "1.0.0", hooks: .probe, mcpServers: {probe: {command: $python, args: [$server, "gemext", $log]}}}' \
+    >"$extension/gemini-extension.json"
 }
 agy_unread_places_fact() {
   fact workspace-config "a hook in the workspace's .agents/config.json $(ran_marker "$CONFIG_MARKER" "RAN (bosun's launch does not refuse that file)" "did not run")"
   fact home-agent "a hook in ~/.agent/hooks.json $(ran_marker "$HOME_AGENT_MARKER" "RAN (bosun never looks in ~/.agent)" "did not run")"
-  rm -rf "$HOME/.agent" "$FACT_REPO/.agents/config.json"
+  fact gemini-extension "a workspace .gemini/extensions/probe/gemini-extension.json: its hook $(ran_marker "$EXTENSION_MARKER" RAN "did not run"); its MCP server $(if grep -q '^gemext initialize' "$EXTENSION_SERVERS" 2>/dev/null; then echo STARTED; else echo "did not start"; fi)"
+  rm -rf "$HOME/.agent" "$FACT_REPO/.agents/config.json" "$FACT_REPO/.gemini"
 }
+# Whether git sees the same in a hook's environment as in a command's: what the approval reads against what the
+# command runs with (GIT_DIR, GIT_CONFIG_*, a proxy). The command writes its environment into the workspace.
+agy_git_env_fact() {
+  rm -f "$FACT_REPO/cmd-env.txt" "$HOOKLOG/hook-git-env.txt"
+  agy_fact_turn "Run exactly this as one shell command with your command-running tool: env > cmd-env.txt. Then reply with just: done"
+  if [ ! -s "$FACT_REPO/cmd-env.txt" ] || [ ! -e "$HOOKLOG/hook-git-env.txt" ]; then
+    fact git-env "not compared: the command's or the hook's environment was not written"
+  elif diff <(grep '^GIT_' "$FACT_REPO/cmd-env.txt" | sort) "$HOOKLOG/hook-git-env.txt" >"$OUT/git-env.diff"; then
+    fact git-env "the same GIT_* variables in the hook and in the command ($(wc -l <"$HOOKLOG/hook-git-env.txt" | tr -d ' '))"
+  else
+    fact git-env "DIFFERENT GIT_* variables (< the command, > the hook): $(grep '^[<>]' "$OUT/git-env.diff" | sed 's/=.*//' | tr '\n' ' ')"
+  fi
+  rm -f "$FACT_REPO/cmd-env.txt"
+}
+
 # With bosun's approval withheld (the recorder's no-approval switch), whether agy's auto mode runs local git
 # commands that write .git on its own: the fact that would let the plugin's local git approvals go.
 agy_auto_local_git_fact() {
@@ -620,6 +644,7 @@ agy_facts_window() {
   agy_fact_turn "$STATUS_PROMPT"
   fact planted-fsmonitor-window "on the window's git status, with the git config bosun puts in its environment, the program of the planted submodule $(ran_word RAN "did not run"); asked: $(asked_word)"
   agy_shell_fact
+  agy_git_env_fact
   agy_auto_local_git_fact
   agy_midsession_hooks_fact
   agy_past_the_sandbox_fact

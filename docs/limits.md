@@ -65,6 +65,14 @@ your setup, or when something behaves unexpectedly. Planned work and open questi
   - "The window's own" branch means one this clone pushed first: a worktree, another window on the same clone,
     or you, pushing from it, count as the same clone, and a fetch after a colleague's push to that branch makes
     it count as its own again.
+  - A push of a branch that adds or repoints a submodule (`.gitmodules`, a gitlink) is refused, but CI that checks
+    out submodules still runs whatever the default branch's submodules name.
+  - Workspace files `agy` may read that the launch's check does not name: `.agents/config.json`,
+    `.agents/commands/`, `~/.agent/`, and a Gemini CLI extension in `.gemini/extensions/`. Whether `agy` reads
+    them is still to be recorded by the live VM run; until then a hook or server declared there would run.
+  - `agy` runs a command that takes longer than its wait in the background, so an approved command still running
+    (a slow `git pull`) can change the branch between a later push's approval and the push. The one-command rule
+    stops chains in one line, not overlaps between commands.
 
 ## Starting work
 

@@ -832,10 +832,19 @@ def fetch_shape(allowed: frozenset[str], words: list[str], cwd: str) -> bool:
     others = [word for word in words if not word.startswith("-")]
     if not all(option in allowed for option in options):
         return False
+    if uploadpack_set(cwd):
+        return False
     if not others:
         return True
     remote, *branches = others
     return all(map(fetched_branch, branches)) and plain_remote(remote, cwd)
+
+
+def uploadpack_set(cwd: str) -> bool:
+    """Whether any remote has an uploadpack of its own (a program a fetch runs at the other end), or that
+    cannot be told."""
+    code, _out = git_answer(cwd, "config", "--get-regexp", r"^remote\..*\.uploadpack$")
+    return code != 1
 
 
 def fetched_branch(word: str) -> bool:
@@ -903,11 +912,11 @@ def git_answer(
 def push_config(remote: str, cwd: str) -> list[tuple[str, str]] | None:
     """The config a push and the live check read differently or that widens a push, as (lower-case name,
     value) pairs, every value of a key kept: git's push settings, submodule.recurse, core.sshCommand, every
-    url.*.insteadOf and pushInsteadOf, and <remote>'s url, push, pushurl and mirror (the window's environment
-    included); None when it cannot be read."""
+    url.*.insteadOf and pushInsteadOf, and <remote>'s url, push, pushurl, mirror, receivepack and uploadpack
+    (the window's environment included); None when it cannot be read."""
     pattern = (
         r"^(push\.|submodule\.recurse$|core\.sshcommand$|url\..*\.(insteadof|pushinsteadof)$"
-        rf"|remote\.{re.escape(remote)}\.(url|push|pushurl|mirror)$)"
+        rf"|remote\.{re.escape(remote)}\.(url|push|pushurl|mirror|receivepack|uploadpack)$)"
     )
     code, out = git_answer(cwd, "config", "--null", "--get-regexp", pattern)
     if code == 1:  # none set
@@ -924,13 +933,13 @@ SSH_VARIABLES = ("GIT_SSH_COMMAND", "GIT_SSH")
 
 def push_reaches_elsewhere(pairs: list[tuple[str, str]], remote: str) -> bool:
     """Whether the push could reach another repository than the live check reads: more than one URL for the
-    remote (a push goes to each), a pushurl, any URL rewrite, or an ssh command of the config's or the
-    environment's."""
+    remote (a push goes to each), a pushurl, a program of its own at the other end (receivepack, which only
+    the push runs; uploadpack), any URL rewrite, or an ssh command of the config's or the environment's."""
     keys = [key for key, _ in pairs]
     prefix = f"remote.{remote.casefold()}."
     return (
         keys.count(f"{prefix}url") > 1
-        or f"{prefix}pushurl" in keys
+        or any(f"{prefix}{name}" in keys for name in ("pushurl", "receivepack", "uploadpack"))
         or "core.sshcommand" in keys
         or any(REWRITES.fullmatch(key) for key in keys)
         or any(os.environ.get(name) for name in SSH_VARIABLES)
@@ -1020,16 +1029,18 @@ def made_by_this_clones_push(remote: str, branch: str, cwd: str) -> str:
 
 
 GITHUB = ".github"  # workflows, actions, and what CI reads; in any case
-LINK_MODE = "120000"
+GITMODULES = ".gitmodules"  # which repositories and commits a checkout with submodules fetches
+GUARDED_MODES = frozenset({"120000", "160000"})  # a symlink, a gitlink (a submodule's commit)
 
 
 def touches_github_or_links(raw: str) -> bool:
-    """Whether a `git diff --raw -z` output changes anything under .github, or .github itself, or a link."""
+    """Whether a `git diff --raw -z` output changes anything under .github, or .github itself, a symlink, a
+    submodule (.gitmodules, or a gitlink added, changed or removed)."""
     fields = raw.split("\0")
     for meta, path in zip(fields[0::2], fields[1::2], strict=False):
-        modes = meta.lstrip(":").split()[:2]
+        modes = set(meta.lstrip(":").split()[:2])
         folded = path.casefold()
-        if LINK_MODE in modes or folded == GITHUB or folded.startswith(f"{GITHUB}/"):
+        if modes & GUARDED_MODES or folded in {GITHUB, GITMODULES} or folded.startswith(f"{GITHUB}/"):
             return True
     return False
 
