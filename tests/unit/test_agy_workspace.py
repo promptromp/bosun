@@ -233,6 +233,40 @@ class Round2Test(WorkspaceCase):
         self.assertEqual(self.found(outside), [outside / ".gemini" / "settings.json"])
 
 
+class Round3Test(WorkspaceCase):
+    """Review round 3, R3-S4: `mcp*` with any extension and `settings*.json`, under `.agents` and below home
+    under `.agent`; home's own `.agent` is never looked at (it may be agy's)."""
+
+    def test_more_names_under_agents(self) -> None:
+        names = ("mcp_servers.yaml", "mcp.toml", "MCP", "settings.local.json", "deep/settings-x.json")
+        for relative in names:
+            with self.subTest(relative):
+                path = self.plant(self.deep, relative)
+                self.assertIn(path, self.found())
+                shutil.rmtree(self.deep / ".agents")
+
+    def test_an_mcp_folder(self) -> None:
+        (self.deep / ".agents" / "mcp").mkdir(parents=True)
+        self.assertEqual(self.found(), [self.deep / ".agents" / "mcp"])
+
+    def test_the_same_names_under_agent_below_home(self) -> None:
+        planted = self.repo / ".agent" / "mcp.yaml"
+        planted.parent.mkdir()
+        planted.write_text("x")
+        self.assertEqual(self.found(), [planted])
+
+    def test_home_agent_is_never_looked_at(self) -> None:
+        (self.home / ".agent").mkdir()
+        (self.home / ".agent" / "mcp.json").write_text("{}")
+        (self.home / ".agent" / "settings.local.json").write_text("{}")
+        self.assertEqual(self.found(), [])
+
+    def test_a_config_json_is_left_to_the_vm_fact(self) -> None:
+        """Not refused: whether agy reads a workspace config.json is the VM run's fact (workspace-config)."""
+        self.plant(self.repo, "config.json")
+        self.assertEqual(self.found(), [])
+
+
 class WorkspaceFoldersTest(WorkspaceCase):
     def test_up_to_the_repos_root_for_the_connectors(self) -> None:
         self.assertEqual(agy_workspace.workspace_folders(self.deep), [self.deep, self.deep.parent, self.repo])

@@ -34,6 +34,8 @@ WT_WINDOW="freshwt"
 WT_REPO="$HOME/Development/factrepo-wt" # a worktree of FACT_REPO: its .git is a file
 HOOK_MARKER="$HOME/pre-commit-hook-ran"
 MIDSESSION_MARKER="$HOME/midsession-hook-ran"
+CONFIG_MARKER="$HOME/workspace-config-hook-ran"
+HOME_AGENT_MARKER="$HOME/home-agent-hook-ran"
 WS_PLUGIN_MARKER="$HOME/workspace-plugin-hook-ran"
 WSP_REPO="$HOME/Development/wsprepo" # a repo with a plugin of its own in .agents/plugins/
 SIGN_IN_SECONDS=900
@@ -520,7 +522,32 @@ agy_fact_repo() { # a repo with: a nested one, a bare one and a remote of it, an
   git config -f "$FACT_REPO/.git/modules/planted/config" core.fsmonitor "$HOME/fsmon.sh"
   printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$HOOK_MARKER" >"$FACT_REPO/.git/hooks/pre-commit" &&
     chmod +x "$FACT_REPO/.git/hooks/pre-commit" || return 1
+  agy_unread_places
   git -C "$FACT_REPO" worktree add -q "$WT_REPO" -b wt-probe
+}
+# Two places bosun's launch does not refuse, planted before the facts window starts: a workspace
+# .agents/config.json, and ~/.agent (which may be agy's own, so bosun never looks there). Each carries a hook
+# that leaves a marker; whether agy runs it is recorded (agy_unread_places_fact).
+marker_hooks() { jq -n --arg m "$1" '{probe: {PreInvocation: [{type: "command", command: "touch \($m)"}]}}'; } # <marker>
+agy_unread_places() {
+  rm -f "$CONFIG_MARKER" "$HOME_AGENT_MARKER"
+  mkdir -p "$FACT_REPO/.agents" "$HOME/.agent"
+  marker_hooks "$CONFIG_MARKER" | jq '{hooks: .}' >"$FACT_REPO/.agents/config.json"
+  marker_hooks "$HOME_AGENT_MARKER" >"$HOME/.agent/hooks.json"
+}
+agy_unread_places_fact() {
+  fact workspace-config "a hook in the workspace's .agents/config.json $(ran_marker "$CONFIG_MARKER" "RAN (bosun's launch does not refuse that file)" "did not run")"
+  fact home-agent "a hook in ~/.agent/hooks.json $(ran_marker "$HOME_AGENT_MARKER" "RAN (bosun never looks in ~/.agent)" "did not run")"
+  rm -rf "$HOME/.agent" "$FACT_REPO/.agents/config.json"
+}
+# With bosun's approval withheld (the recorder's no-approval switch), whether agy's auto mode runs local git
+# commands that write .git on its own: the fact that would let the plugin's local git approvals go.
+agy_auto_local_git_fact() {
+  touch "$HOOKLOG/no-approval"
+  agy_fact_turn "Run each of these as its own shell command with your command-running tool: git checkout -b auto-probe, then git commit --allow-empty -m auto-probe. Then reply with just: done"
+  rm -f "$HOOKLOG/no-approval"
+  fact auto-local-git "with no approval from bosun: the branch auto-probe $(git -C "$FACT_REPO" rev-parse --verify -q refs/heads/auto-probe >/dev/null && echo "was made" || echo "was not made"); its commit $(git -C "$FACT_REPO" log -1 --format=%s auto-probe 2>/dev/null | grep -qx auto-probe && echo landed || echo "did not land"); asked: $(asked_word)"
+  git -C "$FACT_REPO" checkout -q - 2>/dev/null
 }
 # A repo with a plugin in its own .agents/plugins/: agy 1.5.13 runs its hooks (a session showed it, 2026-11-20)
 # though `agy plugin list --json` does not list it, so bosun refuses to start a window there.
@@ -581,6 +608,7 @@ agy_facts_window() {
   check "a window on that repo starts, new" bash -c 'bosun send --new "$1" "$2" "Reply with just: ready" >"$3" 2>&1 || { cat "$3"; exit 1; }' _ "$FACT_WINDOW" "$FACT_REPO" "$OUT/fresh.txt"
   check "... and reads idle" wait_for 120 idle "$FACT_WINDOW"
   check "... with agy's footer on its screen" wait_for 150 agy_ui_ready "$FACT_WINDOW"
+  agy_unread_places_fact
   check "a window on a repo with a plugin of its own in .agents/plugins/ is refused, and its hook never runs" agy_refuses_workspace_plugin
   agy_fact_turn "$CWD_PROMPT"
   agy_fact_turn "$GIT_DIR_PROMPT"
@@ -592,6 +620,7 @@ agy_facts_window() {
   agy_fact_turn "$STATUS_PROMPT"
   fact planted-fsmonitor-window "on the window's git status, with the git config bosun puts in its environment, the program of the planted submodule $(ran_word RAN "did not run"); asked: $(asked_word)"
   agy_shell_fact
+  agy_auto_local_git_fact
   agy_midsession_hooks_fact
   agy_past_the_sandbox_fact
   agy_worktree_fact

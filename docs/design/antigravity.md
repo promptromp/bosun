@@ -169,9 +169,11 @@ sandbox.
   if the plugin made it). (Changed: the first version installed it at `bosun init` and `bosun update`; the
   first launch on `agy` covers both, and windows added later.)
 - **What bosun's plugin approves.** Its `PreToolUse` hook answers `auto_approve` with `BypassSandbox` for a
-  `run_command` whose every command is `git`, `gh` or `bosun` in one of the exact shapes of its allowlist
-  (`GIT`, `GH` and `BOSUN` in `lib/agy_state.py`: no global option before the subcommand, no `cd`, no prefix, no
-  glob, run in the payload's own workspace), in bosun windows only, and nothing for every other command. A
+  `run_command` that is one simple command alone (no `&&`, `||` or `;`, no pipe, `&`, redirection, group,
+  substitution, wrapper or newline: what runs before a push in the same line could change what its approval
+  read), and that command `git`, `gh` or `bosun` in one of the exact shapes of its allowlist (`GIT`, `GH` and
+  `BOSUN` in `lib/agy_state.py`: no global option before the subcommand, no `cd`, no prefix, no glob, run in
+  the payload's own workspace), in bosun windows only, and nothing for every other command. A
   program that does not resolve on the hook's `PATH` to a full path outside the payload's workspaces (a `git`
   the agent planted and put first) gets none either. `allow` is not enough: it still shows `agy`'s dialog, and
   the command still runs in the sandbox with no network. (Changed: the first version said "approves".) Nothing
@@ -192,26 +194,36 @@ sandbox.
     closed. The branch is the window's own when it is not on the remote yet, or when its tracking ref
     (`refs/remotes/<remote>/<branch>`) was first made by this clone's own push (the first entry of its reflog
     is "update by push"; no reflog is no record) and the remote's tip is still that ref (nobody pushed since).
-    The push's commits since the default branch's tip may not change anything under `.github/workflows/` or
-    `.github/actions/` (a workflow that runs on a push can hold the repository's secrets), and that tip must be
-    here to tell. Nothing in git's config may push elsewhere or more (`push.default` upstream or tracking, a
-    remote's `push`, `pushurl` or `mirror`, `push.followTags`, `push.recurseSubmodules`, `submodule.recurse`).
+    The live call lists all the remote's branches (`HEAD 'refs/heads/*'`), and no other branch, there or here
+    (local branches and the remote's tracking refs), may differ from it only in case: on a case-insensitive
+    disk git reads one's tracking ref and reflog for the other's. The push's commits since the default
+    branch's tip may not touch anything under `.github/` (in any case; a workflow that runs on a push can hold
+    the repository's secrets) nor add or change a symlink, and that tip must be here to tell. Nothing in git's
+    config may push elsewhere or more (`push.default` upstream or tracking, a remote's `push`, `pushurl` or
+    `mirror`, more than one `url`, any `url.*.insteadOf` or `pushInsteadOf`, `core.sshCommand` or `GIT_SSH_COMMAND`,
+    `push.followTags`, `push.recurseSubmodules`, `submodule.recurse`).
     It can only write `refs/heads/<branch>`; tests run approved pushes against a real bare remote to show it.
     The cost: a fix-my-pr push to a PR branch the window did not create (someone else's, or one this clone
     fetched) gets no approval and is left to `agy`'s own review.
   - git's local and read-only subcommands: `status`, `log`, `diff`, `show`, `add`, `rm`, `mv`, `restore`,
-    `reset`, `commit`, `checkout`, `switch`, `merge`, `rebase`, `cherry-pick`, `revert`, `stash`, `fetch` and
-    `pull` (from a remote by its name), `rev-parse`, `ls-files`, `blame`, `describe`, `merge-base`, `remote`
-    (listing only), and `branch` only to make or list one (never delete, rename, copy, force, track or set an
-    upstream). Never `tag`, `config`, `update-ref` or `symbolic-ref`.
+    `reset`, `commit`, `checkout`, `switch`, `merge`, `rebase`, `cherry-pick`, `revert`, `stash`, `rev-parse`,
+    `ls-files`, `blame`, `describe`, `merge-base`, `remote` (listing only), `branch` only to make or list one
+    (never delete, rename, copy, force, track or set an upstream), and `git fetch|pull [-q] [<remote>
+    [<branch>...]]` with plain branch names only (no `+`, `*`, `:`, `refs/`, `tag`, and no `--prune`, `--all`,
+    `--multiple`, `--depth`, `-u` or `--recurse-submodules`, which can delete or overwrite local branches; `pull`
+    also takes `--rebase`, `--no-rebase`, `--ff`, `--ff-only`, `--no-ff`). Never `tag`, `config`, `update-ref` or
+    `symbolic-ref`. These local approvals stay: the sessions on a Mac approved every git command through the
+    plugin, so no fact shows `agy`'s auto mode running them on its own (its sandbox keeps `.git` from being
+    written); the VM run records it (`auto-local-git`), and they go if it shows auto runs them.
   - gh: `pr create` only as a draft (`-d`/`--draft`) and with `-H`/`--head <branch>`, once, a branch of the
     window's own by the push rule that is already on `origin` by this clone's push, so that `gh` never pushes
     or forks for it, and a `--base`, if any, that is `origin`'s default branch; `pr review` only approving or
     commenting, `pr view`,
     `list`, `status`, `checks` and `diff`, `run view`, `list` and `watch`, `issue view` and `list`, `repo view`
     and `status`, each with its own options only (no `-R`/`--repo`, no `--web`, no URL, no `@file`, a short
-    option never glued or clustered), and `gh api` only as a read (no method but GET, no field, input or header,
-    no path whose first segment is `graphql`, read without leading slashes or a query). Never `pr merge`, `close`, `ready`, `edit`, `comment` or `checkout`, nor `--request-changes`. A
+    option never glued or clustered), and `gh api` only as a read (no method but GET, no field, input or header)
+    of a path that, percent-decoded, is of `[A-Za-z0-9/_.-]` only, with no empty, `.` or `..` segment, no query,
+    and no `graphql` anywhere. Never `pr merge`, `close`, `ready`, `edit`, `comment` or `checkout`, nor `--request-changes`. A
     reply in a review thread (fix-my-pr) is a `gh api` call with a field, so it is left to `agy` too.
   - bosun: `ledger` (never `approve`) and the commands that only read; never `send` or `delegate`, since a repo
     session reports through the ledger and messages no other session.
@@ -236,10 +248,12 @@ sandbox.
   bosun relaunches windows by itself. So a launch is refused, failing closed, when a customization folder in
   the window's folder or any folder above it up to and including the home folder (by the path given and by its
   resolved path; up to `/` for a folder outside the home folder) holds, at any depth, a link, a folder named
-  `plugins` or like `*hooks*`, or a file named like `*hooks*`, `plugin.json`, `plugins.json`, `mcp*.json` or
-  `settings.json`, or is itself a link, too large to look through or unreadable (`lib/agy_workspace.py`), with
+  `plugins` or like `*hooks*` or `mcp*`, or a file named like `*hooks*`, `plugin.json`, `plugins.json`, `mcp*` (any
+  extension) or `settings*.json`, or is itself a link, too large to look through or unreadable (`lib/agy_workspace.py`), with
   the path in the message. The customization folders are `.agents`, and `.agent` and `.gemini` in every folder
-  but the home folder itself: `~/.gemini` is `agy`'s own global config, never looked at. Rules, skills and
+  but the home folder itself: `~/.gemini` is `agy`'s own global config, and `~/.agent` may be `agy`'s own, so
+  neither is looked at. Whether `agy` reads `~/.agent` or a workspace `.agents/config.json` is the VM run's fact
+  (`home-agent`, `workspace-config`). Rules, skills and
   workflows there are left alone. The check runs when a window starts, not while it runs: a hooks file the
   agent writes in its workspace during a session is the VM run's fact (`midsession-hooks`). It is also refused
   when the log folder has a space in it: the adapter finds a window by the one-word path after `--log-file` in
@@ -288,7 +302,9 @@ window on `agy`.
   - the connector refusal with a server set up, and with none;
   - the morning `agy update` with automatic updates off;
   - a window on a repo with a plugin of its own in `.agents/plugins/` refused, its hook never run;
-  - whether `agy` picks up a workspace hooks file written while a window runs (recorded as a fact).
+  - whether `agy` picks up a workspace hooks file written while a window runs, reads `~/.agent` or a workspace
+    `.agents/config.json`, and, with bosun's approval withheld, runs a local `git checkout -b` and `git commit`
+    in auto mode on its own (each recorded as a fact).
 - **Rechecked on `agy` 1.5.13 with no login** (2026-11-20, `tests/fixtures/agy/no-login-1.5.13.txt`; a login does
   not carry over to another HOME, so only what needs none). Unchanged: `--version`'s bare `1.5.13`; every flag a
   launch passes is there, an unknown one is refused at start, and a value of `--effort` or `--mode` is not checked

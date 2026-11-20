@@ -8,14 +8,14 @@ Usage: agy_workspace.py hooks <dir>
            above it up to and including the home folder (up to `/` for a folder outside it), by the path
            given and by its resolved path, at `.agents`, and at `.agent` and `.gemini` in each of those
            folders but the home folder itself (`~/.gemini` is agy's own global config, never looked at). In
-           such a folder it finds, at any depth: a link, a folder named `plugins` or like `*hooks*` (agy
-           1.5.13 runs the hooks of a plugin in `.agents/plugins/`, seen 2026-11-20, though `agy plugin
-           list` does not list it), and a file named like `*hooks*`, `plugin.json`, `plugins.json`,
-           `mcp*.json` or `settings.json`. Rules, skills and workflows are left alone. It fails closed: a
-           customization folder that is a link or a file, too large to look through, or unreadable, is
-           printed too. agy runs a workspace's hooks outside its sandbox, so a window with any of these is
-           not started (`check_agy_workspace`, lib/launch/agy.sh). The check runs when a window starts, not
-           while it runs.
+           such a folder it finds, at any depth: a link, a folder named `plugins` or like `*hooks*` or
+           `mcp*` (agy 1.5.13 runs the hooks of a plugin in `.agents/plugins/`, seen 2026-11-20, though `agy
+           plugin list` does not list it), and a file named like `*hooks*`, `plugin.json`, `plugins.json`,
+           `mcp*` (any extension) or `settings*.json`. Rules, skills and workflows are left alone. It fails
+           closed: a customization folder that is a link or a file, too large to look through, or
+           unreadable, is printed too. agy runs a workspace's hooks outside its sandbox, so a window with
+           any of these is not started (`check_agy_workspace`, lib/launch/agy.sh). The check runs when a
+           window starts, not while it runs.
 
 Exit codes: 0 done, 2 a command line that cannot be read.
 """
@@ -32,8 +32,8 @@ AGENTS = ".agents"
 BELOW_HOME = (".agent", ".gemini")  # looked at in every folder but home itself, whose .gemini is agy's own
 PLUGINS_DIR = Path(AGENTS) / "plugins"  # a plugin per folder, found and loaded by agy
 PLUGINS_FILE = Path(AGENTS) / "plugins.json"  # registers plugins from other folders
-REFUSED_FILES = ("*hooks*", "plugin.json", "plugins.json", "mcp*.json", "settings.json")  # case-folded globs
-REFUSED_FOLDERS = ("plugins", "*hooks*")
+REFUSED_FILES = ("*hooks*", "plugin.json", "plugins.json", "mcp*", "settings*.json")  # case-folded globs
+REFUSED_FOLDERS = ("plugins", "*hooks*", "mcp*")
 MAX_ENTRIES = 5000  # a folder with more than this is not looked through, and refuses
 COMMAND_WORDS = 2  # `hooks <dir>`
 

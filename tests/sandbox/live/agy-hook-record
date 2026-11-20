@@ -8,6 +8,7 @@
 # its exit status. And it appends one line to ~/hooklog/<event>.jsonl:
 #   event, ts (seconds), payload (agy's JSON, as a string), answer, code, env (only the variables the run
 #   asks about: none is a secret), and screen (the last lines of the window's tmux pane, when the hook ran).
+# With ~/hooklog/no-approval, a PreToolUse's answer is withheld (printed and recorded as none).
 # A PreInvocation also leaves, a second later, the pane's last lines in ~/hooklog/after-pre-invocation.txt
 # (ts, window, lines joined with ~): whether the footer of a window says it is busy right after the hook.
 set -uo pipefail
@@ -24,6 +25,12 @@ screen() { # the last lines of the window's pane, without blank ones
 payload="$(cat)"
 answer="$(printf '%s' "$payload" | "$BOSUN_HOOK_CMD" hook agent --harness agy --event "$event")"
 code=$?
+# With ~/hooklog/no-approval there, a PreToolUse gets no answer, as if bosun approved nothing: what agy's auto
+# mode then does on its own is what the run records.
+if [ "$event" = PreToolUse ] && [ -e "$dir/no-approval" ]; then
+	answer=""
+	code=0
+fi
 printf '%s' "$answer"
 
 env_json="$(jq -n '[$ARGS.positional[] | {key: ., value: env[.]} | select(.value != null)] | from_entries' \

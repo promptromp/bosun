@@ -62,16 +62,18 @@ showed with no login (2026-11-20, `tests/fixtures/agy/no-login-1.5.13.txt`) is m
     fires.
 What passes the sandbox: in a bosun window the PreToolUse hook lifts agy's sandbox (network, writes anywhere)
 for a run_command only when the line reads the same to every shell, runs in the payload's workspace with no
-folder of its own in its args, and each of its simple commands is `git`, `gh` or `bosun` in one of the exact
-shapes of the allowlist (GIT, GH, BOSUN). Everything else gets no answer, and agy handles it as it would
-without bosun. Each of the three must also resolve, on the hook's PATH, to a full path outside the workspaces.
-Since agy 1.5.13 takes the approval as final (its reviewer asks nothing after it), the allowlist holds only
-what the task files let a repo session do, and fails closed: a push only as `git push [-u] <remote> <branch>`
-of the branch checked out, a branch of the window's own (not on the remote yet, or there by this clone's push
-with nobody's since, read live with ls-remote), never main, master or the remote's default branch, and never
-one whose commits change workflows (`push_shape`); git's local and read-only subcommands, `branch` only to
-make or list one; a draft PR from such a branch already pushed, a review that approves or comments, and reads
-from gh, with `gh api` only as GET (GH); bosun's ledger and reads, never `send` or `delegate`. In the sandbox
+folder of its own in its args, and is one simple command alone (no `&&`, `||`, `;` or any other operator),
+`git`, `gh` or `bosun` in one of the exact shapes of the allowlist (GIT, GH, BOSUN). Everything else gets no
+answer, and agy handles it as it would without bosun. Each of the three must also resolve, on the hook's PATH,
+to a full path outside the workspaces. Since agy 1.5.13 takes the approval as final (its reviewer asks nothing
+after it), the allowlist holds only what the task files let a repo session do, and fails closed: a push only
+as `git push [-u] <remote> <branch>` of the branch checked out, a branch of the window's own (not on the
+remote yet, or there by this clone's push with nobody's since, read live with ls-remote), with no other ref of
+its name in another case, never main, master or the remote's default branch, never one whose commits touch
+.github or a symlink, and no config by which the push could reach another repository (`push_shape`); a fetch
+or pull only of branches by name (`fetch_shape`); git's local and read-only subcommands, `branch` only to make
+or list one; a draft PR from such a branch already pushed, a review that approves or comments, and reads from
+gh, with `gh api` only as GET (GH); bosun's ledger and reads, never `send` or `delegate`. In the sandbox
 (1.5.13) each run_command gets a shell of its own, a worktree's `.git` file cannot be written, the network
 answers through a proxy (403 for what it refuses), and git's environment pins reach an approved command (`git
 rev-parse --git-path hooks` printed /dev/null, a planted pre-commit hook did not run).
@@ -108,6 +110,7 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.parse
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from datetime import datetime
 from functools import partial
@@ -736,20 +739,31 @@ def reads_plainly(command: str) -> bool:
     return True
 
 
-def command_words(command: str) -> list[list[str]] | None:
-    """The words of each simple command in <command>, as the shell reads them; None if it cannot be read.
-    Only for a command that `reads_plainly`: the lexer has no comments, `#` being a plain character."""
+def command_tokens(command: str) -> list[str] | None:
+    """The words and operators of <command>, as the shell reads them; None if it cannot be read. Only for a
+    command that `reads_plainly`: the lexer has no comments, `#` being a plain character."""
     lexer = shlex.shlex(command, posix=True, punctuation_chars=PUNCTUATION)
     lexer.commenters = ""
     lexer.whitespace = " \t\r"
     lexer.whitespace_split = True
     try:
-        tokens = list(lexer)
+        return list(lexer)
     except ValueError:
+        return None
+
+
+def is_operator(token: str) -> bool:
+    return set(token) <= set(PUNCTUATION)
+
+
+def command_words(command: str) -> list[list[str]] | None:
+    """The words of each simple command in <command>, as the shell reads them; None if it cannot be read."""
+    tokens = command_tokens(command)
+    if tokens is None:
         return None
     commands: list[list[str]] = [[]]
     for token in tokens:
-        if set(token) <= set(PUNCTUATION):
+        if is_operator(token):
             commands.append([])
         else:
             commands[-1].append(token)
@@ -804,48 +818,29 @@ def plain_remote(word: str, cwd: str) -> bool:
     return configured_remote(word, cwd)
 
 
-class Flags(NamedTuple):
-    """The only options a push, fetch or pull may carry. None takes its value from the next word, so the
-    first word that is not an option is surely the repository (`-o x ./evil` would hide it)."""
-
-    letters: str  # short options that take no value, alone or in a cluster
-    names: frozenset[str]  # long options that take no value, and their --no- forms; exact, never abbreviated
-    valued: frozenset[str]  # `name=value` as given, or `name=` for any value glued to <name>
-
-    def allows(self, word: str) -> bool:
-        if word.startswith("--"):
-            name, glued, _value = word[2:].partition("=")
-            if glued:
-                return f"{name}=" in self.valued or word[2:] in self.valued
-            return name.removeprefix("no-") in self.names
-        return len(word) > 1 and all(letter in self.letters for letter in word[1:])
+# What a fetch or a pull may carry: `git fetch|pull [<options>] [<configured remote> [<plain branch>...]]`,
+# with only these options. No refspec of any other shape (`+`, `*`, `:`, `refs/...`, `tag`), which can force,
+# delete or write local branches, and no --prune, --all, --multiple, --depth, -u or --recurse-submodules.
+FETCH_OPTIONS = frozenset({"-q", "--quiet"})
+PULL_OPTIONS = FETCH_OPTIONS | {"--rebase", "--no-rebase", "--ff", "--ff-only", "--no-ff"}
 
 
-SENDING = frozenset({"verbose", "quiet", "progress", "dry-run", "force", "atomic", "ipv4", "ipv6"})
-FETCH_FLAGS = Flags(
-    "vqaftnpPk46",  # not -u (--upload-pack in clone), -m (every word a repository), -j or -o (take a value)
-    SENDING
-    | {"all", "append", "tags", "prune", "prune-tags", "porcelain", "keep", "unshallow", "refetch"}
-    | {"show-forced-updates", "write-fetch-head", "set-upstream"},
-    frozenset({"depth=", "deepen=", "shallow-since="}),
-)
-PULL_FLAGS = Flags(
-    "vqnrftpk46",  # -r takes the rest of its cluster as its value, which these letters cannot spell into
-    # `interactive`; not -s or -X (a strategy), -S, -u, -j or -o
-    SENDING
-    | {"rebase", "stat", "compact-summary", "log", "signoff", "squash", "commit", "edit", "ff", "ff-only"}
-    | {"verify", "verify-signatures", "autostash", "allow-unrelated-histories", "all", "append", "tags"}
-    | {"prune", "keep", "unshallow", "set-upstream"},
-    frozenset({"rebase=true", "rebase=false", "rebase=merges", "depth="}),
-)
-
-
-def names_a_remote(flags: Flags, words: list[str], cwd: str) -> bool:
-    """Whether <words> (after push, fetch or pull) carry only <flags>, and their repository, if they name
-    one, is a remote by its plain name. No repository is the branch's upstream, which git's config names."""
+def fetch_shape(allowed: frozenset[str], words: list[str], cwd: str) -> bool:
+    """Whether a fetch or pull's <words> are only <allowed> options, then at most a remote by its configured
+    name and plain branch names (`plain_branch`, never git's `tag` keyword)."""
     options = [word for word in words if word.startswith("-")]
     others = [word for word in words if not word.startswith("-")]
-    return all(map(flags.allows, options)) and (not others or plain_remote(others[0], cwd))
+    if not all(option in allowed for option in options):
+        return False
+    if not others:
+        return True
+    remote, *branches = others
+    return all(map(fetched_branch, branches)) and plain_remote(remote, cwd)
+
+
+def fetched_branch(word: str) -> bool:
+    """A branch a fetch or pull names: a plain name, never git's `tag` keyword."""
+    return plain_branch(word) and word.casefold() != "tag"
 
 
 # The one push a bosun window gets past the sandbox, since agy 1.5.13 takes the approval as final (its
@@ -882,7 +877,8 @@ class PushContext(NamedTuple):
     widened: bool  # git's config would push something else, more, or elsewhere than ls-remote reads
     remote_tip: str | None = ""  # the branch's tip on the remote, read live: "" not there, None unreadable
     own: bool = False  # refs/remotes/<remote>/<branch> was first made by this clone's push, and is remote_tip
-    workflows: bool = False  # its commits change .github/workflows or .github/actions, or that cannot be told
+    workflows: bool = False  # its commits touch .github/ or a symlink, or that cannot be told
+    collides: bool = False  # another ref, here or on the remote, differs from it only in case, or unreadable
 
 
 def git_answer(
@@ -904,27 +900,52 @@ def git_answer(
     return done.returncode, done.stdout
 
 
-def push_config(remote: str, cwd: str) -> dict[str, str] | None:
-    """git's push settings, submodule.recurse, and <remote>'s push, mirror and pushurl, by their lower-case
-    names, as the push will read them (the window's environment included); None when they cannot be read."""
-    pattern = rf"^(push\.|submodule\.recurse$|remote\.{re.escape(remote)}\.(push|mirror|pushurl)$)"
+def push_config(remote: str, cwd: str) -> list[tuple[str, str]] | None:
+    """The config a push and the live check read differently or that widens a push, as (lower-case name,
+    value) pairs, every value of a key kept: git's push settings, submodule.recurse, core.sshCommand, every
+    url.*.insteadOf and pushInsteadOf, and <remote>'s url, push, pushurl and mirror (the window's environment
+    included); None when it cannot be read."""
+    pattern = (
+        r"^(push\.|submodule\.recurse$|core\.sshcommand$|url\..*\.(insteadof|pushinsteadof)$"
+        rf"|remote\.{re.escape(remote)}\.(url|push|pushurl|mirror)$)"
+    )
     code, out = git_answer(cwd, "config", "--null", "--get-regexp", pattern)
     if code == 1:  # none set
-        return {}
+        return []
     if code != 0:
         return None
     entries = (entry.partition("\n") for entry in out.split("\0") if entry)
-    return {key.casefold(): value.strip().casefold() for key, _, value in entries}
+    return [(key.casefold(), value.strip().casefold()) for key, _, value in entries]
 
 
-def widens_push(config: dict[str, str], remote: str) -> bool:
-    """Whether git's <config> would make `git push <remote> <branch>` write another ref, more refs, or to
-    another repository than the one ls-remote reads."""
+REWRITES = re.compile(r"url\..*\.(insteadof|pushinsteadof)")
+SSH_VARIABLES = ("GIT_SSH_COMMAND", "GIT_SSH")
+
+
+def push_reaches_elsewhere(pairs: list[tuple[str, str]], remote: str) -> bool:
+    """Whether the push could reach another repository than the live check reads: more than one URL for the
+    remote (a push goes to each), a pushurl, any URL rewrite, or an ssh command of the config's or the
+    environment's."""
+    keys = [key for key, _ in pairs]
     prefix = f"remote.{remote.casefold()}."
     return (
-        config.get("push.default") in {"upstream", "tracking"}  # the branch's upstream, which may be main
+        keys.count(f"{prefix}url") > 1
+        or f"{prefix}pushurl" in keys
+        or "core.sshcommand" in keys
+        or any(REWRITES.fullmatch(key) for key in keys)
+        or any(os.environ.get(name) for name in SSH_VARIABLES)
+    )
+
+
+def widens_push(pairs: list[tuple[str, str]], remote: str) -> bool:
+    """Whether git's config would make `git push <remote> <branch>` write another ref, more refs, or to
+    another repository than the one ls-remote reads."""
+    config = dict(pairs)
+    prefix = f"remote.{remote.casefold()}."
+    return (
+        push_reaches_elsewhere(pairs, remote)
+        or config.get("push.default") in {"upstream", "tracking"}  # the branch's upstream, which may be main
         or f"{prefix}push" in config  # a mapping of what is pushed where
-        or f"{prefix}pushurl" in config  # pushed elsewhere than the URL ls-remote reads
         or config.get(f"{prefix}mirror") in TRUE_WORDS
         or config.get("push.followtags") in TRUE_WORDS  # tags with it
         or config.get("push.recursesubmodules", "no") not in QUIET_SUBMODULES  # submodules' pushes with it
@@ -933,38 +954,57 @@ def widens_push(config: dict[str, str], remote: str) -> bool:
 
 
 class RemoteState(NamedTuple):
-    """What ls-remote says of a remote: its default branch and that branch's tip, and one branch's tip."""
+    """What ls-remote says of a remote: its default branch and that branch's tip, and every branch's tip."""
 
     default: str  # "" when the remote's HEAD names no branch, or ls-remote failed
     default_tip: str
-    tip: str | None  # "" when the branch is not there, None when ls-remote failed
+    heads: dict[str, str] | None  # each branch's tip by its name; None when ls-remote failed
 
 
-def remote_state(remote: str, branch: str, cwd: str) -> RemoteState:
-    """One live `git ls-remote --symref <remote> HEAD refs/heads/<branch>`, within a few seconds and asking
-    for nothing; a failure or a timeout reads as nothing known."""
+def remote_state(remote: str, cwd: str) -> RemoteState:
+    """One live `git ls-remote --symref <remote> HEAD 'refs/heads/*'`, within a few seconds and asking for
+    nothing; a failure or a timeout reads as nothing known."""
     code, out = git_answer(
         cwd,
         "ls-remote",
         "--symref",
         remote,
         "HEAD",
-        f"refs/heads/{branch}",
+        "refs/heads/*",
         timeout=LS_REMOTE_TIMEOUT_SECONDS,
         env={"GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"},
     )
     if code != 0:
         return RemoteState("", "", None)
-    default = default_tip = tip = ""
+    default = default_tip = ""
+    heads: dict[str, str] = {}
     for line in out.splitlines():
         left, _, ref = line.partition("\t")
         if ref == "HEAD" and left.startswith("ref: refs/heads/"):
             default = left.removeprefix("ref: refs/heads/")
         elif ref == "HEAD":
             default_tip = left
-        elif ref == f"refs/heads/{branch}":
-            tip = left
-    return RemoteState(default, default_tip, tip)
+        elif ref.startswith("refs/heads/"):
+            heads[ref.removeprefix("refs/heads/")] = left
+    return RemoteState(default, default_tip, heads)
+
+
+def local_branch_names(remote: str, cwd: str) -> list[str] | None:
+    """The names of the local branches and of <remote>'s tracking refs, as git lists them (packed and loose
+    refs by their own names); None when they cannot be read."""
+    tracking = f"refs/remotes/{remote}/"
+    code, out = git_answer(cwd, "for-each-ref", "--format=%(refname)", "refs/heads/", tracking)
+    if code != 0:
+        return None
+    refs = [ref for ref in out.splitlines() if ref != f"{tracking}HEAD"]
+    return [ref.removeprefix("refs/heads/").removeprefix(tracking) for ref in refs]
+
+
+def case_collides(branch: str, names: Iterable[str]) -> bool:
+    """Whether a name other than <branch> is <branch> in another case: on a case-insensitive disk git would
+    read one's files for the other (its tracking ref, its reflog)."""
+    folded = branch.casefold()
+    return any(name != branch and name.casefold() == folded for name in names)
 
 
 def made_by_this_clones_push(remote: str, branch: str, cwd: str) -> str:
@@ -979,38 +1019,53 @@ def made_by_this_clones_push(remote: str, branch: str, cwd: str) -> str:
     return out.strip() if code == 0 else ""
 
 
-WORKFLOW_FOLDERS = (".github/workflows/", ".github/actions/")
+GITHUB = ".github"  # workflows, actions, and what CI reads; in any case
+LINK_MODE = "120000"
+
+
+def touches_github_or_links(raw: str) -> bool:
+    """Whether a `git diff --raw -z` output changes anything under .github, or .github itself, or a link."""
+    fields = raw.split("\0")
+    for meta, path in zip(fields[0::2], fields[1::2], strict=False):
+        modes = meta.lstrip(":").split()[:2]
+        folded = path.casefold()
+        if LINK_MODE in modes or folded == GITHUB or folded.startswith(f"{GITHUB}/"):
+            return True
+    return False
 
 
 def changes_workflows(default_tip: str, branch: str, cwd: str) -> bool:
-    """Whether the commits of <branch> since the default branch's tip change a workflow or an action, or that
-    cannot be told (the tip not here, the diff failing)."""
+    """Whether the commits of <branch> since the default branch's tip touch anything under .github (a
+    workflow, an action, CI's own files) or add or change a symlink, or that cannot be told (the tip not here,
+    the diff failing)."""
     if not default_tip or git_answer(cwd, "cat-file", "-e", f"{default_tip}^{{commit}}")[0] != 0:
         return True
     code, out = git_answer(
-        cwd, "diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", "--no-textconv",
+        cwd, "diff", "--raw", "-z", "--no-abbrev", "--no-renames", "--no-ext-diff", "--no-textconv",
         f"{default_tip}...refs/heads/{branch}", "--",
     )  # fmt: skip
-    paths = out.split("\0") if code == 0 else None
-    return paths is None or any(path.casefold().startswith(WORKFLOW_FOLDERS) for path in paths)
+    return code != 0 or touches_github_or_links(out)
 
 
 def push_context(remote: str, branch: str, cwd: str) -> PushContext:
-    """The branch checked out in <cwd>, what the remote says live of its default branch and of <branch>,
-    whether <branch> is this clone's own there, whether its commits touch workflows, and whether git's config
-    widens a push."""
+    """The branch checked out in <cwd>, what the remote says live of its default branch and its branches,
+    whether <branch> is this clone's own there, whether another ref is <branch> in another case, whether its
+    commits touch .github or a symlink, and whether git's config widens a push."""
     code, out = git_answer(cwd, "symbolic-ref", "--quiet", "--short", "HEAD")
     current = out.strip() if code == 0 else ""
-    state = remote_state(remote, branch, cwd)
-    tracked = made_by_this_clones_push(remote, branch, cwd) if state.tip else ""
-    config = push_config(remote, cwd)
+    state = remote_state(remote, cwd)
+    tip = None if state.heads is None else state.heads.get(branch, "")
+    tracked = made_by_this_clones_push(remote, branch, cwd) if tip else ""
+    names = local_branch_names(remote, cwd)
+    pairs = push_config(remote, cwd)
     return PushContext(
         current=current,
         default=state.default,
-        widened=config is None or widens_push(config, remote),
-        remote_tip=state.tip,
-        own=bool(tracked) and tracked == state.tip,
+        widened=pairs is None or widens_push(pairs, remote),
+        remote_tip=tip,
+        own=bool(tracked) and tracked == tip,
         workflows=changes_workflows(state.default_tip, branch, cwd),
+        collides=names is None or state.heads is None or case_collides(branch, [*names, *state.heads]),
     )
 
 
@@ -1029,7 +1084,9 @@ def push_lands_on_its_own_branch(branch: str, context: PushContext) -> bool:
     one checked out; neither main, master nor the remote's default branch (in any case; a default that cannot
     be read refuses); not on the remote yet, or there by this clone's own push with nobody's since; with no
     workflow or action changed, and no config that widens the push."""
-    if not context.default or context.widened or context.workflows or context.remote_tip is None:
+    if not context.default or context.widened or context.workflows or context.collides:
+        return False
+    if context.remote_tip is None:
         return False
     protected = {name.casefold() for name in (*PROTECTED_BRANCHES, context.default)}
     mine = context.remote_tip == "" or context.own
@@ -1121,8 +1178,8 @@ GIT: dict[str, GitRule] = {
     "cherry-pick": GitRule(STRATEGY),  # over-refuses its -s, --signoff here, a strategy in merge and rebase
     "revert": GitRule(STRATEGY),  # likewise
     "stash": GitRule(),  # in the repository only
-    "fetch": GitRule(words=partial(names_a_remote, FETCH_FLAGS)),  # from a remote by its name only
-    "pull": GitRule(STRATEGY, words=partial(names_a_remote, PULL_FLAGS)),  # likewise, and no strategy
+    "fetch": GitRule(words=partial(fetch_shape, FETCH_OPTIONS)),  # a remote and branches, by their names
+    "pull": GitRule(STRATEGY, words=partial(fetch_shape, PULL_OPTIONS)),  # likewise
     "push": GitRule(words=push_shape),  # the branch checked out, to a remote by name, and nothing else
     "rev-parse": GitRule(),  # reads
     "ls-files": GitRule(),  # reads
@@ -1236,17 +1293,23 @@ def gh_word_refused(word: str) -> bool:
     return word == "--" or word.startswith("@") or "=@" in word
 
 
-def api_path_first_segment(word: str) -> str:
-    """The first segment of a gh api path as gh reads it: leading slashes, a query and a fragment off."""
-    return word.lstrip("/").split("?", 1)[0].split("#", 1)[0].split("/", 1)[0].casefold()
+API_PATH = re.compile(r"/?[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*")  # segments of the strict characters
+
+
+def api_path_fits(word: str) -> bool:
+    """Whether a gh api path, percent-decoded first, is a plain path of the strict characters (no scheme,
+    host, query, whitespace or empty segment), with no `.` or `..` segment and no `graphql` anywhere."""
+    path = urllib.parse.unquote(word)
+    if API_PATH.fullmatch(path) is None or "graphql" in path.casefold():
+        return False
+    return not any(segment in {".", ".."} for segment in path.strip("/").split("/"))
 
 
 def gh_positionals_fit(rule: GhRule, positionals: list[str]) -> bool:
-    """No more positionals than <rule> takes, none a URL, and for gh api no GraphQL however the path is
-    written (`/graphql`, `graphql?query=...`)."""
+    """No more positionals than <rule> takes, none a URL, and for gh api a strict path (`api_path_fits`)."""
     if len(positionals) > rule.positionals or any("://" in word for word in positionals):
         return False
-    return not (rule.reads_only and any(api_path_first_segment(w).startswith("graphql") for w in positionals))
+    return not rule.reads_only or all(map(api_path_fits, positionals))
 
 
 def gh_words_fit(rule: GhRule, words: list[str]) -> list[tuple[str, str]] | None:
@@ -1379,18 +1442,23 @@ def hidden_before_a_name(firsts: list[str]) -> bool:
 
 
 def runs_only_bosuns_commands(command: str, cwd: str) -> bool:
-    """Whether every simple command in <command>, run in <cwd>, is one PROGRAMS allow: the commands a bosun
-    window needs outside agy's sandbox. It must read the same to every shell (`reads_plainly`), nothing is
-    hidden before a command's name (a variable, `env`, `sudo`, a keyword), and what lib/guard.py reads as its
-    simple commands is exactly what is checked here."""
+    """Whether <command>, run in <cwd>, is one simple command alone, and one PROGRAMS allow: a command a bosun
+    window needs outside agy's sandbox. No `&&`, `||` or `;` either, since what runs before a push could
+    change what its approval read (a workflow committed, a merge). It must read the same to every shell
+    (`reads_plainly`: no pipe, `&`, redirection, group, substitution or newline), nothing is hidden
+    before its name (a variable, `env`, `sudo`, a keyword), and what lib/guard.py reads as its simple
+    command is exactly what is checked here."""
     import guard  # noqa: PLC0415
 
     if not reads_plainly(command) or guard.runs_substitution(command):
         return False
+    tokens = command_tokens(command)
+    if tokens is None or any(map(is_operator, tokens)):
+        return False  # one simple command alone, not even a `;` after it: a chain could change what was read
     commands = command_words(command)
-    if not commands or hidden_before_a_name([words[0] for words in commands]):
+    if not commands or len(commands) != 1 or hidden_before_a_name([words[0] for words in commands]):
         return False
-    return guard.simple_commands(command) == commands and all(command_allowed(w, cwd) for w in commands)
+    return guard.simple_commands(command) == commands and command_allowed(commands[0], cwd)
 
 
 RUN_COMMAND_ARGS = frozenset({"CommandLine", "WaitMsBeforeAsync", "toolSummary", "BypassSandbox"})
