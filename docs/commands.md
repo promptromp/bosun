@@ -304,6 +304,9 @@ or an update holds it, and a watchdog job that never ran warns three intervals a
   [Plugins](configuration.md#plugins-which-of-yours-each-window-loads).
 - **What the last `bosun update` left to you**: what to change by hand in your own files (warns), and the config keys
   it added that `bosun.env` does not set, with the value each has now and what it means.
+- **Each window's conversation**: the one it resumes, or the new one it starts. A conversation running in its own
+  window is fine; one open somewhere else, such as `claude --resume` in another terminal, warns, since bosun starts
+  no second copy of it while that runs.
 
 </details>
 
