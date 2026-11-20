@@ -1,0 +1,130 @@
+== agy --version
+$ agy --version
+1.5.13
+exit=0
+== an unknown flag
+$ agy --no-such-flag
+flags provided but not defined: -no-such-flag
+== bosun's plugin: validate --strict, install, list, uninstall
+$ agy plugin validate --strict /Users/me/bosun/agents/agy-plugin
+Validating bosun (/Users/me/bosun/agents/agy-plugin/plugin.json)
+
+  · plugin.json: no logo: the plugin shows a generic icon. Add "logo": "assets/logo.svg" (a .png, .svg, .jpg, .jpeg or .webp file inside the plugin)
+
+  skills 0 · agents 0 · rules 0 · hooks 1 · mcpServers 0 · sidecars 0
+
+✔ Validation passed
+exit=0
+$ agy plugin install /Users/me/bosun/agents/agy-plugin
+  [ok]    bosun
+          ✔ hooks       : 1 installed (bosun)
+          Installed to /Users/me/.gemini/config/plugins/bosun
+exit=0
+$ agy plugin list --json
+[
+  {
+    "name": "bosun",
+    "enabled": true,
+    "version": "1.0.0",
+    "source": "antigravity",
+    "path": "/Users/me/.gemini/config/plugins/bosun",
+    "hooks": [
+      "bosun"
+    ]
+  }
+]
+exit=0
+files under ~/.gemini with it installed (but agy's builtin/):
+./.gemini/config/import_manifest.json
+./.gemini/config/plugins/bosun/hooks.json
+./.gemini/config/plugins/bosun/plugin.json
+installed hooks.json is the source's: yes
+$ agy plugin uninstall bosun
+Uninstalled plugin "bosun"
+exit=0
+files under ~/.gemini after uninstall:
+./.gemini/config/import_manifest.json
+./.gemini/config/plugins
+import_manifest.json:
+{
+  "imports": null
+}
+== a global MCP server, as tests/sandbox/live_agy.sh adds one
+$ agy mcp add probe-dummy -- /usr/bin/python3 /Users/me/probe_server.py dummy /Users/me/probe-servers.log
+Added MCP server "probe-dummy" (stdio)
+exit=0
+{
+  "mcpServers": {
+    "probe-dummy": {
+      "args": [
+        "/Users/me/probe_server.py",
+        "dummy",
+        "/Users/me/probe-servers.log"
+      ],
+      "command": "/usr/bin/python3",
+      "disabled": false
+    }
+  }
+}
+$ agy mcp list
+NAME         TYPE   STATUS   COMMAND/URL
+probe-dummy  stdio  enabled  /usr/bin/python3 /Users/me/probe_server.py dummy /Users/me/probe-servers.log
+exit=0
+$ agy mcp list --json
+Usage: agy mcp list [flags]
+
+List all configured MCP servers
+
+Flags:
+  -h      Show help
+  --help  Show help
+Error: flags provided but not defined: -json
+exit=1
+$ agy mcp remove probe-dummy
+Removed MCP server "probe-dummy"
+exit=0
+$ agy mcp list
+No MCP servers configured.
+exit=0
+== a workspace file and a workspace plugin in the repo (.agents/mcp_config.json, .agents/plugins/ws-probe/)
+(run from the repo)
+$ agy mcp list
+No MCP servers configured.
+exit=0
+$ agy plugin list --json
+[]
+exit=0
+== startup log lines, interactive in tmux, no login (each run given --log-file)
+-- agy-t1: plain
+Auto-update disabled via environment variable AGY_CLI_DISABLE_AUTO_UPDATE
+Not reloading plugin MCP servers: cannot get the signed-in user
+Session toggle is off, staying disconnected
+ssh=false
+-- agy-env-none: no SSH variable
+Auto-update disabled via environment variable AGY_CLI_DISABLE_AUTO_UPDATE
+Not reloading plugin MCP servers: cannot get the signed-in user
+Session toggle is off, staying disconnected
+ssh=false
+-- agy-env-client: SSH_CLIENT alone
+Auto-update disabled via environment variable AGY_CLI_DISABLE_AUTO_UPDATE
+Not reloading plugin MCP servers: cannot get the signed-in user
+Session toggle is off, staying disconnected
+ssh=true
+Using file-based token storage because SSH session detected
+-- agy-env-connection: SSH_CONNECTION alone
+Auto-update disabled via environment variable AGY_CLI_DISABLE_AUTO_UPDATE
+Not reloading plugin MCP servers: cannot get the signed-in user
+Session toggle is off, staying disconnected
+ssh=true
+Using file-based token storage because SSH session detected
+-- agy-env-authsock: SSH_AUTH_SOCK alone
+Auto-update disabled via environment variable AGY_CLI_DISABLE_AUTO_UPDATE
+Not reloading plugin MCP servers: cannot get the signed-in user
+Session toggle is off, staying disconnected
+ssh=false
+-- agy-effx: --effort max --mode auto --sandbox --remote-control
+Auto-update disabled via environment variable AGY_CLI_DISABLE_AUTO_UPDATE
+Not reloading plugin MCP servers: cannot get the signed-in user
+ssh=false
+Staying disconnected: remote-control-setting-enabled Mendel flag is off
+-- a log of agy's own under ~/.gemini/antigravity-cli/log with --log-file given: 0 files

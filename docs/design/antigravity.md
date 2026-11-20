@@ -238,7 +238,29 @@ window on `agy`.
   - a hook slower than `agy`'s timeout;
   - the plugin's install and uninstall leaving nothing else behind;
   - the connector refusal with a server set up, and with none;
-  - the morning `agy update` with automatic updates off.
+  - the morning `agy update` with automatic updates off;
+  - whether a plugin in the repo's own `.agents/plugins/` runs its hooks and starts its servers in a bosun window
+    (recorded as a fact): `agy`'s docs say such a plugin is found and loaded, `agy plugin list --json` does not
+    list it, and bosun's checks do not look for it.
+- **Rechecked on `agy` 1.5.13 with no login** (2026-11-20, `tests/fixtures/agy/no-login-1.5.13.txt`; a login does
+  not carry over to another HOME, so only what needs none). Unchanged: `--version`'s bare `1.5.13`; every flag a
+  launch passes is there, an unknown one is refused at start, and a value of `--effort` or `--mode` is not checked
+  before the sign-in; the sign-in screen, which bosun reads as a question (`waiting`); bosun's marker in `ps -ww`;
+  "Auto-update disabled via environment variable AGY_CLI_DISABLE_AUTO_UPDATE" in the log; no log of `agy`'s own
+  under `~/.gemini` with `--log-file`; `agy mcp list` (no `--json`, the global file only) and the file `agy mcp add`
+  writes; the connector refusal against those listings, with a global server, a workspace file and none; bosun's
+  plugin passing `agy plugin validate --strict`, installed as is, listed with its hooks and no servers. Settled:
+  either `SSH_CLIENT` or `SSH_CONNECTION` alone makes `agy` keep its sign-in in a file instead of the Keychain,
+  `SSH_AUTH_SOCK` alone does not; an uninstall with no session run leaves `import_manifest.json` (imports null) and
+  an empty `config/plugins/`, which bosun's removal leaves too; plugin servers start only after the sign-in. From
+  `agy`'s changelog and docs: Auto has been the default agent mode since 1.5.7 (a saved `"agentMode": ""` keeps
+  the old default, so the launch still passes it), needs the terminal sandbox, and falls back to the default mode
+  where it is unavailable; `--sandbox` is not new (1.0.x); `--effort` names `low` to `max` "depending on the
+  model"; since 1.5.10 the sandbox blocks reading `~/.config`, where bosun's own config is, so a `bosun` command
+  the plugin does not approve cannot read it inside the sandbox; Stop's payload has `terminationReason`
+  (`USER_CANCELED` among them) and `continuationActive`. Still for the live run: everything a session shows (the
+  hooks' payloads, Esc, the reviewer's dialog, the approvals, `--conversation` with an unknown id, whether `xhigh`
+  still switches a model, `--mode auto`, `--remote-control`, which reads an experiment flag that needs the login).
 
 ## What stops the second pull request
 

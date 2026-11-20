@@ -21,6 +21,7 @@ from connectors import parse  # noqa: E402
 
 NEVER_SHOWN = "nvr-shown-0000"  # made up: a server's argument or value, which no message may hold
 FIXTURE = ROOT / "tests" / "fixtures" / "agy" / "mcp-list.txt"
+FIXTURE_1_5_13 = ROOT / "tests" / "fixtures" / "agy" / "no-login-1.5.13.txt"
 
 
 def stdio(**extra: object) -> dict[str, object]:
@@ -158,6 +159,18 @@ class ServersTest(AgyCase):
         end = text.index("\n]\n", start) + 2
         agent = self.plugins(json.loads(text[start:end]))
         self.assertEqual(connectors_agy.servers(str(self.below), str(agent)), ["disc-mcp_disc-plug"])
+
+    def test_what_agy_1_5_13_wrote_and_listed_reads(self) -> None:
+        """agy 1.5.13 (no login, 2026-11-20): bosun's plugin in `plugin list --json` brings no server, and the
+        file `agy mcp add` wrote (with `"disabled": false`) names its server."""
+        text = FIXTURE_1_5_13.read_text()
+        start = text.index("$ agy plugin list --json\n[\n  {") + len("$ agy plugin list --json\n")
+        listing = json.loads(text[start : text.index("\n]\n", start) + 2])
+        self.assertEqual([plugin["name"] for plugin in listing], ["bosun"])
+        self.assertEqual(connectors_agy.servers(str(self.below), str(self.plugins(listing))), [])
+        start = text.index('{\n  "mcpServers": {\n    "probe-dummy"')
+        (self.config / "mcp_config.json").write_text(text[start : text.index("\n}\n", start) + 2])
+        self.assertEqual(connectors_agy.servers(str(self.below), str(self.agent)), ["probe-dummy"])
 
 
 class RefusalTest(AgyCase):

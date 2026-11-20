@@ -14,7 +14,8 @@ Exit status 3: not found.
 
 A running agy writes no record of itself, so `record` builds one in the shape of Claude Code's
 ~/.claude/sessions/<pid>.json, and everything that goes by a window's status works for all agents. What it
-goes by, seen in agy 1.5.5 (the Mac VM run, `tests/fixtures/agy/screens/`) and not a public API:
+goes by, seen in agy 1.5.5 (the Mac VM run, `tests/fixtures/agy/screens/`) and not a public API; what 1.5.13
+showed with no login (2026-11-20, `tests/fixtures/agy/no-login-1.5.13.txt`) is marked so:
   - bosun never reads another process's environment: macOS 27.2 keeps it from `ps eww`, even for a user's own
     processes. What it relies on is a process's command line and its own status file. `bosun launch` starts
     agy with `--log-file <logs>/agy-<conversation name>.log` among the flags before the first prompt, so a
@@ -29,21 +30,30 @@ goes by, seen in agy 1.5.5 (the Mac VM run, `tests/fixtures/agy/screens/`) and n
   - agy keeps each conversation as <home>/conversations/<id>.db, and resumes one only by its id, so bosun
     keeps its own table of names, filled in by the hooks.
   - Its login is a Keychain item with service `gemini` (looked for without reading the secret) and an
-    onboarding that is done when cache/onboarding.json says `"onboardingComplete": true`.
+    onboarding that is done when cache/onboarding.json says `"onboardingComplete": true`. Either of
+    SSH_CLIENT and SSH_CONNECTION makes agy keep its sign-in in a file instead ("Using file-based token
+    storage because SSH session detected" in its log); SSH_AUTH_SOCK alone does not (1.5.13). A login does
+    not carry over to another HOME: agy there asks for a browser sign-in.
   - A launch gives agy its folder for the session, so bosun never writes agy's trust.
   - bosun's plugin (`agents/agy-plugin/`: plugin.json and hooks.json at its root, one named hook with the
     events SessionStart, PreInvocation, Stop and, grouped under a matcher, PreToolUse) is installed with
     `agy plugin install <dir>`, which copies it to <home>/config/plugins/bosun/ and asks nothing, and taken
-    back with `agy plugin uninstall bosun`, which leaves import_manifest.json (its imports null) and an
-    empty <cli>/plugin_data/bosun/ behind. Its hooks run in every agy session of the machine, so each prints
-    nothing and exits 0 without BOSUN_HOOK_CMD; a handler is a shell command, run with agy's environment.
+    back with `agy plugin uninstall bosun`, which leaves import_manifest.json (its imports null) behind, and
+    an empty <cli>/plugin_data/bosun/ (1.5.5) or, with no session run, an empty config/plugins/ (1.5.13).
+    `agy plugin list --json` lists only the installed plugins: not one in a workspace's .agents/plugins/,
+    which agy's own docs say it loads, nor its built-in ones (1.5.13). Its hooks run in every agy session of
+    the machine, so each prints nothing and exits 0 without BOSUN_HOOK_CMD; a handler is a shell command, run
+    with agy's environment.
     The payloads have conversationId, cwd, workspacePaths, lastUserInput and, for PreToolUse, toolCall.
     SessionStart fires at a new conversation's first prompt and never on a resume, PreInvocation before each
     model call, Stop at the end of a turn with fullyIdle false while a background command runs. A
     PreToolUse answer approves the tool (and lifts the sandbox) only as exactly
     {"decision":"auto_approve","overwrite":{"BypassSandbox":true}}: {}, a blank decision and any exit but 0
     refuse the tool. PreInvocation's {"injectSteps":[{"errorMessage":{"userMessage":...}}],
-    "terminationBehavior":"terminate"} ends the turn before its model call.
+    "terminationBehavior":"terminate"} ends the turn before its model call. agy's own docs (1.5.13, in
+    <cli>/builtin/skills/agy-customizations/docs/hooks.md) add transcriptPath, modelName and hookEventName to
+    every payload, and terminationReason and continuationActive to Stop's; a hook runs in its plugin's folder
+    with PLUGIN_ROOT and PLUGIN_DATA set; they list allow, deny, ask and force_ask, not auto_approve.
 What passes the sandbox: in a bosun window the PreToolUse hook lifts agy's sandbox (network, writes anywhere)
 for a run_command only when the line reads the same to every shell, runs in the payload's workspace with no
 folder of its own in its args, and each of its simple commands is `git`, `gh` or `bosun` followed at once by a

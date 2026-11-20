@@ -11,7 +11,8 @@ Commands, into its own ~/.gemini:
   plugin install <dir>            copies the plugin to config/plugins/<name>/ and writes
                                   config/import_manifest.json
   plugin uninstall <name>         removes it, and leaves import_manifest.json (its imports null) and an empty
-                                  antigravity-cli/plugin_data/<name>/, as the real one does
+                                  antigravity-cli/plugin_data/<name>/, as the real one did (1.5.5; 1.5.13,
+                                  with no session run, left an empty config/plugins/ and no plugin_data)
   plugin list [--json]            the plugins
 Anything else is a session in the pane, drawn as the screens of tests/fixtures/agy/screens/ are: a box (the
 `>` line between two grey rules), `? for shortcuts` under it when idle, `esc to cancel` and a spinner when a
@@ -140,7 +141,10 @@ def plugin_install(source: str) -> int:
     shutil.copytree(source, target)
     manifest = {"imports": [{"name": name, "source": str(Path(source).resolve())}]}
     (CONFIG / "import_manifest.json").write_text(json.dumps(manifest, indent=2))
-    print(f"  [ok]    {name}\n          Installed to {target}")
+    hooks = ""
+    if (target / "hooks.json").is_file():
+        hooks = f"\n          \u2714 hooks       : 1 installed ({name})"
+    print(f"  [ok]    {name}{hooks}\n          Installed to {target}")
     return 0
 
 
