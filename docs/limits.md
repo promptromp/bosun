@@ -38,14 +38,23 @@ your setup, or when something behaves unexpectedly. Planned work and open questi
   repo's own hook code outside `agy`'s sandbox, so checks that a pre-commit hook makes run in CI only. Its login
   reaches only a desktop session, never ssh. A window starts only if `agy` has no MCP server its connectors list does
   not name, the Antigravity app's included. It does not start when an `.agents/` in its folder or any folder above
-  it up to your home folder holds a `plugins` folder or a file named like `*hooks*.json`, `plugin.json`,
-  `plugins.json` or `mcp_config.json` (rules, skills and workflows are fine), whose hooks or servers `agy` would
-  run outside its sandbox, nor with a log folder (`BOSUN_LOG_DIR`) that has a space in its path. That is checked
-  when a window starts, not while it runs. bosun's plugin lets past `agy`'s sandbox only an allowlist of exact
-  `git`, `gh` and `bosun` command shapes, what the task files let a repo session do, since `agy` 1.5.13 takes such
-  an approval as final (its own reviewer no longer looks): a push only of the branch checked out, never the
-  default branch, and only when the remote's default branch is known (`origin/HEAD`, which a clone sets); a PR
-  only as a draft; a review that approves or comments; reads. Anything else is left to `agy`.
+  it up to your home folder (or an `.agent/` or `.gemini/` below your home folder; your own `~/.gemini` is never
+  looked at) holds a link, a `plugins` or `*hooks*` folder, or a file named like `*hooks*`, `plugin.json`,
+  `plugins.json`, `mcp*.json` or `settings.json` (rules, skills and workflows are fine), whose hooks or servers
+  `agy` would run outside its sandbox, nor with a log folder (`BOSUN_LOG_DIR`) that has a space in its path. That
+  is checked when a window starts, not while it runs. bosun's plugin lets past `agy`'s sandbox only an allowlist
+  of exact `git`, `gh` and `bosun` command shapes, what the task files let a repo session do, since `agy` 1.5.13
+  takes such an approval as final (its own reviewer no longer looks): a push only of the branch checked out, and
+  only of a branch that is the window's own (not on the remote yet, or there by this clone's push with nobody's
+  since, which bosun asks the remote live), never the default branch, and never one whose commits change
+  `.github/workflows/` or `.github/actions/`; a PR only as a draft, from a branch of its own already pushed; a
+  review that approves or comments; reads. Anything else is left to `agy`, so a push to a PR branch the window
+  did not create (a fix-my-pr on someone else's branch) waits for `agy`'s own review. Two known limits of those
+  approvals: a git config include (`include.path`, `includeIf`) that points at a file in the work tree lets the
+  agent change the config an approved git command runs with, since it can write that file in its sandbox (the
+  launch's own git settings outrank it only for the keys they set); and `bosun ledger` commands other than
+  `approve` are approved, so a window can write the ledger's state (a reply recorded, an item moved), which an
+  outward action still cannot use without your words in the orchestrator.
 
 ## Starting work
 

@@ -441,9 +441,6 @@ agy_command_fact() { # <fact name> <regex>: how the recorded PreToolUse rows for
 agy_approvals() {
   date +%s >"$OUT/approvals-since"
   echo "what bosun's plugin approves, from what agy's hooks recorded"
-  # bosun approves a push only when the remote's default branch is known (origin/HEAD), which a clone sets and
-  # this repo, made with `remote add`, has not.
-  check "the repo knows its remote's default branch, as a clone does" git -C "$HOME/Development/exporter" remote set-head origin main
   check "a turn of git, gh and ls commands ends with no dialog of agy's own" agy_asks_without_dialog "$APPROVAL_PROMPT" 420
   agy_note_seen
   check "a git push of a feature branch to the local bare remote is answered with BypassSandbox" agy_answered '^git push .*feature-live' approved

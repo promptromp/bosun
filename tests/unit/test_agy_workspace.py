@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextlib
 import io
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -169,6 +170,67 @@ class RefusedNamesTest(WorkspaceCase):
         locked.chmod(0)
         self.addCleanup(locked.chmod, 0o700)
         self.assertEqual(self.found(), [self.repo / ".agents"])
+
+
+class Round2Test(WorkspaceCase):
+    """Review round 2, R2-S3: other hooks names and folders, links inside a customization folder, and
+    `.agent` and `.gemini` below the home folder (never home's own `.gemini`, agy's global config)."""
+
+    def test_more_names_under_agents(self) -> None:
+        for relative, hit in (
+            ("hooks/pre.json", "hooks"),
+            ("hooks.yaml", "hooks.yaml"),
+            ("hooks.jsonc", "hooks.jsonc"),
+            ("pre-hooks.toml", "pre-hooks.toml"),
+            ("githooks", "githooks"),
+            ("mcp.json", "mcp.json"),
+            ("mcp_servers.json", "mcp_servers.json"),
+            ("settings.json", "settings.json"),
+            ("deep/settings.json", "deep/settings.json"),
+        ):
+            with self.subTest(relative):
+                self.plant(self.deep, relative)
+                self.assertIn(self.deep / ".agents" / hit, self.found())
+                shutil.rmtree(self.deep / ".agents")
+
+    def test_a_link_inside_agents(self) -> None:
+        target = self.root / "outside"
+        (target / "plugins" / "p").mkdir(parents=True)
+        (target / "plugins" / "p" / "hooks.json").write_text("{}")
+        (self.deep / ".agents").mkdir()
+        folder_link = self.deep / ".agents" / "x"
+        folder_link.symlink_to(target)
+        self.assertEqual(self.found(), [folder_link])
+        folder_link.unlink()
+        file_link = self.deep / ".agents" / "rules.md"
+        file_link.symlink_to(target / "plugins" / "p" / "hooks.json")
+        self.assertEqual(self.found(), [file_link])
+
+    def test_agent_and_gemini_folders_below_home(self) -> None:
+        for folder in (".agent", ".gemini"):
+            with self.subTest(folder):
+                settings = self.repo / folder / "settings.json"
+                settings.parent.mkdir()
+                settings.write_text("{}")
+                self.assertEqual(self.found(), [settings])
+                settings.unlink()
+                (self.repo / folder / "styleguide.md").write_text("rules")
+                self.assertEqual(self.found(), [])  # rules are fine there too
+
+    def test_the_home_folders_own_gemini_and_agent_are_never_looked_at(self) -> None:
+        for folder in (".gemini", ".agent"):
+            (self.home / folder / "config" / "plugins" / "bosun").mkdir(parents=True)
+            (self.home / folder / "settings.json").write_text("{}")
+            (self.home / folder / "hooks.json").write_text("{}")
+        self.assertEqual(self.found(), [])
+        planted = self.plant(self.home)  # but home's own .agents is
+        self.assertEqual(self.found(), [planted])
+
+    def test_gemini_outside_home_is_looked_at(self) -> None:
+        outside = self.root / "elsewhere"
+        (outside / ".gemini").mkdir(parents=True)
+        (outside / ".gemini" / "settings.json").write_text("{}")
+        self.assertEqual(self.found(outside), [outside / ".gemini" / "settings.json"])
 
 
 class WorkspaceFoldersTest(WorkspaceCase):

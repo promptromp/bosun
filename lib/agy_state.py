@@ -67,12 +67,14 @@ shapes of the allowlist (GIT, GH, BOSUN). Everything else gets no answer, and ag
 without bosun. Each of the three must also resolve, on the hook's PATH, to a full path outside the workspaces.
 Since agy 1.5.13 takes the approval as final (its reviewer asks nothing after it), the allowlist holds only
 what the task files let a repo session do, and fails closed: a push only as `git push [-u] <remote> <branch>`
-of the branch checked out, never main, master or the remote's default branch (`push_shape`); git's local and
-read-only subcommands, `branch` only to make or list one; a draft PR, a review that approves or comments, and
-reads from gh, with `gh api` only as GET (GH); bosun's ledger and reads, never `send` or `delegate`. In the
-sandbox (1.5.13) each run_command gets a shell of its own, a worktree's `.git` file cannot be written, the
-network answers through a proxy (403 for what it refuses), and git's environment pins reach an approved
-command (`git rev-parse --git-path hooks` printed /dev/null, a planted pre-commit hook did not run).
+of the branch checked out, a branch of the window's own (not on the remote yet, or there by this clone's push
+with nobody's since, read live with ls-remote), never main, master or the remote's default branch, and never
+one whose commits change workflows (`push_shape`); git's local and read-only subcommands, `branch` only to
+make or list one; a draft PR from such a branch already pushed, a review that approves or comments, and reads
+from gh, with `gh api` only as GET (GH); bosun's ledger and reads, never `send` or `delegate`. In the sandbox
+(1.5.13) each run_command gets a shell of its own, a worktree's `.git` file cannot be written, the network
+answers through a proxy (403 for what it refuses), and git's environment pins reach an approved command (`git
+rev-parse --git-path hooks` printed /dev/null, a planted pre-commit hook did not run).
 The screen:
   - The input box is the line starting with `>` between two lines of `─` (the rules, drawn grey,
     `ESC[90m`), and the lines under it down to the second rule. The empty box is the mark alone
@@ -551,6 +553,7 @@ APPROVAL = json.dumps(
 )
 SAID_FD_LIMIT = 1024  # the descriptors the recording child closes: the agent's stdout pipe is one of them
 REMOTE_TIMEOUT_SECONDS = 5  # reading a remote's URL from the repository's config
+LS_REMOTE_TIMEOUT_SECONDS = 6  # asking the remote itself, well inside agy's hook timeout of 30
 PUNCTUATION = ";&|()<>\n"  # what ends a simple command, and the redirections
 
 
@@ -872,23 +875,29 @@ def plain_branch(word: str) -> bool:
 
 
 class PushContext(NamedTuple):
-    """What a push's approval reads from the repository it runs in."""
+    """What a push's approval reads from the repository it runs in, and live from the remote."""
 
     current: str  # the branch checked out, "" when there is none or it cannot be read
-    default: str  # the remote's default branch (its HEAD), "" when it cannot be read
-    widened: bool  # git's config would push something else or more: remapped, mirrored, tags, submodules
+    default: str  # the remote's default branch, read live (ls-remote), "" when it cannot be read
+    widened: bool  # git's config would push something else, more, or elsewhere than ls-remote reads
+    remote_tip: str | None = ""  # the branch's tip on the remote, read live: "" not there, None unreadable
+    own: bool = False  # refs/remotes/<remote>/<branch> was first made by this clone's push, and is remote_tip
+    workflows: bool = False  # its commits change .github/workflows or .github/actions, or that cannot be told
 
 
-def git_answer(cwd: str, *args: str) -> tuple[int, str]:
-    """`git -C <cwd> <args>`: its exit status and output, (-1, "") when it does not finish."""
+def git_answer(
+    cwd: str, *args: str, timeout: float = REMOTE_TIMEOUT_SECONDS, env: Mapping[str, str] | None = None
+) -> tuple[int, str]:
+    """`git -C <cwd> <args>`: its exit status and output, (-1, "") when it does not finish in <timeout>."""
     try:
         done = subprocess.run(
             ["git", "-C", cwd, *args],
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
-            timeout=REMOTE_TIMEOUT_SECONDS,
+            timeout=timeout,
             check=False,
+            env=None if env is None else {**os.environ, **env},
         )
     except (OSError, subprocess.SubprocessError):
         return -1, ""
@@ -896,9 +905,9 @@ def git_answer(cwd: str, *args: str) -> tuple[int, str]:
 
 
 def push_config(remote: str, cwd: str) -> dict[str, str] | None:
-    """git's push settings and <remote>'s push and mirror, by their lower-case names, as the push will read
-    them (the window's environment included); None when they cannot be read."""
-    pattern = rf"^(push\.|remote\.{re.escape(remote)}\.(push|mirror)$)"
+    """git's push settings, submodule.recurse, and <remote>'s push, mirror and pushurl, by their lower-case
+    names, as the push will read them (the window's environment included); None when they cannot be read."""
+    pattern = rf"^(push\.|submodule\.recurse$|remote\.{re.escape(remote)}\.(push|mirror|pushurl)$)"
     code, out = git_answer(cwd, "config", "--null", "--get-regexp", pattern)
     if code == 1:  # none set
         return {}
@@ -909,24 +918,100 @@ def push_config(remote: str, cwd: str) -> dict[str, str] | None:
 
 
 def widens_push(config: dict[str, str], remote: str) -> bool:
-    """Whether git's <config> would make `git push <remote> <branch>` write another ref or more refs."""
+    """Whether git's <config> would make `git push <remote> <branch>` write another ref, more refs, or to
+    another repository than the one ls-remote reads."""
+    prefix = f"remote.{remote.casefold()}."
     return (
         config.get("push.default") in {"upstream", "tracking"}  # the branch's upstream, which may be main
-        or f"remote.{remote.casefold()}.push" in config  # a mapping of what is pushed where
-        or config.get(f"remote.{remote.casefold()}.mirror") in TRUE_WORDS
+        or f"{prefix}push" in config  # a mapping of what is pushed where
+        or f"{prefix}pushurl" in config  # pushed elsewhere than the URL ls-remote reads
+        or config.get(f"{prefix}mirror") in TRUE_WORDS
         or config.get("push.followtags") in TRUE_WORDS  # tags with it
         or config.get("push.recursesubmodules", "no") not in QUIET_SUBMODULES  # submodules' pushes with it
+        or config.get("submodule.recurse", "false") not in QUIET_SUBMODULES  # likewise
     )
 
 
-def push_context(remote: str, cwd: str) -> PushContext:
-    """The branch checked out in <cwd>, <remote>'s default branch, and whether git's config widens a push."""
+class RemoteState(NamedTuple):
+    """What ls-remote says of a remote: its default branch and that branch's tip, and one branch's tip."""
+
+    default: str  # "" when the remote's HEAD names no branch, or ls-remote failed
+    default_tip: str
+    tip: str | None  # "" when the branch is not there, None when ls-remote failed
+
+
+def remote_state(remote: str, branch: str, cwd: str) -> RemoteState:
+    """One live `git ls-remote --symref <remote> HEAD refs/heads/<branch>`, within a few seconds and asking
+    for nothing; a failure or a timeout reads as nothing known."""
+    code, out = git_answer(
+        cwd,
+        "ls-remote",
+        "--symref",
+        remote,
+        "HEAD",
+        f"refs/heads/{branch}",
+        timeout=LS_REMOTE_TIMEOUT_SECONDS,
+        env={"GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"},
+    )
+    if code != 0:
+        return RemoteState("", "", None)
+    default = default_tip = tip = ""
+    for line in out.splitlines():
+        left, _, ref = line.partition("\t")
+        if ref == "HEAD" and left.startswith("ref: refs/heads/"):
+            default = left.removeprefix("ref: refs/heads/")
+        elif ref == "HEAD":
+            default_tip = left
+        elif ref == f"refs/heads/{branch}":
+            tip = left
+    return RemoteState(default, default_tip, tip)
+
+
+def made_by_this_clones_push(remote: str, branch: str, cwd: str) -> str:
+    """The tip of refs/remotes/<remote>/<branch> when the first entry of its reflog is this clone's own push
+    ("update by push"), else "": no reflog, or a ref a clone or fetch made, is not the window's own."""
+    ref = f"refs/remotes/{remote}/{branch}"
+    code, out = git_answer(cwd, "reflog", "show", "--format=%gs", ref, "--")
+    entries = out.splitlines() if code == 0 else []
+    if not entries or entries[-1] != "update by push":
+        return ""
+    code, out = git_answer(cwd, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
+    return out.strip() if code == 0 else ""
+
+
+WORKFLOW_FOLDERS = (".github/workflows/", ".github/actions/")
+
+
+def changes_workflows(default_tip: str, branch: str, cwd: str) -> bool:
+    """Whether the commits of <branch> since the default branch's tip change a workflow or an action, or that
+    cannot be told (the tip not here, the diff failing)."""
+    if not default_tip or git_answer(cwd, "cat-file", "-e", f"{default_tip}^{{commit}}")[0] != 0:
+        return True
+    code, out = git_answer(
+        cwd, "diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", "--no-textconv",
+        f"{default_tip}...refs/heads/{branch}", "--",
+    )  # fmt: skip
+    paths = out.split("\0") if code == 0 else None
+    return paths is None or any(path.casefold().startswith(WORKFLOW_FOLDERS) for path in paths)
+
+
+def push_context(remote: str, branch: str, cwd: str) -> PushContext:
+    """The branch checked out in <cwd>, what the remote says live of its default branch and of <branch>,
+    whether <branch> is this clone's own there, whether its commits touch workflows, and whether git's config
+    widens a push."""
     code, out = git_answer(cwd, "symbolic-ref", "--quiet", "--short", "HEAD")
     current = out.strip() if code == 0 else ""
-    code, out = git_answer(cwd, "symbolic-ref", "--quiet", "--short", f"refs/remotes/{remote}/HEAD")
-    default = out.strip().removeprefix(f"{remote}/") if code == 0 else ""
+    state = remote_state(remote, branch, cwd)
+    tracked = made_by_this_clones_push(remote, branch, cwd) if state.tip else ""
     config = push_config(remote, cwd)
-    return PushContext(current, default, config is None or widens_push(config, remote))
+    return PushContext(
+        current=current,
+        default=state.default,
+        widened=config is None or widens_push(config, remote),
+        remote_tip=state.tip,
+        own=bool(tracked) and tracked == state.tip,
+        workflows=changes_workflows(state.default_tip, branch, cwd),
+    )
 
 
 def push_words(words: list[str]) -> tuple[str, str] | None:
@@ -940,12 +1025,15 @@ def push_words(words: list[str]) -> tuple[str, str] | None:
 
 
 def push_lands_on_its_own_branch(branch: str, context: PushContext) -> bool:
-    """Whether a push of <branch> writes only `refs/heads/<branch>`, a branch of its own: the one checked out,
-    neither main, master nor the remote's default branch (in any case; an unknown default refuses), and no
-    config that widens it."""
+    """Whether a push of <branch> writes only `refs/heads/<branch>` of a branch that is the window's own: the
+    one checked out; neither main, master nor the remote's default branch (in any case; a default that cannot
+    be read refuses); not on the remote yet, or there by this clone's own push with nobody's since; with no
+    workflow or action changed, and no config that widens the push."""
+    if not context.default or context.widened or context.workflows or context.remote_tip is None:
+        return False
     protected = {name.casefold() for name in (*PROTECTED_BRANCHES, context.default)}
-    known = bool(context.default) and not context.widened
-    return known and branch == context.current and branch.casefold() not in protected
+    mine = context.remote_tip == "" or context.own
+    return mine and branch == context.current and branch.casefold() not in protected
 
 
 def push_shape(words: list[str], cwd: str) -> bool:
@@ -954,7 +1042,7 @@ def push_shape(words: list[str], cwd: str) -> bool:
     found = push_words(words)
     if found is None or not plain_remote(found[0], cwd):
         return False
-    return push_lands_on_its_own_branch(found[1], push_context(found[0], cwd))
+    return push_lands_on_its_own_branch(found[1], push_context(found[0], found[1], cwd))
 
 
 # `git branch` only makes and lists branches: never deletes, renames, copies, forces one onto another commit,
@@ -1068,6 +1156,7 @@ class GhRule(NamedTuple):
     positionals: int = 0  # how many other words it may name: a number, a branch, an API path
     needs: frozenset[str] = frozenset()  # one of these must be there (`--draft`, `--approve`)
     reads_only: bool = False  # gh api: its method, if given, is GET, and no GraphQL
+    own_head: bool = False  # pr create: its --head a branch of the window's own, on origin (pr_head_is_own)
 
 
 READ_OUTPUT = frozenset({"--json", "-q", "--jq", "-t", "--template"})  # how a read prints, nothing else
@@ -1075,15 +1164,17 @@ PR_FILTERS = frozenset({"-s", "--state", "-L", "--limit", "-B", "--base", "-H", 
 LIST_FILTERS = PR_FILTERS | {"-l", "--label", "-S", "--search", "-a", "--assignee"}
 REVIEW_KINDS = frozenset({"-a", "--approve", "-c", "--comment"})  # never --request-changes (the tasks)
 # gh's commands a bosun window may run outside the sandbox, by command and subcommand: what the tasks let a
-# repo session do (orchestrator/tasks/: open a draft PR, post one review that approves or comments, read
-# PRs, checks, runs and issues), and nothing else. Since agy 1.5.13 the approval is final, so what the tasks
-# never do (merge, close, mark ready, request reviewers or changes, act on another repository, write through
-# the API) has no rule; agy handles those as it would without bosun.
+# repo session do (orchestrator/tasks/: open a draft PR from a branch of its own it already pushed, post one
+# review that approves or comments, read PRs, checks, runs and issues), and nothing else. Since agy 1.5.13
+# the approval is final, so what the tasks never do (merge, close, mark ready, request reviewers or changes,
+# act on another repository, write through the API) has no rule; agy handles those as it would without
+# bosun.
 GH: dict[tuple[str, str | None], GhRule] = {
     ("pr", "create"): GhRule(
         frozenset({"-d", "--draft", "-f", "--fill", "--fill-first", "--fill-verbose", "--dry-run"}),
         frozenset({"-t", "--title", "-b", "--body", "-B", "--base", "-H", "--head", "-l", "--label"}),
         needs=frozenset({"-d", "--draft"}),  # a draft notifies nobody (new-work: never request reviewers)
+        own_head=True,  # gh never pushes or forks for it
     ),
     ("pr", "review"): GhRule(REVIEW_KINDS, frozenset({"-b", "--body"}), 1, needs=REVIEW_KINDS),
     ("pr", "view"): GhRule(frozenset({"-c", "--comments"}), READ_OUTPUT, 1),
@@ -1115,21 +1206,21 @@ GH: dict[tuple[str, str | None], GhRule] = {
 METHOD_OPTIONS = frozenset({"-X", "--method"})
 
 
-def gh_option(rule: GhRule, words: list[str], index: int) -> tuple[str, int] | None:
-    """The option at <words>[<index>] by its name, and the index of the next word, if <rule> takes it as
-    written: exactly one of its names, a long one perhaps glued to its value with `=` (a short one never
-    glued, nor in a cluster). A method other than GET refuses, for a rule that only reads."""
+def gh_option(rule: GhRule, words: list[str], index: int) -> tuple[str, str, int] | None:
+    """The option at <words>[<index>] by its name, its value ("" for a flag), and the index of the next word,
+    if <rule> takes it as written: exactly one of its names, a long one perhaps glued to its value with `=` (a
+    short one never glued, nor in a cluster). A method other than GET refuses, for a rule that only reads."""
     word = words[index]
     name, glued, value = word.partition("=") if word.startswith("--") else (word, "", "")
     if name in rule.flags and not glued:
-        return name, index + 1
+        return name, "", index + 1
     if name not in rule.valued:
         return None
     if not glued:
         if index + 1 >= len(words):
             return None
         value, index = words[index + 1], index + 1
-    return (name, index + 1) if gh_value_fits(rule, name, value) else None
+    return (name, value, index + 1) if gh_value_fits(rule, name, value) else None
 
 
 def gh_value_fits(rule: GhRule, name: str, value: str) -> bool:
@@ -1145,40 +1236,79 @@ def gh_word_refused(word: str) -> bool:
     return word == "--" or word.startswith("@") or "=@" in word
 
 
+def api_path_first_segment(word: str) -> str:
+    """The first segment of a gh api path as gh reads it: leading slashes, a query and a fragment off."""
+    return word.lstrip("/").split("?", 1)[0].split("#", 1)[0].split("/", 1)[0].casefold()
+
+
 def gh_positionals_fit(rule: GhRule, positionals: list[str]) -> bool:
-    """No more positionals than <rule> takes, none a URL, and for gh api no GraphQL."""
+    """No more positionals than <rule> takes, none a URL, and for gh api no GraphQL however the path is
+    written (`/graphql`, `graphql?query=...`)."""
     if len(positionals) > rule.positionals or any("://" in word for word in positionals):
         return False
-    return not (rule.reads_only and any(word.casefold().startswith("graphql") for word in positionals))
+    return not (rule.reads_only and any(api_path_first_segment(w).startswith("graphql") for w in positionals))
 
 
-def gh_words_fit(rule: GhRule, words: list[str]) -> bool:
-    """Whether <words>, after a gh command and its subcommand, are what <rule> lets it carry."""
-    given: set[str] = set()
+def gh_words_fit(rule: GhRule, words: list[str]) -> list[tuple[str, str]] | None:
+    """The options <words> give, each with its value, if they are what <rule> lets a gh command carry after
+    its subcommand; None if they are not."""
+    given: list[tuple[str, str]] = []
     positionals: list[str] = []
     index = 0
     while index < len(words):
         word = words[index]
         if gh_word_refused(word):
-            return False
+            return None
         if word.startswith("-") and word != "-":
             found = gh_option(rule, words, index)
             if found is None:
-                return False
-            given.add(found[0])
-            index = found[1]
+                return None
+            given.append(found[:2])
+            index = found[2]
             continue
         positionals.append(word)
         index += 1
-    return gh_positionals_fit(rule, positionals) and (not rule.needs or bool(given & rule.needs))
+    if not gh_positionals_fit(rule, positionals):
+        return None
+    return given if not rule.needs or any(name in rule.needs for name, _ in given) else None
 
 
-def gh_allows(words: list[str], _cwd: str) -> bool:
-    """Whether `gh <words>` is a command and subcommand of GH, with only the words its rule allows."""
+HEAD_OPTIONS = frozenset({"-H", "--head"})
+BASE_OPTIONS = frozenset({"-B", "--base"})
+
+
+def pr_head_is_own(given: list[tuple[str, str]], cwd: str) -> bool:
+    """Whether `gh pr create` names its head, once, as a branch that is the window's own (`push_shape`'s rule)
+    and already on origin, by this clone's push, so that gh never pushes or forks; and a base, if any, that is
+    origin's default branch."""
+    heads = [value for name, value in given if name in HEAD_OPTIONS]
+    bases = [value for name, value in given if name in BASE_OPTIONS]
+    if len(heads) != 1 or len(bases) > 1:
+        return False
+    return head_is_own_on_origin(heads[0], bases[0] if bases else None, cwd)
+
+
+def head_is_own_on_origin(head: str, base: str | None, cwd: str) -> bool:
+    """Whether <head> is a plain branch of the window's own, already pushed to origin by this clone, and
+    <base>, if given, origin's default branch."""
+    if not plain_branch(head) or not plain_remote("origin", cwd):
+        return False
+    context = push_context("origin", head, cwd)
+    base_fits = base is None or base.casefold() == context.default.casefold()
+    return context.own and base_fits and push_lands_on_its_own_branch(head, context)
+
+
+def gh_allows(words: list[str], cwd: str) -> bool:
+    """Whether `gh <words>` is a command and subcommand of GH, with only the words its rule allows (and for
+    `pr create`, a head of the window's own)."""
     if len(words) > 1 and (words[0], words[1]) in GH:
-        return gh_words_fit(GH[(words[0], words[1])], words[2:])
-    rule = GH.get((words[0], None))
-    return rule is not None and gh_words_fit(rule, words[1:])
+        rule, rest = GH[(words[0], words[1])], words[2:]
+    elif (words[0], None) in GH:
+        rule, rest = GH[(words[0], None)], words[1:]
+    else:
+        return False
+    given = gh_words_fit(rule, rest)
+    return given is not None and (not rule.own_head or pr_head_is_own(given, cwd))
 
 
 class BosunRule(NamedTuple):

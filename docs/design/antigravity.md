@@ -186,21 +186,32 @@ sandbox.
   - `git push [-u | --set-upstream] <remote> <branch>` and no other push: the remote by its configured name
     (never a URL or a path), the branch the one checked out, by a plain name (`[A-Za-z0-9._][A-Za-z0-9._/-]*`,
     no `heads/`, `refs/`, `tags/` or `remotes/`, not `@` or HEAD in any case), never `main`, `master` or the
-    remote's default branch (its `origin/HEAD`, in any case; one that cannot be read refuses), and nothing in
-    git's config that would push elsewhere or more (`push.default` upstream or tracking, a remote's `push` or
-    `mirror`, `push.followTags`, `push.recurseSubmodules`). It can only write `refs/heads/<branch>`; a test runs
-    approved pushes against a real bare remote to show it. A repo whose `origin/HEAD` is not set (a clone sets
-    it; `git remote set-head origin -a` does) gets no approval for a push.
+    remote's default branch (in any case), and a branch that is the window's own. One live `git ls-remote
+    --symref <remote> HEAD refs/heads/<branch>`, within six seconds and asking for nothing, says the remote's
+    default branch (never the local `origin/HEAD`, which can be stale) and the branch's tip there; it fails
+    closed. The branch is the window's own when it is not on the remote yet, or when its tracking ref
+    (`refs/remotes/<remote>/<branch>`) was first made by this clone's own push (the first entry of its reflog
+    is "update by push"; no reflog is no record) and the remote's tip is still that ref (nobody pushed since).
+    The push's commits since the default branch's tip may not change anything under `.github/workflows/` or
+    `.github/actions/` (a workflow that runs on a push can hold the repository's secrets), and that tip must be
+    here to tell. Nothing in git's config may push elsewhere or more (`push.default` upstream or tracking, a
+    remote's `push`, `pushurl` or `mirror`, `push.followTags`, `push.recurseSubmodules`, `submodule.recurse`).
+    It can only write `refs/heads/<branch>`; tests run approved pushes against a real bare remote to show it.
+    The cost: a fix-my-pr push to a PR branch the window did not create (someone else's, or one this clone
+    fetched) gets no approval and is left to `agy`'s own review.
   - git's local and read-only subcommands: `status`, `log`, `diff`, `show`, `add`, `rm`, `mv`, `restore`,
     `reset`, `commit`, `checkout`, `switch`, `merge`, `rebase`, `cherry-pick`, `revert`, `stash`, `fetch` and
     `pull` (from a remote by its name), `rev-parse`, `ls-files`, `blame`, `describe`, `merge-base`, `remote`
     (listing only), and `branch` only to make or list one (never delete, rename, copy, force, track or set an
     upstream). Never `tag`, `config`, `update-ref` or `symbolic-ref`.
-  - gh: `pr create` only as a draft (`-d`/`--draft`), `pr review` only approving or commenting, `pr view`,
+  - gh: `pr create` only as a draft (`-d`/`--draft`) and with `-H`/`--head <branch>`, once, a branch of the
+    window's own by the push rule that is already on `origin` by this clone's push, so that `gh` never pushes
+    or forks for it, and a `--base`, if any, that is `origin`'s default branch; `pr review` only approving or
+    commenting, `pr view`,
     `list`, `status`, `checks` and `diff`, `run view`, `list` and `watch`, `issue view` and `list`, `repo view`
     and `status`, each with its own options only (no `-R`/`--repo`, no `--web`, no URL, no `@file`, a short
     option never glued or clustered), and `gh api` only as a read (no method but GET, no field, input or header,
-    no GraphQL). Never `pr merge`, `close`, `ready`, `edit`, `comment` or `checkout`, nor `--request-changes`. A
+    no path whose first segment is `graphql`, read without leading slashes or a query). Never `pr merge`, `close`, `ready`, `edit`, `comment` or `checkout`, nor `--request-changes`. A
     reply in a review thread (fix-my-pr) is a `gh api` call with a field, so it is left to `agy` too.
   - bosun: `ledger` (never `approve`) and the commands that only read; never `send` or `delegate`, since a repo
     session reports through the ledger and messages no other session.
@@ -222,11 +233,13 @@ sandbox.
 - **What would run when `agy` starts.** `agy` reads hooks from `.agents/hooks.json` in a workspace, and from each
   plugin in `.agents/plugins/` there (a 1.5.13 session ran a workspace plugin's SessionStart, PreInvocation,
   PreToolUse and Stop hooks, though `agy plugin list` does not list it), and runs them outside its sandbox, and
-  bosun relaunches windows by itself. So a launch is refused, failing closed, when an `.agents/` in the window's
-  folder or any folder above it up to and including the home folder (by the path given and by its resolved
-  path; up to `/` for a folder outside the home folder) holds a `plugins` folder, whatever is in it, or a file
-  at any depth named like `*hooks*.json`, `plugin.json`, `plugins.json` or `mcp_config.json`, or is a link, too
-  large to look through or unreadable (`lib/agy_workspace.py`), with the path in the message. Rules, skills and
+  bosun relaunches windows by itself. So a launch is refused, failing closed, when a customization folder in
+  the window's folder or any folder above it up to and including the home folder (by the path given and by its
+  resolved path; up to `/` for a folder outside the home folder) holds, at any depth, a link, a folder named
+  `plugins` or like `*hooks*`, or a file named like `*hooks*`, `plugin.json`, `plugins.json`, `mcp*.json` or
+  `settings.json`, or is itself a link, too large to look through or unreadable (`lib/agy_workspace.py`), with
+  the path in the message. The customization folders are `.agents`, and `.agent` and `.gemini` in every folder
+  but the home folder itself: `~/.gemini` is `agy`'s own global config, never looked at. Rules, skills and
   workflows there are left alone. The check runs when a window starts, not while it runs: a hooks file the
   agent writes in its workspace during a session is the VM run's fact (`midsession-hooks`). It is also refused
   when the log folder has a space in it: the adapter finds a window by the one-word path after `--log-file` in
