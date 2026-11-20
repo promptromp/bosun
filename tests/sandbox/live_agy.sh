@@ -105,8 +105,9 @@ agy_login() {
   >>>      "gemini", click "Always Allow".
   >>>   4. Quit agy (type /exit, or press Ctrl-C twice). You can then close Terminal.
   >>> This waits up to 15 minutes, checking every 10 seconds. Your sign-in stays in that Mac, which is
-  >>> deleted when this run ends. If this script is killed before that, `tests/sandbox.sh mac clean`
-  >>> removes the clone that is left.
+  >>> deleted when this run ends. If this script is killed before that, `tart list` shows the clone that
+  >>> is left (bosun-mac-run-<number>), and `tart delete <its name>` removes it (not `mac clean`, which
+  >>> deletes the base images too).
 
 EOF
   agy_wait_for_sign_in || echo "  the sign-in timed out after 15 minutes"
@@ -695,14 +696,16 @@ agy_tree_is_as_before() {
 agy_none_running() { ! pgrep -f -- "--log-file $STATE/logs/agy-" >/dev/null; }
 
 agy_off_again() {
-  local out="$OUT/uninstall.txt"
+  local out="$OUT/uninstall.txt" ledger
   echo "off again: bosun uninstall, and what is left of it in agy"
+  [ -s "$STATE/ledger.json" ] && ledger=there # only a write makes it, and this run may have made none
   check "uninstall passes" bash -c 'bosun uninstall --yes >"$1" 2>&1 || { tail -20 "$1"; exit 1; }' _ "$out"
   cat "$out"
   check "the windows have stopped" bash -c '! tmux -L bosun has-session -t "=bosun"'
   check "no agy of bosun's is left running" wait_for 30 agy_none_running
   check "the install link is gone" bash -c '[ ! -e "$1" ] && [ ! -L "$1" ]' _ "$HOME/.local/share/bosun"
-  check "your ledger stays" test -s "$STATE/ledger.json"
+  check "... and bosun-versions, every version in it" test ! -e "$HOME/.local/share/bosun-versions"
+  check "your ledger stays (if there was one)" bash -c '[ -z "$1" ] || [ -s "$2" ]' _ "${ledger:-}" "$STATE/ledger.json"
   check "agy no longer has bosun's plugin" test ! -e "$AGY_PLUGIN_DIR"
   check "... nor what its uninstall leaves behind" bash -c '[ ! -e "$1/antigravity-cli/plugin_data/bosun" ] && [ ! -e "$1/config/import_manifest.json" ]' _ "$AGY_HOME"
   check "the file tree of ~/.gemini differs from before bosun only by agy's own conversation and log files" agy_tree_is_as_before
