@@ -5834,7 +5834,7 @@ FAKE
   echo '{}' >"$AGY_REPO/.agents/hooks.json"
   AGY_REPO_REAL="$(cd "$AGY_REPO" && pwd -P)"
   out="$(AGYD launch agyw || true)"
-  check "a workspace hooks.json keeps an agy window from starting, saying where it is" contains "$out" "'agyw' does not start: $AGY_REPO_REAL/.agents/hooks.json would run outside agy's sandbox when agy starts (bosun does not start agy windows with workspace hooks)"
+  check "a workspace hooks.json keeps an agy window from starting, saying where it is" contains "$out" "'agyw' does not start: $AGY_REPO_REAL/.agents/hooks.json would run outside agy's sandbox when agy starts (bosun does not start agy windows with workspace hooks, plugins or servers)"
   check "... and nothing is started" not_contains "$out" "dry-run: would run"
   rm -rf "$AGY_REPO/.agents"
   check "... and without it the window starts" contains "$(AGYD launch agyw)" "dry-run: would run"

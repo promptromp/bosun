@@ -62,14 +62,14 @@ showed with no login (2026-11-20, `tests/fixtures/agy/no-login-1.5.13.txt`) is m
     fires.
 What passes the sandbox: in a bosun window the PreToolUse hook lifts agy's sandbox (network, writes anywhere)
 for a run_command only when the line reads the same to every shell, runs in the payload's workspace with no
-folder of its own in its args, and each of its simple commands is `git`, `gh` or `bosun` followed at once by a
-subcommand of that program's allow-list (GIT, GH, BOSUN) whose words pass that subcommand's rule. Everything
-else gets no answer, and agy handles it as it would without bosun. It is an allow-list because git and gh have
-too many ways to run another program or write outside the workspace (global options, aliases, globs, glued
-values, transports, a repository or submodule the agent wrote) for a list of dangers ever to be complete. Each
-of the three must also resolve, on the hook's PATH, to a full path outside the workspaces. Since an approval
-is final (1.5.13), nothing the tasks never do is approved: no push that forces, deletes, pushes every branch,
-names no branch or writes main, master or the remote's default branch, and no `gh pr merge` or `close`. In the
+folder of its own in its args, and each of its simple commands is `git`, `gh` or `bosun` in one of the exact
+shapes of the allowlist (GIT, GH, BOSUN). Everything else gets no answer, and agy handles it as it would
+without bosun. Each of the three must also resolve, on the hook's PATH, to a full path outside the workspaces.
+Since agy 1.5.13 takes the approval as final (its reviewer asks nothing after it), the allowlist holds only
+what the task files let a repo session do, and fails closed: a push only as `git push [-u] <remote> <branch>`
+of the branch checked out, never main, master or the remote's default branch (`push_shape`); git's local and
+read-only subcommands, `branch` only to make or list one; a draft PR, a review that approves or comments, and
+reads from gh, with `gh api` only as GET (GH); bosun's ledger and reads, never `send` or `delegate`. In the
 sandbox (1.5.13) each run_command gets a shell of its own, a worktree's `.git` file cannot be written, the
 network answers through a proxy (403 for what it refuses), and git's environment pins reach an approved
 command (`git rev-parse --git-path hooks` printed /dev/null, a planted pre-commit hook did not run).
@@ -819,15 +819,6 @@ class Flags(NamedTuple):
 
 
 SENDING = frozenset({"verbose", "quiet", "progress", "dry-run", "force", "atomic", "ipv4", "ipv6"})
-# A push may not force (-f, --force, --force-with-lease, --force-if-includes), delete (-d, --delete,
-# --prune) or push every branch (--all, --branches, --mirror): what the tasks say a repo session never does,
-# and which agy's reviewer no longer stops once a hook approves a command (agy 1.5.13).
-PUSH_FLAGS = Flags(
-    "vqnu46",  # -u is --set-upstream here
-    (SENDING - {"force"}) | {"tags", "porcelain", "set-upstream", "verify", "follow-tags", "thin"},
-    frozenset(),
-)
-PROTECTED_BRANCHES = frozenset({"main", "master", "HEAD"})  # never a push's destination; nor the remote's own
 FETCH_FLAGS = Flags(
     "vqaftnpPk46",  # not -u (--upload-pack in clone), -m (every word a repository), -j or -o (take a value)
     SENDING
@@ -854,11 +845,45 @@ def names_a_remote(flags: Flags, words: list[str], cwd: str) -> bool:
     return all(map(flags.allows, options)) and (not others or plain_remote(others[0], cwd))
 
 
-def remote_default_branch(remote: str, cwd: str) -> str:
-    """The branch <remote>'s HEAD names in the repository in <cwd> (`main` for origin/main), or ""."""
+# The one push a bosun window gets past the sandbox, since agy 1.5.13 takes the approval as final (its
+# reviewer no longer looks): `git push [-u | --set-upstream] <remote> <branch>`, the branch the one checked
+# out, by a plain name, never the default branch, and with nothing in git's config that would push more or
+# elsewhere.
+# What the tasks say a repo session never does (force, delete, the default branch, tags) has no shape here.
+SET_UPSTREAM = frozenset({"-u", "--set-upstream"})
+BRANCH_NAME = re.compile(r"[A-Za-z0-9._][A-Za-z0-9._/-]*")  # no `:`, `@`, `^`, `{`, `~`, `*`, `+`, space
+REF_PREFIXES = ("heads/", "refs/", "tags/", "remotes/")  # which git would read as another ref than a branch
+PROTECTED_BRANCHES = frozenset({"main", "master"})  # never pushed to; nor the remote's default branch
+TRUE_WORDS = frozenset({"true", "yes", "on", "1"})
+QUIET_SUBMODULES = frozenset({"no", "check", "false", "off", "0"})
+
+
+def plain_branch(word: str) -> bool:
+    """Whether <word> can only be a branch by its own name: the strict characters, none of git's ref
+    prefixes, not `@` or HEAD in any case, and nothing git refuses in a branch name."""
+    folded = word.casefold()
+    return (
+        BRANCH_NAME.fullmatch(word) is not None
+        and not folded.startswith(REF_PREFIXES)
+        and folded not in {"head", "@"}
+        and ".." not in word
+        and not word.endswith(("/", ".", ".lock"))
+    )
+
+
+class PushContext(NamedTuple):
+    """What a push's approval reads from the repository it runs in."""
+
+    current: str  # the branch checked out, "" when there is none or it cannot be read
+    default: str  # the remote's default branch (its HEAD), "" when it cannot be read
+    widened: bool  # git's config would push something else or more: remapped, mirrored, tags, submodules
+
+
+def git_answer(cwd: str, *args: str) -> tuple[int, str]:
+    """`git -C <cwd> <args>`: its exit status and output, (-1, "") when it does not finish."""
     try:
         done = subprocess.run(
-            ["git", "-C", cwd, "symbolic-ref", "--quiet", "--short", f"refs/remotes/{remote}/HEAD"],
+            ["git", "-C", cwd, *args],
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
@@ -866,33 +891,87 @@ def remote_default_branch(remote: str, cwd: str) -> str:
             check=False,
         )
     except (OSError, subprocess.SubprocessError):
-        return ""
-    found = done.stdout.strip() if done.returncode == 0 else ""
-    return found.removeprefix(f"{remote}/")
+        return -1, ""
+    return done.returncode, done.stdout
 
 
-def push_destination(refspec: str) -> str | None:
-    """The branch a push's <refspec> writes, None for one that forces (`+`), deletes (`:dst`), globs, or
-    names no destination of its own (`HEAD`, which is whatever is checked out)."""
-    if refspec.startswith(("+", ":")) or "*" in refspec:
+def push_config(remote: str, cwd: str) -> dict[str, str] | None:
+    """git's push settings and <remote>'s push and mirror, by their lower-case names, as the push will read
+    them (the window's environment included); None when they cannot be read."""
+    pattern = rf"^(push\.|remote\.{re.escape(remote)}\.(push|mirror)$)"
+    code, out = git_answer(cwd, "config", "--null", "--get-regexp", pattern)
+    if code == 1:  # none set
+        return {}
+    if code != 0:
         return None
-    source, _, destination = refspec.partition(":")
-    branch = (destination or source).removeprefix("refs/heads/")
-    return None if not branch or branch in PROTECTED_BRANCHES else branch
+    entries = (entry.partition("\n") for entry in out.split("\0") if entry)
+    return {key.casefold(): value.strip().casefold() for key, _, value in entries}
+
+
+def widens_push(config: dict[str, str], remote: str) -> bool:
+    """Whether git's <config> would make `git push <remote> <branch>` write another ref or more refs."""
+    return (
+        config.get("push.default") in {"upstream", "tracking"}  # the branch's upstream, which may be main
+        or f"remote.{remote.casefold()}.push" in config  # a mapping of what is pushed where
+        or config.get(f"remote.{remote.casefold()}.mirror") in TRUE_WORDS
+        or config.get("push.followtags") in TRUE_WORDS  # tags with it
+        or config.get("push.recursesubmodules", "no") not in QUIET_SUBMODULES  # submodules' pushes with it
+    )
+
+
+def push_context(remote: str, cwd: str) -> PushContext:
+    """The branch checked out in <cwd>, <remote>'s default branch, and whether git's config widens a push."""
+    code, out = git_answer(cwd, "symbolic-ref", "--quiet", "--short", "HEAD")
+    current = out.strip() if code == 0 else ""
+    code, out = git_answer(cwd, "symbolic-ref", "--quiet", "--short", f"refs/remotes/{remote}/HEAD")
+    default = out.strip().removeprefix(f"{remote}/") if code == 0 else ""
+    config = push_config(remote, cwd)
+    return PushContext(current, default, config is None or widens_push(config, remote))
+
+
+def push_words(words: list[str]) -> tuple[str, str] | None:
+    """The remote and the branch of `git push [-u | --set-upstream] <remote> <branch>`; None for any other
+    words, or a branch that is not a plain name (`plain_branch`)."""
+    options = [word for word in words if word.startswith("-")]
+    others = [word for word in words if not word.startswith("-")]
+    if not all(option in SET_UPSTREAM for option in options) or len(others) != 2:  # noqa: PLR2004
+        return None
+    return (others[0], others[1]) if plain_branch(others[1]) else None
+
+
+def push_lands_on_its_own_branch(branch: str, context: PushContext) -> bool:
+    """Whether a push of <branch> writes only `refs/heads/<branch>`, a branch of its own: the one checked out,
+    neither main, master nor the remote's default branch (in any case; an unknown default refuses), and no
+    config that widens it."""
+    protected = {name.casefold() for name in (*PROTECTED_BRANCHES, context.default)}
+    known = bool(context.default) and not context.widened
+    return known and branch == context.current and branch.casefold() not in protected
 
 
 def push_shape(words: list[str], cwd: str) -> bool:
-    """`git push [<options>] <remote> <refspec>...`: a remote by its name, and each refspec a branch of its
-    own that is not main, master or the remote's default branch. A push with no refspec writes whatever
-    push.default and the upstream say (the default branch too), so it gets no approval either."""
-    if not names_a_remote(PUSH_FLAGS, words, cwd):
+    """`git push [-u | --set-upstream] <remote> <branch>` and nothing else: a remote by its configured name,
+    and a branch that `push_lands_on_its_own_branch`."""
+    found = push_words(words)
+    if found is None or not plain_remote(found[0], cwd):
         return False
-    remote, *refspecs = [word for word in words if not word.startswith("-")] or [""]
-    if not refspecs:
-        return False
-    default = remote_default_branch(remote, cwd)
-    destinations = [push_destination(refspec) for refspec in refspecs]
-    return all(branch is not None and branch != default for branch in destinations)
+    return push_lands_on_its_own_branch(found[1], push_context(found[0], cwd))
+
+
+# `git branch` only makes and lists branches: never deletes, renames, copies, forces one onto another commit,
+# sets an upstream (which a push could follow), or edits a description.
+BRANCH_LISTING = frozenset(
+    {"-a", "--all", "-v", "-vv", "--verbose", "-l", "--list", "--show-current", "--no-track", "--no-color"}
+)
+BRANCH_VALUED = ("--sort=", "--format=")
+
+
+def branch_shape(words: list[str], _cwd: str) -> bool:
+    """`git branch` with only BRANCH_LISTING options (or BRANCH_VALUED ones glued to their value), and at
+    most a new branch's name and its start point, by plain names."""
+    options = [word for word in words if word.startswith("-")]
+    others = [word for word in words if not word.startswith("-")]
+    allowed = all(option in BRANCH_LISTING or option.startswith(BRANCH_VALUED) for option in options)
+    return allowed and len(others) <= 2 and all(BRANCH_NAME.fullmatch(word) for word in others)  # noqa: PLR2004
 
 
 def remote_shape(words: list[str], cwd: str) -> bool:
@@ -948,17 +1027,15 @@ GIT: dict[str, GitRule] = {
     "commit": GitRule("Ft", MESSAGE_FILE),  # -F/--file and -t (--template) read any file; -c reuses a commit
     "checkout": GitRule(),  # in the repository only
     "switch": GitRule(),  # its -c is --create
-    "branch": GitRule(),  # names branches
+    "branch": GitRule(words=branch_shape),  # makes and lists branches, nothing else
     "merge": GitRule(STRATEGY + "F", MESSAGE_FILE),  # not -s (a strategy program) or -F (a message file)
     "rebase": GitRule(STRATEGY + "xi"),  # not -s, -x (--exec) or -i (--interactive)
     "cherry-pick": GitRule(STRATEGY),  # over-refuses its -s, --signoff here, a strategy in merge and rebase
     "revert": GitRule(STRATEGY),  # likewise
     "stash": GitRule(),  # in the repository only
-    "tag": GitRule("F", MESSAGE_FILE),  # not -F/--file, which reads any file into a tag a push sends
     "fetch": GitRule(words=partial(names_a_remote, FETCH_FLAGS)),  # from a remote by its name only
     "pull": GitRule(STRATEGY, words=partial(names_a_remote, PULL_FLAGS)),  # likewise, and no strategy
-    "push": GitRule(words=push_shape),  # to a remote by its name only (never a repository the agent wrote,
-    # whose hooks would run), and a branch of its own: never the default one, never forced or deleted
+    "push": GitRule(words=push_shape),  # the branch checked out, to a remote by name, and nothing else
     "rev-parse": GitRule(),  # reads
     "ls-files": GitRule(),  # reads
     "blame": GitRule(),  # reads
@@ -983,58 +1060,125 @@ def git_allows(words: list[str], cwd: str) -> bool:
 
 
 class GhRule(NamedTuple):
-    """An allowed gh command and its own subcommands."""
+    """What one gh command may carry: each word one of its options or a positional (never a URL, which could
+    name another repository, as -R/--repo could; no rule has those)."""
 
-    seconds: frozenset[str] | None  # the subcommands its second word may be, None for any
-    urls: bool = True  # whether its words may hold a URL
+    flags: frozenset[str] = frozenset()  # options that take no value
+    valued: frozenset[str] = frozenset()  # options that take one, as the next word or glued after `=`
+    positionals: int = 0  # how many other words it may name: a number, a branch, an API path
+    needs: frozenset[str] = frozenset()  # one of these must be there (`--draft`, `--approve`)
+    reads_only: bool = False  # gh api: its method, if given, is GET, and no GraphQL
 
 
-# gh's commands a bosun window may run outside the sandbox. Not extension (ext, extensions), alias, config,
-# auth or codespace, which run programs or change gh itself, nor repo clone and fork, which hand their words
-# to git. `api` reaches whatever the person's token allows (gists, secrets, workflow runs too), which is
-# within their decision that gh may pass.
-GH: dict[str, GhRule] = {
-    "pr": GhRule(  # reads and changes pull requests
-        frozenset({"view", "list", "status", "create", "checkout", "review", "comment", "diff"})
-        | {"ready", "edit", "reopen", "checks"}  # never merge or close, which the tasks never do
+READ_OUTPUT = frozenset({"--json", "-q", "--jq", "-t", "--template"})  # how a read prints, nothing else
+PR_FILTERS = frozenset({"-s", "--state", "-L", "--limit", "-B", "--base", "-H", "--head", "-A", "--author"})
+LIST_FILTERS = PR_FILTERS | {"-l", "--label", "-S", "--search", "-a", "--assignee"}
+REVIEW_KINDS = frozenset({"-a", "--approve", "-c", "--comment"})  # never --request-changes (the tasks)
+# gh's commands a bosun window may run outside the sandbox, by command and subcommand: what the tasks let a
+# repo session do (orchestrator/tasks/: open a draft PR, post one review that approves or comments, read
+# PRs, checks, runs and issues), and nothing else. Since agy 1.5.13 the approval is final, so what the tasks
+# never do (merge, close, mark ready, request reviewers or changes, act on another repository, write through
+# the API) has no rule; agy handles those as it would without bosun.
+GH: dict[tuple[str, str | None], GhRule] = {
+    ("pr", "create"): GhRule(
+        frozenset({"-d", "--draft", "-f", "--fill", "--fill-first", "--fill-verbose", "--dry-run"}),
+        frozenset({"-t", "--title", "-b", "--body", "-B", "--base", "-H", "--head", "-l", "--label"}),
+        needs=frozenset({"-d", "--draft"}),  # a draft notifies nobody (new-work: never request reviewers)
     ),
-    "issue": GhRule(  # reads and changes issues
-        frozenset({"view", "list", "create", "comment", "edit", "close", "reopen", "status"})
+    ("pr", "review"): GhRule(REVIEW_KINDS, frozenset({"-b", "--body"}), 1, needs=REVIEW_KINDS),
+    ("pr", "view"): GhRule(frozenset({"-c", "--comments"}), READ_OUTPUT, 1),
+    ("pr", "list"): GhRule(frozenset({"-d", "--draft"}), READ_OUTPUT | LIST_FILTERS),
+    ("pr", "status"): GhRule(frozenset({"-c", "--conflict-status"}), READ_OUTPUT),
+    ("pr", "checks"): GhRule(frozenset({"--watch", "--fail-fast", "--required"}), READ_OUTPUT | {"-i"}, 1),
+    ("pr", "diff"): GhRule(frozenset({"--name-only", "--patch"}), frozenset({"--color"}), 1),
+    ("run", "view"): GhRule(
+        frozenset({"--log", "--log-failed", "-v", "--verbose", "--exit-status"}),
+        READ_OUTPUT | {"-j", "--job", "-a", "--attempt"},
+        1,
     ),
-    "run": GhRule(frozenset({"view", "list", "watch", "rerun"})),  # workflow runs
-    "repo": GhRule(frozenset({"view"})),  # reads only
-    "workflow": GhRule(frozenset({"view", "list"})),  # reads only, never runs one
-    "search": GhRule(None),  # reads only
-    "status": GhRule(None),  # reads only; has no subcommands of its own
-    "api": GhRule(None, urls=False),  # the host gh is logged in to, by a path, never a full URL
+    ("run", "list"): GhRule(
+        frozenset({"-a", "--all"}),
+        READ_OUTPUT | {"-L", "--limit", "-b", "--branch", "-w", "--workflow", "-c", "--commit", "-s"},
+    ),
+    ("run", "watch"): GhRule(frozenset({"--exit-status", "--compact"}), frozenset({"-i", "--interval"}), 1),
+    ("issue", "view"): GhRule(frozenset({"-c", "--comments"}), READ_OUTPUT, 1),
+    ("issue", "list"): GhRule(valued=READ_OUTPUT | LIST_FILTERS),
+    ("repo", "view"): GhRule(valued=READ_OUTPUT | {"-b", "--branch"}),
+    ("status", None): GhRule(),
+    ("api", None): GhRule(  # a read of the host gh is logged in to, by an API path
+        frozenset({"--paginate", "--slurp", "-i", "--include", "--silent", "--verbose"}),
+        READ_OUTPUT | {"--cache", "-X", "--method"},
+        1,
+        reads_only=True,
+    ),
 }
-# Refused in every gh command: what reads a file and sends it (--field and -F, --input, --body-file,
-# --recover, --template and -T, a word starting with `@` or holding `=@`), another host (--hostname), git in
-# submodules (--recurse-submodules), and `--`, after which gh hands words to git.
-GH_REFUSED_LONG = frozenset(
-    {"field", "input", "body-file", "template", "hostname", "recover", "recurse-submodules"}
-)
-GH_REFUSED_LETTERS = "FT"
+METHOD_OPTIONS = frozenset({"-X", "--method"})
 
 
-def gh_refuses(word: str) -> bool:
-    """Whether <word>, in a gh command, is one GH_REFUSED_* refuses (gh takes long options only in full)."""
-    if word == "--" or word.startswith("@") or "=@" in word:
-        return True
-    if word.startswith("--"):
-        return word[2:].partition("=")[0] in GH_REFUSED_LONG
-    return any(letter in GH_REFUSED_LETTERS for letter in short_letters(word))
+def gh_option(rule: GhRule, words: list[str], index: int) -> tuple[str, int] | None:
+    """The option at <words>[<index>] by its name, and the index of the next word, if <rule> takes it as
+    written: exactly one of its names, a long one perhaps glued to its value with `=` (a short one never
+    glued, nor in a cluster). A method other than GET refuses, for a rule that only reads."""
+    word = words[index]
+    name, glued, value = word.partition("=") if word.startswith("--") else (word, "", "")
+    if name in rule.flags and not glued:
+        return name, index + 1
+    if name not in rule.valued:
+        return None
+    if not glued:
+        if index + 1 >= len(words):
+            return None
+        value, index = words[index + 1], index + 1
+    return (name, index + 1) if gh_value_fits(rule, name, value) else None
+
+
+def gh_value_fits(rule: GhRule, name: str, value: str) -> bool:
+    """Whether option <name> may take <value>: never `@file`, which gh reads and sends where it reads one, and
+    for a rule that only reads no method but GET."""
+    if value.startswith("@"):
+        return False
+    return not (rule.reads_only and name in METHOD_OPTIONS and value.casefold() != "get")
+
+
+def gh_word_refused(word: str) -> bool:
+    """`--`, after which gh hands words on, or a word that reads a file (`@file`, `x=@file`)."""
+    return word == "--" or word.startswith("@") or "=@" in word
+
+
+def gh_positionals_fit(rule: GhRule, positionals: list[str]) -> bool:
+    """No more positionals than <rule> takes, none a URL, and for gh api no GraphQL."""
+    if len(positionals) > rule.positionals or any("://" in word for word in positionals):
+        return False
+    return not (rule.reads_only and any(word.casefold().startswith("graphql") for word in positionals))
+
+
+def gh_words_fit(rule: GhRule, words: list[str]) -> bool:
+    """Whether <words>, after a gh command and its subcommand, are what <rule> lets it carry."""
+    given: set[str] = set()
+    positionals: list[str] = []
+    index = 0
+    while index < len(words):
+        word = words[index]
+        if gh_word_refused(word):
+            return False
+        if word.startswith("-") and word != "-":
+            found = gh_option(rule, words, index)
+            if found is None:
+                return False
+            given.add(found[0])
+            index = found[1]
+            continue
+        positionals.append(word)
+        index += 1
+    return gh_positionals_fit(rule, positionals) and (not rule.needs or bool(given & rule.needs))
 
 
 def gh_allows(words: list[str], _cwd: str) -> bool:
-    """Whether `gh <words>` is an allowed command, first, with an allowed subcommand second, and none of its
-    words refused."""
-    rule = GH.get(words[0])
-    if rule is None:
-        return False
-    second = rule.seconds is None or (len(words) > 1 and words[1] in rule.seconds)
-    urls = rule.urls or not any("://" in word for word in words)
-    return second and urls and not any(map(gh_refuses, words[1:]))
+    """Whether `gh <words>` is a command and subcommand of GH, with only the words its rule allows."""
+    if len(words) > 1 and (words[0], words[1]) in GH:
+        return gh_words_fit(GH[(words[0], words[1])], words[2:])
+    rule = GH.get((words[0], None))
+    return rule is not None and gh_words_fit(rule, words[1:])
 
 
 class BosunRule(NamedTuple):
@@ -1044,14 +1188,11 @@ class BosunRule(NamedTuple):
     seconds: frozenset[str] = frozenset()  # its own subcommands refused as its second word
 
 
-STARTS_WINDOWS = BosunRule(frozenset({"--new", "--start"}))  # start a window, perhaps in a folder the agent
-# wrote
 # bosun's commands a bosun window may run outside the sandbox: never launch, trust, start, refresh, update,
-# init or uninstall, nor alert, whose notification text is the agent's.
+# init or uninstall, nor alert, whose notification text is the agent's, nor send or delegate: a repo session
+# reports through the ledger and messages no other session (orchestrator/tasks/_common.md).
 BOSUN: dict[str, BosunRule] = {
     "ledger": BosunRule(seconds=frozenset({"approve"})),  # the work items; never approves its own proposal
-    "send": STARTS_WINDOWS,  # pastes into a running window
-    "delegate": STARTS_WINDOWS,  # hands a task to a running window
     "sessions": BosunRule(),  # reads
     "status": BosunRule(),  # reads
     "context": BosunRule(),  # reads
@@ -1074,10 +1215,13 @@ def abbreviates(name: str, refused: frozenset[str]) -> bool:
 
 def bosun_allows(words: list[str], _cwd: str) -> bool:
     """Whether `bosun <words>` is an allowed command, first, with neither a refused subcommand second nor a
-    refused option anywhere. No `--` either: bosun's commands need none, and after one argparse still reads
-    the next word as the subcommand, so `ledger -- approve` would get past the second-word check."""
+    refused option anywhere. Where subcommands are refused, the second word is the subcommand itself, never an
+    option before it (`ledger --json approve`). No `--` either: bosun's commands need none, and after one
+    argparse still reads the next word as the subcommand, so `ledger -- approve` would get past the check."""
     rule = BOSUN.get(words[0])
     if rule is None or "--" in words or any(second in rule.seconds for second in words[1:2]):
+        return False
+    if rule.seconds and words[1:2] and words[1].startswith("-"):
         return False
     return not any(abbreviates(word.partition("=")[0], rule.words) for word in words[1:])
 

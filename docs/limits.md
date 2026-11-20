@@ -37,12 +37,15 @@ your setup, or when something behaves unexpectedly. Planned work and open questi
 - **What an `agy` window cannot do.** It runs repo git hooks nowhere: an approved commit would otherwise run the
   repo's own hook code outside `agy`'s sandbox, so checks that a pre-commit hook makes run in CI only. Its login
   reaches only a desktop session, never ssh. A window starts only if `agy` has no MCP server its connectors list does
-  not name, the Antigravity app's included. It does not start in a folder with an `.agents/hooks.json`, a plugin with
-  hooks in `.agents/plugins/` or an `.agents/plugins.json` (in it or any folder up to its repo's root), whose hooks
-  `agy` would run outside its sandbox, nor with a log folder (`BOSUN_LOG_DIR`) that has a space in its path. bosun's
-  plugin lets past `agy`'s sandbox only the `git`, `gh` and `bosun` commands of its list, and since `agy` 1.5.13 such
-  an approval is final (`agy`'s own reviewer no longer looks), so the list leaves out what a repo session never does:
-  a push that forces, deletes or writes the default branch, and `gh pr merge` or `close`.
+  not name, the Antigravity app's included. It does not start when an `.agents/` in its folder or any folder above
+  it up to your home folder holds a `plugins` folder or a file named like `*hooks*.json`, `plugin.json`,
+  `plugins.json` or `mcp_config.json` (rules, skills and workflows are fine), whose hooks or servers `agy` would
+  run outside its sandbox, nor with a log folder (`BOSUN_LOG_DIR`) that has a space in its path. That is checked
+  when a window starts, not while it runs. bosun's plugin lets past `agy`'s sandbox only an allowlist of exact
+  `git`, `gh` and `bosun` command shapes, what the task files let a repo session do, since `agy` 1.5.13 takes such
+  an approval as final (its own reviewer no longer looks): a push only of the branch checked out, never the
+  default branch, and only when the remote's default branch is known (`origin/HEAD`, which a clone sets); a PR
+  only as a draft; a review that approves or comments; reads. Anything else is left to `agy`.
 
 ## Starting work
 

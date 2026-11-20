@@ -33,6 +33,7 @@ FSMON_MARKER="$HOME/fsmonitor-ran"
 WT_WINDOW="freshwt"
 WT_REPO="$HOME/Development/factrepo-wt" # a worktree of FACT_REPO: its .git is a file
 HOOK_MARKER="$HOME/pre-commit-hook-ran"
+MIDSESSION_MARKER="$HOME/midsession-hook-ran"
 WS_PLUGIN_MARKER="$HOME/workspace-plugin-hook-ran"
 WSP_REPO="$HOME/Development/wsprepo" # a repo with a plugin of its own in .agents/plugins/
 SIGN_IN_SECONDS=900
@@ -440,6 +441,9 @@ agy_command_fact() { # <fact name> <regex>: how the recorded PreToolUse rows for
 agy_approvals() {
   date +%s >"$OUT/approvals-since"
   echo "what bosun's plugin approves, from what agy's hooks recorded"
+  # bosun approves a push only when the remote's default branch is known (origin/HEAD), which a clone sets and
+  # this repo, made with `remote add`, has not.
+  check "the repo knows its remote's default branch, as a clone does" git -C "$HOME/Development/exporter" remote set-head origin main
   check "a turn of git, gh and ls commands ends with no dialog of agy's own" agy_asks_without_dialog "$APPROVAL_PROMPT" 420
   agy_note_seen
   check "a git push of a feature branch to the local bare remote is answered with BypassSandbox" agy_answered '^git push .*feature-live' approved
@@ -591,6 +595,7 @@ agy_facts_window() {
   agy_fact_turn "$STATUS_PROMPT"
   fact planted-fsmonitor-window "on the window's git status, with the git config bosun puts in its environment, the program of the planted submodule $(ran_word RAN "did not run"); asked: $(asked_word)"
   agy_shell_fact
+  agy_midsession_hooks_fact
   agy_past_the_sandbox_fact
   agy_worktree_fact
   agy_facts_from_hooks
@@ -606,6 +611,19 @@ agy_shell_fact() {
 }
 
 ran_marker() { if [ -e "$1" ]; then echo "$2"; else echo "$3"; fi; } # <marker> <if it exists> <if not>
+
+# Whether agy picks up a workspace hooks file written while a window runs: bosun checks for one only when a
+# window starts. Written here (as the agent could, in its workspace, from the sandbox), then a turn that runs
+# a command; the file is taken away again before the window's next start.
+agy_midsession_hooks_fact() {
+  rm -f "$MIDSESSION_MARKER"
+  mkdir -p "$FACT_REPO/.agents"
+  jq -n --arg marker "$MIDSESSION_MARKER" '{midsession: {PreInvocation: [{type: "command", command: "touch \($marker)"}],
+    PreToolUse: [{matcher: "run_command", hooks: [{type: "command", command: "touch \($marker)"}]}]}}' >"$FACT_REPO/.agents/hooks.json"
+  agy_fact_turn "$STATUS_PROMPT"
+  rm -rf "$FACT_REPO/.agents"
+  fact midsession-hooks "a workspace .agents/hooks.json written while the window ran: its hooks $(ran_marker "$MIDSESSION_MARKER" "RAN on the next turn (bosun's launch-time check does not cover a running window)" "did not run on the next turn"); asked: $(asked_word)"
+}
 
 # What a command run past the sandbox (an approved git, with the plugin) sees of the git environment the launch
 # pinned (GIT_CONFIG_COUNT, GIT_CONFIG_KEY_n, core.hooksPath=/dev/null): `git rev-parse --git-path hooks` prints

@@ -33,9 +33,10 @@ check_agy_connectors() { # <name>
 
 # Checks, once per process, what would make an agy window start unsafe or unseen, in the launch's own shell (a
 # die in $(...) would be lost). Both are refusals, as the connectors' is:
-#   - `.agents/hooks.json` in the window's folder or any folder up to its repo's root (lib/agy_workspace.py):
-#     agy runs the hooks of such a file when it starts, outside its sandbox, and bosun relaunches windows by
-#     itself.
+#   - under an `.agents/` in the window's folder or any folder up to the home folder (lib/agy_workspace.py): a
+#     `plugins` folder, or a file named like `*hooks*.json`, `plugin.json`, `plugins.json` or `mcp_config.json`.
+#     agy runs a workspace's hooks when it starts, outside its sandbox, and bosun relaunches windows by itself.
+#     It is checked here, at the launch, not while the window runs.
 #   - a space in the log folder: the adapter finds a window by the `--log-file <path>` in its command line, and
 #     reads the path as one word (LOG_FILE in lib/agy_state.py).
 check_agy_workspace() { # <name>
@@ -44,7 +45,7 @@ check_agy_workspace() { # <name>
   hooks="$(python3 "$BOSUN_ROOT/lib/agy_workspace.py" hooks "$PWD")" ||
     launch_refused "$1" "could not look for workspace hooks (lib/agy_workspace.py)"
   [ -z "$hooks" ] ||
-    launch_refused "$1" "${hooks%%$'\n'*} would run outside agy's sandbox when agy starts (bosun does not start agy windows with workspace hooks)"
+    launch_refused "$1" "${hooks%%$'\n'*} would run outside agy's sandbox when agy starts (bosun does not start agy windows with workspace hooks, plugins or servers)"
   case "$BOSUN_LOG_DIR" in
     *[[:space:]]*) launch_refused "$1" "bosun's log folder \"$BOSUN_LOG_DIR\" has a space in it, which agy windows cannot use yet" ;;
   esac

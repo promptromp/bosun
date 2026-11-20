@@ -238,12 +238,15 @@ What an `agy` window does:
 - When the first `agy` window starts, bosun installs a small plugin of its own into `agy`. It is recorded, and
   `bosun uninstall` takes it back. In a bosun window the plugin lets exactly allow-listed `git`, `gh` and `bosun`
   commands run past `agy`'s sandbox, so that pushes and `gh` work; every other command is left to `agy`. Since
-  `agy` 1.5.13 such an approval is final (`agy`'s own reviewer no longer looks at it), so the list leaves out what
-  a repo session never does: a push that forces, deletes, names no branch or writes the default branch, and
-  `gh pr merge` or `close`. In your own `agy` sessions the plugin does nothing.
-- A window is refused when its folder, or one up to its repo's root, has `agy` hooks of its own: an
-  `.agents/hooks.json`, a plugin with hooks in `.agents/plugins/`, or an `.agents/plugins.json`. `agy` would run
-  them outside its sandbox at every start.
+  `agy` 1.5.13 such an approval is final (`agy`'s own reviewer no longer looks at it), so the list is an allowlist
+  of exact shapes, what the task files let a repo session do: a push only of the branch checked out
+  (`git push [-u] origin <branch>`), never the default branch; a PR only as a draft; a review that approves or
+  comments; reads. A push is approved only when the repo knows its remote's default branch (`origin/HEAD`, which a
+  clone sets; else `git remote set-head origin -a`). In your own `agy` sessions the plugin does nothing.
+- A window is refused when an `.agents/` in its folder, or in any folder above it up to your home folder, holds a
+  `plugins` folder or a file named like `*hooks*.json`, `plugin.json`, `plugins.json` or `mcp_config.json`: `agy`
+  would run such hooks outside its sandbox, or start such servers, at every start. Rules, skills and workflows
+  there are fine. This is checked when a window starts, not while it runs.
 - Repo git hooks do not run in an `agy` window: an approved commit would otherwise run the repo's own hook code
   outside the sandbox. Pre-commit-style checks therefore run in CI only.
 - Its status comes from `agy`'s hooks and, while a window is busy, from its screen (Esc, and `agy`'s dialogs).

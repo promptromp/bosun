@@ -323,6 +323,12 @@ class PreToolUseTest(HookCase):
         patcher = mock.patch.object(agy_state, "configured_remote", self.configured_remote)
         patcher.start()
         self.addCleanup(patcher.stop)
+        # What a push's approval reads of the repository: `feature` checked out, the remote's default `main`.
+        # RealPushTest reads a real repository instead.
+        self.push = agy_state.PushContext(current="feature", default="main", widened=False)
+        context = mock.patch.object(agy_state, "push_context", lambda _remote, _cwd: self.push)
+        context.start()
+        self.addCleanup(context.stop)
 
     def configured_remote(self, name: str, cwd: str) -> bool:
         self.config_reads.append((name, cwd))
@@ -360,12 +366,11 @@ class PreToolUseTest(HookCase):
             "git log -c",
             "git add src/a.py",
             "git status",
-            "gh pr create --title 'Fix #12' --body 'a && b'",
+            "gh pr create --draft --title 'Fix #12' --body 'a && b'",
             "gh pr view 5",
-            "gh api graphql -f query=q",
+            "gh api repos/acme/exporter/pulls/5",
             "gh run view 9",
             "bosun ledger list",
-            "bosun send w hi",
             "git status && git push origin feature",
             'git commit -m "fix: it\'s done"',
             "git fetch origin && git rebase origin/main",
@@ -373,7 +378,6 @@ class PreToolUseTest(HookCase):
             "git log --oneline -5; gh pr list",
             "git commit -m 'a\nb'",
             "git push -u origin feature",
-            "git push origin HEAD:feature",
             "git cherry-pick -x abc123",
             "git add 'src/*.py'",
         )
@@ -419,14 +423,16 @@ class PreToolUseTest(HookCase):
         )
 
     def test_the_push_agy_1_5_13_sent_is_approved(self) -> None:
+        self.push = agy_state.PushContext(current="feature-live", default="main", widened=False)
         body = {**payload("pre-tool-use-1.5.13"), "cwd": str(self.work), "workspacePaths": [str(self.work)]}
         self.assertEqual(self.answer("PreToolUse", body), APPROVAL)
 
     def test_every_subcommand_of_the_tables_is_approved_on_its_own(self) -> None:
         for sub in agy_state.GIT:  # a push names its remote and its branch
             self.assert_approved(f"git {sub} origin feature" if sub == "push" else f"git {sub}")
-        for sub, seconds in agy_state.GH.items():
-            self.assert_approved(*(f"gh {sub} {second}" for second in (seconds.seconds or ("x",))))
+        for (command, second), rule in agy_state.GH.items():
+            needs = sorted(rule.needs)[:1]
+            self.assert_approved(" ".join(["gh", command, *([second] if second else []), *needs]))
         for sub in agy_state.BOSUN:
             self.assert_approved(f"bosun {sub}")
 
@@ -533,7 +539,6 @@ class PreToolUseTest(HookCase):
         self.assert_approved(
             "git fetch --depth=1 origin",
             "git pull --rebase=merges origin main",
-            "git push --no-verify origin HEAD:refs/heads/x",
             "git remote",
             "git remote -v",
             "git remote show origin",
@@ -581,17 +586,215 @@ class PreToolUseTest(HookCase):
             "git push --all origin",
             "git push --branches origin",
             "git push --mirror origin",
+            "git push --no-verify origin feature",  # no option but -u and --set-upstream
+            "git push -q origin feature",
+            "git push -o ci.skip origin feature",
+            "git push --set-upstream=origin feature",
         )
-        self.assert_approved("git push -u origin feature", "git push origin HEAD:refs/heads/feature")
+        self.assert_approved("git push -u origin feature", "git push --set-upstream origin feature")
+
+    def test_the_reviews_push_shapes_get_no_answer(self) -> None:
+        """Each push of the security review of 2026-11-20 (findings 1-4, 7, 8 and 10): a second colon, a
+        ref prefix, `@` or HEAD in any case, a tag, a non-branch ref, another case of main, an empty
+        destination."""
+        self.assert_no_answer(
+            "git push origin 'HEAD^{/:?}:main'",  # 1: git splits at the last colon
+            "git push origin feature:heads/main",  # 2: git reads heads/main as refs/heads/main
+            "git push origin heads/main",  # 3
+            "git push origin heads/feature",
+            "git push origin refs/heads/feature",
+            "git push origin @",  # 4
+            "git push origin head",
+            "git push origin Head",
+            "git push origin HEAD:feature",
+            "git push origin HEAD:refs/heads/feature",
+            "git push origin feature:feature",  # one plain branch, no colon at all
+            "git push origin feature:refs/tags/v9",  # 8
+            "git push origin tag v1",
+            "git push origin feature --tags",
+            "git push origin feature --follow-tags",
+            "git push origin feature:refs/heads/gh-pages",
+            "git push origin feature:refs/remotes/origin/main",
+            "git push origin feature:Main",  # 10
+            "git push origin feature:refs/heads/MAIN",
+            "git push origin feature:",
+            "git push origin tags/v1",
+            "git push origin remotes/origin/main",
+            "git push origin 'feature~1'",
+            "git push origin 'feature^'",
+            "git push origin 'a..b'",
+            "git push origin feature.lock",
+        )
+
+    def test_a_push_names_the_branch_checked_out_never_main_in_any_case(self) -> None:
+        self.push = agy_state.PushContext(current="main", default="main", widened=False)
+        self.assert_no_answer("git push origin main", "git push -u origin main")
+        self.push = agy_state.PushContext(current="Main", default="main", widened=False)
+        self.assert_no_answer("git push origin Main")
+        self.push = agy_state.PushContext(current="MASTER", default="trunk", widened=False)
+        self.assert_no_answer("git push origin MASTER")
+        self.push = agy_state.PushContext(current="other", default="main", widened=False)
+        self.assert_no_answer("git push origin feature")  # not the one checked out
+        self.push = agy_state.PushContext(current="", default="main", widened=False)
+        self.assert_no_answer("git push origin feature")  # none checked out (a detached HEAD)
 
     def test_a_push_to_the_remotes_own_default_branch_gets_no_answer(self) -> None:
-        with mock.patch.object(agy_state, "remote_default_branch", return_value="develop"):
-            self.assert_no_answer("git push origin develop", "git push origin HEAD:develop")
-            self.assert_approved("git push origin feature")
+        self.push = agy_state.PushContext(current="develop", default="develop", widened=False)
+        self.assert_no_answer("git push origin develop")
+        self.push = agy_state.PushContext(current="Develop", default="develop", widened=False)
+        self.assert_no_answer("git push origin Develop")
+        self.push = agy_state.PushContext(current="feature", default="develop", widened=False)
+        self.assert_approved("git push origin feature")
+
+    def test_a_default_branch_that_cannot_be_read_refuses(self) -> None:
+        """Review finding 5: an origin/HEAD the agent deleted, or one never set, is no answer, not every
+        branch but main and master."""
+        self.push = agy_state.PushContext(current="develop", default="", widened=False)
+        self.assert_no_answer("git push origin develop", "git push origin feature")
+
+    def test_config_that_widens_a_push_refuses(self) -> None:
+        """Review finding 7: push.default=upstream, a remote's push mapping or mirror, tags or submodules."""
+        self.push = agy_state.PushContext(current="feature", default="main", widened=True)
+        self.assert_no_answer("git push origin feature")
+
+    def test_branch_only_makes_and_lists_branches(self) -> None:
+        """Review findings 3, 5 and 7: `branch -f main feature`, `branch -r -d origin/HEAD`, `branch -u`."""
+        self.assert_no_answer(
+            "git branch -f main feature",
+            "git branch --force main feature",
+            "git branch -r -d origin/HEAD",
+            "git branch -r",
+            "git branch -d feature",
+            "git branch -D feature",
+            "git branch --delete feature",
+            "git branch -u origin/main",
+            "git branch --set-upstream-to=origin/main",
+            "git branch --set-upstream-to origin/main",
+            "git branch --unset-upstream",
+            "git branch -t new origin/main",
+            "git branch --track new origin/main",
+            "git branch -m old new",
+            "git branch -M old new",
+            "git branch -c old new",
+            "git branch --edit-description",
+            "git branch new 'HEAD@{1}'",
+            "git branch a b c",
+        )
+        self.assert_approved(
+            "git branch",
+            "git branch new",
+            "git branch new origin/main",
+            "git branch --no-track new origin/main",
+            "git branch -a",
+            "git branch -vv",
+            "git branch --show-current",
+            "git branch --list",
+            "git branch --sort=-committerdate",
+        )
+
+    def test_git_never_tags_configures_or_moves_refs(self) -> None:
+        self.assert_no_answer(
+            "git tag v1",
+            "git tag -a v1 -m x",
+            "git config push.default upstream",
+            "git config --global user.name x",
+            "git remote add evil ./x",
+            "git remote set-url origin ./x",
+            "git remote set-head origin -a",
+            "git update-ref refs/heads/main HEAD",
+            "git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/feature",
+            "git -C /elsewhere push origin feature",
+            "git -c push.default=upstream push origin feature",
+            "git --git-dir=/x status",
+            "git --work-tree=/x status",
+            "git --exec-path=/x status",
+        )
+
+    def test_gh_api_only_reads(self) -> None:
+        """Review finding 6: any method but GET, any field, an input, a header, GraphQL."""
+        self.assert_no_answer(
+            "gh api -X PUT repos/acme/app/pulls/5/merge",
+            "gh api --method PUT repos/acme/app/pulls/5/merge -f merge_method=squash",
+            "gh api -X PATCH repos/acme/app/pulls/5 -f state=closed",
+            "gh api -X DELETE repos/acme/app/git/refs/heads/feature",
+            "gh api -X PUT repos/acme/app/contents/README.md -f message=x -f content=eA== -f branch=main",
+            "gh api -X POST repos/acme/app/merges -f base=main -f head=feature",
+            "gh api -X PATCH repos/acme/app/git/refs/heads/main -f sha=x -f force=true",
+            "gh api graphql -f query='mutation{mergePullRequest(input:{pullRequestId:1}){clientMutationId}}'",
+            "gh api graphql -f query=q",
+            "gh api GraphQL",
+            "gh api -XPUT repos/acme/app/pulls/5/merge",
+            "gh api --method=PUT repos/acme/app/pulls/5/merge",
+            "gh api -X=PUT repos/acme/app/pulls/5/merge",
+            "gh api repos/acme/app/issues -f title=x",  # a field makes gh POST
+            "gh api repos/acme/app/issues --raw-field title=x",
+            "gh api repos/acme/app/issues -F title=x",
+            "gh api repos/acme/app/issues --field title=x",
+            "gh api repos/acme/app/issues --input body.json",
+            "gh api -H 'X-HTTP-Method-Override: PUT' repos/acme/app/pulls/5/merge",
+            "gh api https://api.github.com/repos/acme/app",
+            "gh api repos/a/b repos/c/d",
+            "gh api -X",
+        )
+        self.assert_approved(
+            "gh api repos/acme/app/pulls/5/comments",
+            "gh api -X GET repos/acme/app/pulls/5",
+            "gh api --method=get repos/acme/app/pulls/5 --paginate --jq '.[].id'",
+        )
+
+    def test_gh_does_only_what_the_tasks_let_a_repo_session_do(self) -> None:
+        """Review findings 9 and 10: never mark ready, request reviewers or changes, retarget, act on another
+        repository; a PR only as a draft; a review that approves or comments."""
+        self.assert_no_answer(
+            "gh pr ready 5",
+            "gh pr edit 5 --add-reviewer x",
+            "gh pr edit 5 --base feature",
+            "gh pr review 5 --request-changes -b x",
+            "gh pr review 5 -r -b x",
+            "gh pr review 5 -b x",  # neither approve nor comment
+            "gh pr create -R other/repo --draft --title x --body y",
+            "gh pr create --repo other/repo --draft --title x --body y",
+            "gh -R a/b pr view 5",
+            "gh pr view 5 -R other/repo",
+            "gh pr create --title x --body y",  # not a draft
+            "gh pr create --draft --reviewer x --title t",
+            "gh pr create --draft --web",
+            "gh pr create --draft --template t",
+            "gh pr create -dt x",  # a cluster, or a value glued to a short option
+            "gh pr view https://github.com/other/repo/pull/5",
+            "gh pr review https://github.com/other/repo/pull/5 --approve",
+            "gh pr comment 5 --body x",
+            "gh pr checkout 5",
+            "gh pr view 5 --web",
+            "gh run rerun 9",
+            "gh issue create --title x",
+            "gh issue comment 7 --body x",
+            "gh workflow run deploy.yml",
+            "gh search prs x",
+            "gh repo view other/repo",
+            "gh release create v1",
+            "gh pr create --draft --title x --body @/etc/passwd",
+        )
+        self.assert_approved(
+            "gh pr create --draft --title 'Fix #12' --body 'see https://example.com/x'",
+            "gh pr create -d -t x -b y -B main -H feature",
+            "gh pr review 5 --approve",
+            "gh pr review 5 --comment -b 'one note'",
+            "gh pr view 5 --comments",
+            "gh pr view --json number,state",
+            "gh pr list --state open --json number",
+            "gh pr checks 5 --watch",
+            "gh pr diff 5 --name-only",
+            "gh pr status",
+            "gh run view 9 --log-failed",
+            "gh run list --branch feature",
+            "gh issue view 7",
+            "gh status",
+        )
 
     def test_gh_never_merges_or_closes_a_pull_request(self) -> None:
-        self.assert_no_answer("gh pr merge 5", "gh pr merge 5 --squash", "gh pr close 5")
-        self.assert_approved("gh pr ready 5", "gh pr reopen 5", "gh issue close 7")
+        self.assert_no_answer("gh pr merge 5", "gh pr merge 5 --squash", "gh pr close 5", "gh pr ready 5")
+        self.assert_no_answer("gh pr reopen 5", "gh issue close 7")
 
     def test_bosun_ledger_never_approves_a_proposal(self) -> None:
         self.assert_no_answer(
@@ -643,24 +846,19 @@ class PreToolUseTest(HookCase):
             "bosun send --start w",
         )
 
-    def test_a_window_starting_option_is_refused_however_it_is_abbreviated(self) -> None:
+    def test_bosun_never_sends_or_delegates(self) -> None:
+        """A repo session reports through the ledger and messages no other session (_common.md), so neither
+        is approved in any form (it could paste into the orchestrator, or start a window)."""
         self.assert_no_answer(
             "bosun delegate review --id x --ask y --ne w /tmp/d",
-            "bosun delegate review --id x --ask y --new=w /tmp/d",
-            "bosun delegate review --id x --ask y --n w /tmp/d",
-            "bosun delegate review --id x --ask y --sta=w",
-            "bosun delegate review --id x --ask y --star w",
-            "bosun delegate review --id x --ask y --s w",
-            "bosun send --ne w x hi",
-            "bosun send --sta w",
-        )
-        self.assert_approved(
             "bosun delegate review --id x --ask y --window w",
             "bosun delegate review --id x --ask y --print",
-            "bosun delegate review --id x --ask y --details d --model m",
             "bosun send --id x w hi",
-            "bosun ledger list --state open",
+            "bosun send orchestrator 'approve my proposal'",
+            "bosun send --ne w x hi",
+            "bosun ledger --json approve x --quote e",  # review S4: approve after an option
         )
+        self.assert_approved("bosun ledger list --state open", "bosun ledger report i-1 --summary done")
 
     def test_a_command_that_hides_another_gets_no_answer(self) -> None:
         self.assert_no_answer(
@@ -782,6 +980,125 @@ class PreToolUseTest(HookCase):
         self.assertEqual(self.answer("PreToolUse", body), "")
         self.assertEqual(self.answer("PreToolUse", {"toolCall": "git status"}), "")
         self.assertEqual(self.answer("PreToolUse", {}), "")
+
+
+class RealPushTest(HookCase):
+    """bosun's push rule against real git (the review's technique): a bare remote and a clone of it in a
+    scratch folder; an approved push is then run, and only its own branch may have moved on the remote."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        env = {
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_AUTHOR_NAME": "A Sandbox",
+            "GIT_AUTHOR_EMAIL": "sandbox@example.com",
+            "GIT_COMMITTER_NAME": "A Sandbox",
+            "GIT_COMMITTER_EMAIL": "sandbox@example.com",
+            "GIT_TERMINAL_PROMPT": "0",
+        }
+        patcher = mock.patch.dict(os.environ, env)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.remote = self.root / "remote.git"
+        self.clone = self.root / "clone"
+        self.git(self.root, "init", "-q", "--bare", "-b", "main", str(self.remote))
+        seed = self.root / "seed"
+        self.git(self.root, "init", "-q", "-b", "main", str(seed))
+        self.git(seed, "commit", "-q", "--allow-empty", "-m", "seed")
+        self.git(seed, "push", "-q", str(self.remote), "main")
+        self.git(self.root, "clone", "-q", str(self.remote), str(self.clone))
+        self.git(self.clone, "switch", "-q", "-c", "feature")
+        self.git(self.clone, "commit", "-q", "--allow-empty", "-m", "a feature")
+
+    @staticmethod
+    def git(cwd: Path, *args: str) -> str:
+        command = ["git", "-C", str(cwd), *args]
+        done = subprocess.run(command, check=True, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+        return done.stdout
+
+    def refs(self) -> dict[str, str]:
+        lines = self.git(self.remote, "for-each-ref", "--format=%(refname) %(objectname)").splitlines()
+        return dict(line.split(" ", 1) for line in lines)
+
+    def asked(self, command: str, cwd: Path | None = None) -> str:
+        folder = str(cwd or self.clone)
+        body = {**command_payload(command), "cwd": folder, "workspacePaths": [folder]}
+        return self.answer("PreToolUse", body)
+
+    def assert_no_answer(self, *commands: str, cwd: Path | None = None) -> None:
+        for command in commands:
+            self.assertEqual(self.asked(command, cwd), "", command)
+
+    def test_an_approved_push_moves_only_its_own_branch(self) -> None:
+        for command in ("git push origin feature", "git push -u origin feature"):
+            with self.subTest(command):
+                self.git(self.clone, "commit", "-q", "--allow-empty", "-m", "more")
+                before = self.refs()
+                self.assertEqual(self.asked(command), APPROVAL)
+                self.git(self.clone, *command.split()[1:])
+                after = self.refs()
+                changed = {ref for ref in {*before, *after} if before.get(ref) != after.get(ref)}
+                self.assertEqual(changed, {"refs/heads/feature"})
+
+    def test_the_reviews_pushes_get_no_answer_against_real_git(self) -> None:
+        self.git(self.clone, "tag", "v1")
+        self.assert_no_answer(
+            "git push origin 'HEAD^{/:?}:main'",
+            "git push origin feature:heads/main",
+            "git push origin heads/main",
+            "git push origin @",
+            "git push origin head",
+            "git push origin Head",
+            "git push origin feature:refs/tags/v9",
+            "git push origin tag v1",
+            "git push origin main",
+            "git push origin feature:main",
+        )
+        self.assertEqual(set(self.refs()), {"refs/heads/main"})
+
+    def test_main_checked_out_is_never_pushed(self) -> None:
+        self.git(self.clone, "switch", "-q", "main")
+        self.assert_no_answer("git push origin main", "git push origin feature", "git push origin Main")
+
+    def test_no_known_default_branch_refuses(self) -> None:
+        """Review finding 5: with origin/HEAD gone (as `git branch -r -d origin/HEAD` would leave it)."""
+        self.git(self.clone, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD")
+        self.assert_no_answer("git push origin feature")
+
+    def test_the_remotes_own_default_branch_is_never_pushed(self) -> None:
+        self.git(self.clone, "push", "-q", "origin", "feature:develop")
+        self.git(self.remote, "symbolic-ref", "HEAD", "refs/heads/develop")
+        self.git(self.clone, "remote", "set-head", "origin", "develop")
+        self.git(self.clone, "switch", "-q", "-c", "develop", "--track", "origin/develop")
+        self.assert_no_answer("git push origin develop")
+        self.git(self.clone, "switch", "-q", "feature")
+        self.assertEqual(self.asked("git push origin feature"), APPROVAL)
+
+    def test_config_that_widens_a_push_refuses(self) -> None:
+        """Review finding 7, and what else would push more than the branch."""
+        for key, value in (
+            ("push.default", "upstream"),
+            ("push.default", "Tracking"),
+            ("remote.origin.push", "refs/heads/feature:refs/heads/main"),
+            ("remote.origin.mirror", "true"),
+            ("push.followTags", "true"),
+            ("push.recurseSubmodules", "on-demand"),
+        ):
+            with self.subTest(key=key, value=value):
+                self.git(self.clone, "config", key, value)
+                self.assert_no_answer("git push origin feature")
+                self.git(self.clone, "config", "--unset", key)
+        self.assertEqual(self.asked("git push origin feature"), APPROVAL)
+
+    def test_a_worktree_pushes_its_own_branch_and_never_head(self) -> None:
+        """Review finding 4: from a linked worktree, `head` read the main checkout's HEAD."""
+        tree = self.root / "tree"
+        self.git(self.clone, "switch", "-q", "main")
+        self.git(self.clone, "worktree", "add", "-q", "-b", "f2", str(tree))
+        self.git(tree, "commit", "-q", "--allow-empty", "-m", "f2")
+        self.assert_no_answer("git push origin head", "git push origin @", "git push origin main", cwd=tree)
+        self.assertEqual(self.asked("git push origin f2", tree), APPROVAL)
 
 
 class ConfiguredRemoteTest(unittest.TestCase):

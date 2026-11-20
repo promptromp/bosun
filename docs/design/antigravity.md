@@ -169,23 +169,41 @@ sandbox.
   if the plugin made it). (Changed: the first version installed it at `bosun init` and `bosun update`; the
   first launch on `agy` covers both, and windows added later.)
 - **What bosun's plugin approves.** Its `PreToolUse` hook answers `auto_approve` with `BypassSandbox` for a
-  `run_command` whose every command is `git`, `gh` or `bosun` with a subcommand of that program's allow-list
-  (`GIT`, `GH` and `BOSUN` in `lib/agy_state.py`: no global option before it, no `cd`, no prefix, no glob, run in
-  the payload's own workspace, and per subcommand the options and repositories it may name), in bosun windows
-  only, and nothing for every other command. A program that does not resolve on the hook's `PATH` to a full path
-  outside the payload's workspaces (a `git` the agent planted and put first) gets none either, and a
-  window-starting option of `bosun send` or `bosun delegate` is refused however it is abbreviated (`--ne`,
-  `--sta=w`), as `bosun delegate`'s own parser takes no abbreviation. (Changed: the first version took any `git`, `gh` or `bosun`
-  command past `cd` and refused a list of dangerous options, which two reviews showed could not be completed.) `allow` is not enough: it still
-  shows `agy`'s dialog, and the command still runs in the sandbox with no network. (Changed: the first version
-  said "approves".) `agy`'s reviewer can still ask, and the window is then `waiting`. Nothing in `agy`'s
-  global settings changes (my decision, 2026-11-10). Since 1.5.13 the approval is final (a session showed a
-  `git push --force origin HEAD:main` approved and run, no reviewer asked), so the list leaves out what a repo
-  session never does (`orchestrator/tasks/_common.md`): a push that forces (`-f`, `--force*`, `+refspec`),
-  deletes (`-d`, `--delete`, `:branch`, `--prune`), pushes every branch (`--all`, `--branches`, `--mirror`),
-  names no branch (whatever `push.default` writes) or writes `main`, `master`, `HEAD` or the remote's own default
-  branch, and `gh pr merge` and `gh pr close`. Those get no answer, and `agy` handles them as it would without
-  bosun. (Changed, 2026-11-20.)
+  `run_command` whose every command is `git`, `gh` or `bosun` in one of the exact shapes of its allowlist
+  (`GIT`, `GH` and `BOSUN` in `lib/agy_state.py`: no global option before the subcommand, no `cd`, no prefix, no
+  glob, run in the payload's own workspace), in bosun windows only, and nothing for every other command. A
+  program that does not resolve on the hook's `PATH` to a full path outside the payload's workspaces (a `git`
+  the agent planted and put first) gets none either. `allow` is not enough: it still shows `agy`'s dialog, and
+  the command still runs in the sandbox with no network. (Changed: the first version said "approves".) Nothing
+  in `agy`'s global settings changes (my decision, 2026-11-10).
+
+  Since 1.5.13 the approval is final: a session showed an approved `git push --force origin HEAD:main` run with
+  no reviewer. So the allowlist holds only what the task files let a repo session do (`orchestrator/tasks/`),
+  and fails closed; everything else gets no answer, and `agy` handles it as it would without bosun (rebuilt
+  after a security review, 2026-11-20; `main`'s preview approves any `git`, `gh` or `bosun` subcommand of its
+  lists, any push included):
+
+  - `git push [-u | --set-upstream] <remote> <branch>` and no other push: the remote by its configured name
+    (never a URL or a path), the branch the one checked out, by a plain name (`[A-Za-z0-9._][A-Za-z0-9._/-]*`,
+    no `heads/`, `refs/`, `tags/` or `remotes/`, not `@` or HEAD in any case), never `main`, `master` or the
+    remote's default branch (its `origin/HEAD`, in any case; one that cannot be read refuses), and nothing in
+    git's config that would push elsewhere or more (`push.default` upstream or tracking, a remote's `push` or
+    `mirror`, `push.followTags`, `push.recurseSubmodules`). It can only write `refs/heads/<branch>`; a test runs
+    approved pushes against a real bare remote to show it. A repo whose `origin/HEAD` is not set (a clone sets
+    it; `git remote set-head origin -a` does) gets no approval for a push.
+  - git's local and read-only subcommands: `status`, `log`, `diff`, `show`, `add`, `rm`, `mv`, `restore`,
+    `reset`, `commit`, `checkout`, `switch`, `merge`, `rebase`, `cherry-pick`, `revert`, `stash`, `fetch` and
+    `pull` (from a remote by its name), `rev-parse`, `ls-files`, `blame`, `describe`, `merge-base`, `remote`
+    (listing only), and `branch` only to make or list one (never delete, rename, copy, force, track or set an
+    upstream). Never `tag`, `config`, `update-ref` or `symbolic-ref`.
+  - gh: `pr create` only as a draft (`-d`/`--draft`), `pr review` only approving or commenting, `pr view`,
+    `list`, `status`, `checks` and `diff`, `run view`, `list` and `watch`, `issue view` and `list`, `repo view`
+    and `status`, each with its own options only (no `-R`/`--repo`, no `--web`, no URL, no `@file`, a short
+    option never glued or clustered), and `gh api` only as a read (no method but GET, no field, input or header,
+    no GraphQL). Never `pr merge`, `close`, `ready`, `edit`, `comment` or `checkout`, nor `--request-changes`. A
+    reply in a review thread (fix-my-pr) is a `gh api` call with a field, so it is left to `agy` too.
+  - bosun: `ledger` (never `approve`) and the commands that only read; never `send` or `delegate`, since a repo
+    session reports through the ledger and messages no other session.
 - **Trust.** Each launch passes the folder, as given, in `--settings` (`trustedWorkspaces`), so the trust
   screen never shows and `agy`'s settings are never written. `agy` compares the folder as given, not its
   resolved path, and a trusted folder does not cover the folders under it. `bosun trust` has nothing to do for
@@ -204,10 +222,15 @@ sandbox.
 - **What would run when `agy` starts.** `agy` reads hooks from `.agents/hooks.json` in a workspace, and from each
   plugin in `.agents/plugins/` there (a 1.5.13 session ran a workspace plugin's SessionStart, PreInvocation,
   PreToolUse and Stop hooks, though `agy plugin list` does not list it), and runs them outside its sandbox, and
-  bosun relaunches windows by itself. So a launch is refused when such a hooks file, or an `.agents/plugins.json`,
-  exists in the window's folder or any folder up to its repo's root (the walk the connectors check uses,
-  `lib/agy_workspace.py`), with its path in the message. It is also refused when the log folder has a space
-  in it: the adapter finds a window by the one-word path after `--log-file` in its command line.
+  bosun relaunches windows by itself. So a launch is refused, failing closed, when an `.agents/` in the window's
+  folder or any folder above it up to and including the home folder (by the path given and by its resolved
+  path; up to `/` for a folder outside the home folder) holds a `plugins` folder, whatever is in it, or a file
+  at any depth named like `*hooks*.json`, `plugin.json`, `plugins.json` or `mcp_config.json`, or is a link, too
+  large to look through or unreadable (`lib/agy_workspace.py`), with the path in the message. Rules, skills and
+  workflows there are left alone. The check runs when a window starts, not while it runs: a hooks file the
+  agent writes in its workspace during a session is the VM run's fact (`midsession-hooks`). It is also refused
+  when the log folder has a space in it: the adapter finds a window by the one-word path after `--log-file` in
+  its command line.
 - **Reading its screen.** Readers for `pane_input`, from the run's captures. The box is the line starting with
   `>` between two grey rules, and text in it blanks the footer's hint. A question is a dialog ("↑/↓ Navigate",
   whose footer also says "esc to cancel", so it is checked before busy), the trust screen ("Do you trust the
@@ -251,7 +274,8 @@ window on `agy`.
   - the plugin's install and uninstall leaving nothing else behind;
   - the connector refusal with a server set up, and with none;
   - the morning `agy update` with automatic updates off;
-  - a window on a repo with a plugin of its own in `.agents/plugins/` refused, its hook never run.
+  - a window on a repo with a plugin of its own in `.agents/plugins/` refused, its hook never run;
+  - whether `agy` picks up a workspace hooks file written while a window runs (recorded as a fact).
 - **Rechecked on `agy` 1.5.13 with no login** (2026-11-20, `tests/fixtures/agy/no-login-1.5.13.txt`; a login does
   not carry over to another HOME, so only what needs none). Unchanged: `--version`'s bare `1.5.13`; every flag a
   launch passes is there, an unknown one is refused at start, and a value of `--effort` or `--mode` is not checked
@@ -283,7 +307,7 @@ window on `agy`.
     approved commit ran no planted pre-commit hook, and `git rev-parse --git-path hooks` printed `/dev/null`:
     the environment's pins reach what passes the sandbox;
   - an approval is final: `git push --force origin HEAD:main`, approved, ran with no reviewer, which made the
-    narrower push and `gh pr` rules above; a push to `main` left alone ran too, the remote being in `/tmp`,
+    allowlist above; a push to `main` left alone ran too, the remote being in `/tmp`,
     which the sandbox lets commands write;
   - a workspace plugin's hooks run (above), with `PLUGIN_ROOT` set and no `PLUGIN_DATA`;
   - Esc: `Interrupted`, no hook, the status file left busy; bosun reads the window idle from its screen once the
