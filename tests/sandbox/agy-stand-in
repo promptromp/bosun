@@ -11,10 +11,12 @@ Commands, into its own ~/.gemini:
   plugin install <dir>            copies the plugin to config/plugins/<name>/ and writes
                                   config/import_manifest.json
   plugin uninstall <name>         removes it, and leaves import_manifest.json (its imports null) and an empty
-                                  antigravity-cli/plugin_data/<name>/, as the real one does
+                                  antigravity-cli/plugin_data/<name>/, as the real one did (1.5.5; 1.5.13,
+                                  with no session run, left an empty config/plugins/ and no plugin_data)
   plugin list [--json]            the plugins
 Anything else is a session in the pane, drawn as the screens of tests/fixtures/agy/screens/ are: a box (the
-`>` line between two grey rules), `? for shortcuts` under it when idle, `esc to cancel` and a spinner when a
+`>` line between two grey rules, with 1.5.13's grey placeholder until the first prompt), `? for shortcuts`
+under it when idle (in 1.5.13's grey), `esc to cancel` and a spinner when a
 turn runs, a dialog ("Run this command?", numbered options) for a command named ask, and text typed or
 pasted into the box (bracketed paste, as `bosun send` pastes) with the hint blanked. Flags:
 --prompt-interactive (a first prompt), --conversation <id> (an unknown id prints `warning: conversation
@@ -94,6 +96,8 @@ ANSWERS = {  # as the log says them
     None: "no answer",
 }
 HINT = "? for shortcuts"
+GREY = "\x1b[38;5;246m"  # 1.5.13's grey, for the idle hint and the empty box's placeholder
+PLACEHOLDER = "Auto mode: edits & safe commands auto-approved (shift+tab to cycle)"  # until the first prompt
 INTERRUPTED = "\x1b[90m  \u23bf  Interrupted \u00b7 What should Antigravity CLI do instead?\x1b[39m"
 CHOICES = (
     "Yes, run command",
@@ -140,7 +144,10 @@ def plugin_install(source: str) -> int:
     shutil.copytree(source, target)
     manifest = {"imports": [{"name": name, "source": str(Path(source).resolve())}]}
     (CONFIG / "import_manifest.json").write_text(json.dumps(manifest, indent=2))
-    print(f"  [ok]    {name}\n          Installed to {target}")
+    hooks = ""
+    if (target / "hooks.json").is_file():
+        hooks = f"\n          \u2714 hooks       : 1 installed ({name})"
+    print(f"  [ok]    {name}{hooks}\n          Installed to {target}")
     return 0
 
 
@@ -393,6 +400,7 @@ class Screen:
         self.choice = 0
         self.dialog_command = ""
         self.spin = 0
+        self.placeholder = True
 
     def rule(self, columns: int) -> str:
         return f"\x1b[90m{'─' * columns}\x1b[39m"
@@ -400,7 +408,8 @@ class Screen:
     def box(self, columns: int) -> list[str]:
         mark = "\x1b[94m>\x1b[39m"
         first, *rest = self.typed.split("\n")
-        lines = [f"{mark} {clip(first, columns - 3)}" if self.typed else mark]
+        empty = f"{mark} {GREY}{clip(PLACEHOLDER, columns - 3)}\x1b[39m" if self.placeholder else mark
+        lines = [f"{mark} {clip(first, columns - 3)}" if self.typed else empty]
         return [*lines, *(f"  {clip(line, columns - 3)}" for line in rest)]
 
     def footer(self, columns: int) -> str:
@@ -412,7 +421,7 @@ class Screen:
         elif self.typed:
             left = shown = "\x1b[39m"
         else:
-            left, shown = f"{HINT}\x1b[39m", HINT
+            left, shown = f"{GREY}{HINT}\x1b[39m", HINT
         pad = " " * max(1, columns - len(shown.replace("\x1b[39m", "")) - len(right))
         return f"{left}{pad}\x1b[2m{right}\x1b[0m"
 
@@ -728,6 +737,7 @@ class Session:
     def submit(self, text: str) -> None:
         if text == "/exit":
             raise SystemExit(0)
+        self.screen.placeholder = False
         self.attempt(self.turn, text)
 
     def attempt(self, run: Callable[[str], None], text: str = "") -> None:

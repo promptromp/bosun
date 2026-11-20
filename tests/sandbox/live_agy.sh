@@ -33,6 +33,13 @@ FSMON_MARKER="$HOME/fsmonitor-ran"
 WT_WINDOW="freshwt"
 WT_REPO="$HOME/Development/factrepo-wt" # a worktree of FACT_REPO: its .git is a file
 HOOK_MARKER="$HOME/pre-commit-hook-ran"
+MIDSESSION_MARKER="$HOME/midsession-hook-ran"
+CONFIG_MARKER="$HOME/workspace-config-hook-ran"
+HOME_AGENT_MARKER="$HOME/home-agent-hook-ran"
+EXTENSION_MARKER="$HOME/gemini-extension-hook-ran"
+EXTENSION_SERVERS="$HOME/gemini-extension-servers.log"
+WS_PLUGIN_MARKER="$HOME/workspace-plugin-hook-ran"
+WSP_REPO="$HOME/Development/wsprepo" # a repo with a plugin of its own in .agents/plugins/
 SIGN_IN_SECONDS=900
 CODE_WORD="ZEBRAFISH"
 
@@ -105,8 +112,9 @@ agy_login() {
   >>>      "gemini", click "Always Allow".
   >>>   4. Quit agy (type /exit, or press Ctrl-C twice). You can then close Terminal.
   >>> This waits up to 15 minutes, checking every 10 seconds. Your sign-in stays in that Mac, which is
-  >>> deleted when this run ends. If this script is killed before that, `tests/sandbox.sh mac clean`
-  >>> removes the clone that is left.
+  >>> deleted when this run ends. If this script is killed before that, `tart list` shows the clone that
+  >>> is left (bosun-mac-run-<number>), and `tart delete <its name>` removes it (not `mac clean`, which
+  >>> deletes the base images too).
 
 EOF
   agy_wait_for_sign_in || echo "  the sign-in timed out after 15 minutes"
@@ -447,13 +455,6 @@ agy_approvals() {
   agy_command_fact git-commit-answer '^git commit'
 }
 
-agy_waits_at_dialog() {
-  agy_ask "$PUSH_MAIN_PROMPT" 360 || return 1
-  [ "$(window "$AGY_WINDOW" status)" = waiting ] || {
-    echo "it reads $(window "$AGY_WINDOW" status): $(tr '\n' ' ' <"$OUT/seen")"
-    return 1
-  }
-}
 agy_send_refused() {
   if bosun send --no-item "$AGY_WINDOW" "hello" >"$OUT/refused.txt" 2>&1; then
     echo "bosun send delivered into a window at a dialog"
@@ -464,14 +465,23 @@ agy_send_refused() {
     return 1
   }
 }
+# A push to main: bosun's plugin gives it no answer (the tasks never push to the default branch), and agy then
+# handles it itself. agy 1.5.5's reviewer asked; 1.5.13's let one to a remote in /tmp through without a dialog
+# (2026-11-20), so what it does is recorded, and the checks of a dialog run when there is one.
 agy_dialog() {
-  echo "agy's own reviewer: a push to main"
-  check "a push to main stops at agy's own dialog: the window reads waiting" agy_waits_at_dialog
+  echo "a push to main: no answer from bosun's plugin, then agy's own reviewer"
+  date +%s >"$OUT/approvals-since"
+  agy_ask "$PUSH_MAIN_PROMPT" 360 >"$OUT/main-push.txt" 2>&1
   agy_note_seen
-  agy_screen | grep -v '^[[:space:]]*$' | tail -8 | cut -c1-100 | sed 's/^/  dialog  /'
-  check "bosun send refuses a window at a dialog" agy_send_refused
-  agy_command_fact main-push-answer '^git push .*main'
-  check "Esc ends the dialog, and the window reads idle again" agy_dismiss "$AGY_WINDOW"
+  check "bosun's plugin gives a push to main no answer" agy_answered '^git push .*main' none
+  if [ "$(window "$AGY_WINDOW" status)" = waiting ]; then
+    fact main-push "agy's reviewer asked: the window read waiting"
+    agy_screen | grep -v '^[[:space:]]*$' | tail -8 | cut -c1-100 | sed 's/^/  dialog  /'
+    check "bosun send refuses a window at a dialog" agy_send_refused
+    check "Esc ends the dialog, and the window reads idle again" agy_dismiss "$AGY_WINDOW"
+  else
+    fact main-push "no dialog; the remote's main is now: $(git -C "$HOME/remotes/exporter.git" log -1 --format=%s main 2>&1)"
+  fi
 }
 
 agy_env_is_set() { # what the launch set, as the repo window's hooks saw it
@@ -514,7 +524,80 @@ agy_fact_repo() { # a repo with: a nested one, a bare one and a remote of it, an
   git config -f "$FACT_REPO/.git/modules/planted/config" core.fsmonitor "$HOME/fsmon.sh"
   printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$HOOK_MARKER" >"$FACT_REPO/.git/hooks/pre-commit" &&
     chmod +x "$FACT_REPO/.git/hooks/pre-commit" || return 1
+  agy_unread_places
   git -C "$FACT_REPO" worktree add -q "$WT_REPO" -b wt-probe
+}
+# Two places bosun's launch does not refuse, planted before the facts window starts: a workspace
+# .agents/config.json, and ~/.agent (which may be agy's own, so bosun never looks there). Each carries a hook
+# that leaves a marker; whether agy runs it is recorded (agy_unread_places_fact).
+marker_hooks() { jq -n --arg m "$1" '{probe: {PreInvocation: [{type: "command", command: "touch \($m)"}]}}'; } # <marker>
+agy_unread_places() {
+  local extension="$FACT_REPO/.gemini/extensions/probe"
+  rm -f "$CONFIG_MARKER" "$HOME_AGENT_MARKER" "$EXTENSION_MARKER" "$EXTENSION_SERVERS"
+  mkdir -p "$FACT_REPO/.agents" "$HOME/.agent" "$extension"
+  marker_hooks "$CONFIG_MARKER" | jq '{hooks: .}' >"$FACT_REPO/.agents/config.json"
+  marker_hooks "$HOME_AGENT_MARKER" >"$HOME/.agent/hooks.json"
+  # Gemini CLI's layout of a workspace extension: its servers and hooks in gemini-extension.json.
+  marker_hooks "$EXTENSION_MARKER" | jq --arg python "$(command -v python3)" \
+    --arg server "$ROOT/tests/sandbox/mcp_probe_server.py" --arg log "$EXTENSION_SERVERS" \
+    '{name: "probe", version: "1.0.0", hooks: .probe, mcpServers: {probe: {command: $python, args: [$server, "gemext", $log]}}}' \
+    >"$extension/gemini-extension.json"
+}
+agy_unread_places_fact() {
+  fact workspace-config "a hook in the workspace's .agents/config.json $(ran_marker "$CONFIG_MARKER" "RAN (bosun's launch does not refuse that file)" "did not run")"
+  fact home-agent "a hook in ~/.agent/hooks.json $(ran_marker "$HOME_AGENT_MARKER" "RAN (bosun never looks in ~/.agent)" "did not run")"
+  fact gemini-extension "a workspace .gemini/extensions/probe/gemini-extension.json: its hook $(ran_marker "$EXTENSION_MARKER" RAN "did not run"); its MCP server $(if grep -q '^gemext initialize' "$EXTENSION_SERVERS" 2>/dev/null; then echo STARTED; else echo "did not start"; fi)"
+  rm -rf "$HOME/.agent" "$FACT_REPO/.agents/config.json" "$FACT_REPO/.gemini"
+}
+# Whether git sees the same in a hook's environment as in a command's: what the approval reads against what the
+# command runs with (GIT_DIR, GIT_CONFIG_*, a proxy). The command writes its environment into the workspace.
+agy_git_env_fact() {
+  rm -f "$FACT_REPO/cmd-env.txt" "$HOOKLOG/hook-git-env.txt"
+  agy_fact_turn "Run exactly this as one shell command with your command-running tool: env > cmd-env.txt. Then reply with just: done"
+  if [ ! -s "$FACT_REPO/cmd-env.txt" ] || [ ! -e "$HOOKLOG/hook-git-env.txt" ]; then
+    fact git-env "not compared: the command's or the hook's environment was not written"
+  elif diff <(grep '^GIT_' "$FACT_REPO/cmd-env.txt" | sort) "$HOOKLOG/hook-git-env.txt" >"$OUT/git-env.diff"; then
+    fact git-env "the same GIT_* variables in the hook and in the command ($(wc -l <"$HOOKLOG/hook-git-env.txt" | tr -d ' '))"
+  else
+    fact git-env "DIFFERENT GIT_* variables (< the command, > the hook): $(grep '^[<>]' "$OUT/git-env.diff" | sed 's/=.*//' | tr '\n' ' ')"
+  fi
+  rm -f "$FACT_REPO/cmd-env.txt"
+}
+
+# With bosun's approval withheld (the recorder's no-approval switch), whether agy's auto mode runs local git
+# commands that write .git on its own: the fact that would let the plugin's local git approvals go.
+agy_auto_local_git_fact() {
+  touch "$HOOKLOG/no-approval"
+  agy_fact_turn "Run each of these as its own shell command with your command-running tool: git checkout -b auto-probe, then git commit --allow-empty -m auto-probe. Then reply with just: done"
+  rm -f "$HOOKLOG/no-approval"
+  fact auto-local-git "with no approval from bosun: the branch auto-probe $(git -C "$FACT_REPO" rev-parse --verify -q refs/heads/auto-probe >/dev/null && echo "was made" || echo "was not made"); its commit $(git -C "$FACT_REPO" log -1 --format=%s auto-probe 2>/dev/null | grep -qx auto-probe && echo landed || echo "did not land"); asked: $(asked_word)"
+  git -C "$FACT_REPO" checkout -q - 2>/dev/null
+}
+# A repo with a plugin in its own .agents/plugins/: agy 1.5.13 runs its hooks (a session showed it, 2026-11-20)
+# though `agy plugin list --json` does not list it, so bosun refuses to start a window there.
+agy_workspace_plugin_repo() {
+  local dir="$WSP_REPO/.agents/plugins/ws-probe"
+  rm -rf "$WSP_REPO" "$WS_PLUGIN_MARKER"
+  mkdir -p "$dir" && git -C "$WSP_REPO" init -q || return 1
+  echo '{"name": "ws-probe", "version": "0.0.1"}' >"$dir/plugin.json"
+  jq -n --arg marker "$WS_PLUGIN_MARKER" '{"ws-probe": {SessionStart: [{type: "command", command: "touch \($marker)"}]}}' \
+    >"$dir/hooks.json"
+}
+agy_refuses_workspace_plugin() {
+  agy_workspace_plugin_repo || return 1
+  if bosun send --new wsp "$WSP_REPO" "Reply with just: ready" >"$OUT/wsp.txt" 2>&1; then
+    echo "a window started on a repo with a plugin in .agents/plugins/"
+    return 1
+  fi
+  sleep 5
+  [ ! -e "$WS_PLUGIN_MARKER" ] || {
+    echo "the workspace plugin's hook ran"
+    return 1
+  }
+  grep -qF "would run outside agy's sandbox" "$STATE"/logs/launch-*.log || {
+    tail -5 "$OUT/wsp.txt"
+    return 1
+  }
 }
 agy_fact_turn() { # <prompt> [window]: a turn in the fact window; a dialog it stops at is left with Esc, and said
   local window="${2:-$FACT_WINDOW}"
@@ -549,6 +632,8 @@ agy_facts_window() {
   check "a window on that repo starts, new" bash -c 'bosun send --new "$1" "$2" "Reply with just: ready" >"$3" 2>&1 || { cat "$3"; exit 1; }' _ "$FACT_WINDOW" "$FACT_REPO" "$OUT/fresh.txt"
   check "... and reads idle" wait_for 120 idle "$FACT_WINDOW"
   check "... with agy's footer on its screen" wait_for 150 agy_ui_ready "$FACT_WINDOW"
+  agy_unread_places_fact
+  check "a window on a repo with a plugin of its own in .agents/plugins/ is refused, and its hook never runs" agy_refuses_workspace_plugin
   agy_fact_turn "$CWD_PROMPT"
   agy_fact_turn "$GIT_DIR_PROMPT"
   fact sandbox-git-dirs "the top .git: $(written "$FACT_REPO/.git/probe-top"); a nested .git: $(written "$FACT_REPO/nested/.git/probe-nested"); the window asked: $(asked_word)"
@@ -559,6 +644,9 @@ agy_facts_window() {
   agy_fact_turn "$STATUS_PROMPT"
   fact planted-fsmonitor-window "on the window's git status, with the git config bosun puts in its environment, the program of the planted submodule $(ran_word RAN "did not run"); asked: $(asked_word)"
   agy_shell_fact
+  agy_git_env_fact
+  agy_auto_local_git_fact
+  agy_midsession_hooks_fact
   agy_past_the_sandbox_fact
   agy_worktree_fact
   agy_facts_from_hooks
@@ -574,6 +662,19 @@ agy_shell_fact() {
 }
 
 ran_marker() { if [ -e "$1" ]; then echo "$2"; else echo "$3"; fi; } # <marker> <if it exists> <if not>
+
+# Whether agy picks up a workspace hooks file written while a window runs: bosun checks for one only when a
+# window starts. Written here (as the agent could, in its workspace, from the sandbox), then a turn that runs
+# a command; the file is taken away again before the window's next start.
+agy_midsession_hooks_fact() {
+  rm -f "$MIDSESSION_MARKER"
+  mkdir -p "$FACT_REPO/.agents"
+  jq -n --arg marker "$MIDSESSION_MARKER" '{midsession: {PreInvocation: [{type: "command", command: "touch \($marker)"}],
+    PreToolUse: [{matcher: "run_command", hooks: [{type: "command", command: "touch \($marker)"}]}]}}' >"$FACT_REPO/.agents/hooks.json"
+  agy_fact_turn "$STATUS_PROMPT"
+  rm -rf "$FACT_REPO/.agents"
+  fact midsession-hooks "a workspace .agents/hooks.json written while the window ran: its hooks $(ran_marker "$MIDSESSION_MARKER" "RAN on the next turn (bosun's launch-time check does not cover a running window)" "did not run on the next turn"); asked: $(asked_word)"
+}
 
 # What a command run past the sandbox (an approved git, with the plugin) sees of the git environment the launch
 # pinned (GIT_CONFIG_COUNT, GIT_CONFIG_KEY_n, core.hooksPath=/dev/null): `git rev-parse --git-path hooks` prints
@@ -695,14 +796,16 @@ agy_tree_is_as_before() {
 agy_none_running() { ! pgrep -f -- "--log-file $STATE/logs/agy-" >/dev/null; }
 
 agy_off_again() {
-  local out="$OUT/uninstall.txt"
+  local out="$OUT/uninstall.txt" ledger
   echo "off again: bosun uninstall, and what is left of it in agy"
+  [ -s "$STATE/ledger.json" ] && ledger=there # only a write makes it, and this run may have made none
   check "uninstall passes" bash -c 'bosun uninstall --yes >"$1" 2>&1 || { tail -20 "$1"; exit 1; }' _ "$out"
   cat "$out"
   check "the windows have stopped" bash -c '! tmux -L bosun has-session -t "=bosun"'
   check "no agy of bosun's is left running" wait_for 30 agy_none_running
   check "the install link is gone" bash -c '[ ! -e "$1" ] && [ ! -L "$1" ]' _ "$HOME/.local/share/bosun"
-  check "your ledger stays" test -s "$STATE/ledger.json"
+  check "... and bosun-versions, every version in it" test ! -e "$HOME/.local/share/bosun-versions"
+  check "your ledger stays (if there was one)" bash -c '[ -z "$1" ] || [ -s "$2" ]' _ "${ledger:-}" "$STATE/ledger.json"
   check "agy no longer has bosun's plugin" test ! -e "$AGY_PLUGIN_DIR"
   check "... nor what its uninstall leaves behind" bash -c '[ ! -e "$1/antigravity-cli/plugin_data/bosun" ] && [ ! -e "$1/config/import_manifest.json" ]' _ "$AGY_HOME"
   check "the file tree of ~/.gemini differs from before bosun only by agy's own conversation and log files" agy_tree_is_as_before

@@ -1,0 +1,44 @@
+
+  [38;5;254mready[39m
+
+[38;5;23m────────────────────────────────────────────────────────────[39m
+[1m[38;5;32m> Run git status with your command-running tool, then reply with just: done[0m
+
+[38;5;100m●[39m [1m[38;5;136mRan[0m [38;5;109m(git status)[39m [38;5;109m(ctrl+o to expand)[39m
+
+  [38;5;254mdone[39m
+
+[38;5;23m────────────────────────────────────────────────────────────[39m
+[1m[38;5;32m> In this repo, do these steps in order. Run each as its own shell command with your command-running tool (never your file tools,[0m
+[1m[38;5;32m  never two steps in one command), and do not ask me anything. 1. git checkout -b feature-live 2. echo feature > FEATURE.txt 3.[0m
+[1m[38;5;32m  git add FEATURE.txt 4. git commit -m 'a feature' 5. git push origin feature-live 6. gh pr list 7. ls. Then reply with just:[0m
+[1m[38;5;32m  done[0m
+
+[38;5;100m●[39m [1m[38;5;136mRan[0m [38;5;254m7 commands[39m [38;5;109m(+4 · git push origin feature-live · gh pr list · ls)[39m [38;5;109m(ctrl+o to expand)[39m
+
+  [38;5;254mdone[39m
+
+[38;5;23m────────────────────────────────────────────────────────────[39m
+[1m[38;5;32m> Run these as three separate commands with your command-running tool, exactly as written, one after another: (a)[0m
+[1m[38;5;32m  BOSUN_PROBE_VAR=kept; export BOSUN_PROBE_VAR; probe_fn() { echo fn; }; echo $$ > shell-pid-1.txt (b) echo[0m
+[1m[38;5;32m  "var=${BOSUN_PROBE_VAR:-unset} fn=$(type probe_fn 2>&1 | head -1) pid=$$" > shell-reuse.txt (c) git rev-parse --git-path hooks.[0m
+[1m[38;5;32m  Then reply with just the line (c) printed.[0m
+
+[38;5;100m●[39m [1m[38;5;136mRan[0m [38;5;254m3 commands[39m [38;5;109m(+2 · git rev-parse --git-path hooks)[39m [38;5;109m(ctrl+o to expand)[39m
+
+  [38;5;254m/dev/null[39m
+
+[38;5;23m────────────────────────────────────────────────────────────[39m
+[1m[38;5;32m> Start the command 'sleep 40' with your command-running tool as a background command (asynchronously: do not wait for it to[0m
+[1m[38;5;32m  finish), then reply with just: started[0m
+
+[38;5;136m●[39m [1m[38;5;136mRunning[0m [38;5;109m(sleep 40)[39m [38;5;109m(ctrl+o to expand)[39m
+
+  [38;5;254mstarted[39m
+
+[38;5;23m──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[38;5;32m>[39m
+[38;5;23m──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m  [38;5;136m●[39m [08:16:04] [38;5;32msleep 40[39m [38;5;136mrunning[39m
+[38;5;23m──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[38;5;246m? for shortcuts[39m                                                                [38;5;166mauto[38;5;246m · Gemini 4 Argon · medium · 1 task(s) · /tasks

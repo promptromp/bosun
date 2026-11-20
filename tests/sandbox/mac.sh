@@ -440,7 +440,8 @@ live() { # [claude|codex|agy]
     *) die "usage: tests/sandbox.sh mac live [claude|codex|agy] [<parts>] [--paid]" ;;
   esac
   if [ "$agent" = "agy" ]; then
-    [ -z "$ONLY$CHANGED" ] || die "live agy runs whole: its steps need a person, and it has no parts"
+    # --list too: it would otherwise be ignored here, and a run that was asked only to list would start.
+    [ -z "$ONLY$CHANGED" ] && [ "$LIST" = 0 ] || die "live agy runs whole: its steps need a person, and it has no parts"
   else
     chosen_parts live
     [ -z "$CHANGED" ] || [ "$PAID" = 1 ] ||

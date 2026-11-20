@@ -21,6 +21,7 @@ from connectors import parse  # noqa: E402
 
 NEVER_SHOWN = "nvr-shown-0000"  # made up: a server's argument or value, which no message may hold
 FIXTURE = ROOT / "tests" / "fixtures" / "agy" / "mcp-list.txt"
+FIXTURE_1_5_13 = ROOT / "tests" / "fixtures" / "agy" / "no-login-1.5.13.txt"
 
 
 def stdio(**extra: object) -> dict[str, object]:
@@ -158,6 +159,54 @@ class ServersTest(AgyCase):
         end = text.index("\n]\n", start) + 2
         agent = self.plugins(json.loads(text[start:end]))
         self.assertEqual(connectors_agy.servers(str(self.below), str(agent)), ["disc-mcp_disc-plug"])
+
+    def test_what_agy_1_5_13_wrote_and_listed_reads(self) -> None:
+        """agy 1.5.13 (no login, 2026-11-20): bosun's plugin in `plugin list --json` brings no server, and the
+        file `agy mcp add` wrote (with `"disabled": false`) names its server."""
+        text = FIXTURE_1_5_13.read_text()
+        start = text.index("$ agy plugin list --json\n[\n  {") + len("$ agy plugin list --json\n")
+        listing = json.loads(text[start : text.index("\n]\n", start) + 2])
+        self.assertEqual([plugin["name"] for plugin in listing], ["bosun"])
+        self.assertEqual(connectors_agy.servers(str(self.below), str(self.plugins(listing))), [])
+        start = text.index('{\n  "mcpServers": {\n    "probe-dummy"')
+        (self.config / "mcp_config.json").write_text(text[start : text.index("\n}\n", start) + 2])
+        self.assertEqual(connectors_agy.servers(str(self.below), str(self.agent)), ["probe-dummy"])
+
+
+class WorkspacePluginTest(AgyCase):
+    """A plugin in the repo's own .agents/plugins/, which agy loads (1.5.13) though `agy plugin list` does not
+    list it."""
+
+    def plugin(self, folder: Path, name: str, servers: dict[str, object]) -> Path:
+        plugin = folder / ".agents" / "plugins" / name
+        plugin.mkdir(parents=True)
+        (plugin / "plugin.json").write_text(json.dumps({"name": f"{name}-kit"}))
+        self.write_servers(plugin, servers)
+        return plugin
+
+    def test_its_servers_are_named_for_the_plugin(self) -> None:
+        self.plugin(self.repo, "probe", {"docs": stdio(), "off": stdio(disabled=True)})
+        self.assertEqual(connectors_agy.servers(str(self.below), str(self.agent)), ["probe-kit_docs"])
+        code, _out, err = self.run_main("")
+        self.assertEqual(code, 1)
+        self.assertIn("probe-kit_docs", err)
+        self.assertIn("workspace plugin", err)
+        self.assertNotIn(NEVER_SHOWN, err)
+        self.assertEqual(self.run_main("probe-kit_docs")[0], 0)
+
+    def test_a_plugin_without_a_name_goes_by_its_folder(self) -> None:
+        plugin = self.plugin(self.below, "bare", {"docs": stdio()})
+        (plugin / "plugin.json").write_text("{}")
+        self.assertEqual(connectors_agy.servers(str(self.below), str(self.agent)), ["bare_docs"])
+
+    def test_a_plugins_json_refuses(self) -> None:
+        (self.repo / ".agents").mkdir()
+        (self.repo / ".agents" / "plugins.json").write_text('{"entries": []}')
+        code, _out, err = self.run_main("all")
+        self.assertEqual(code, 0)  # all: nothing is looked up
+        code, _out, err = self.run_main("")
+        self.assertEqual(code, 1)
+        self.assertIn("plugins.json", err)
 
 
 class RefusalTest(AgyCase):

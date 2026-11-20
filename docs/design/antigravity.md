@@ -150,7 +150,10 @@ sandbox.
   all, so a busy status alone could stay busy for good. So while the hooks say busy, the adapter reads the
   window's screen (the launch recorded its tmux pane in the status file): `agy`'s idle footer over an empty box means
   the turn ended, and the window is idle from then; a dialog ("↑/↓ Navigate") means it waits for a person, and
-  the window is `waiting`. `auto`'s reviewer does ask, for a push to `main`. Both are what the screen shows,
+  the window is `waiting`. (1.5.5's reviewer asked for a push to `main`; 1.5.13's asks nothing once bosun's plugin
+  approved a command, and did not ask for one it left alone in a session either.) `agy` 1.5.13 draws the idle
+  hint in a grey that bosun's reader of typed text drops as a placeholder, so the footer is read with its escapes
+  taken off (a session showed every Esc'd window reading busy for good before that). Both are what the screen shows,
   not a guess, and only a busy status is checked, so an idle window costs nothing. (Changed: the first version
   had no `waiting` for `agy` windows.) What you said in the window is recorded at the first `PreInvocation`
   that carries a new `lastUserInput`; a turn `agy` starts by itself repeats the last one, which is not new.
@@ -166,17 +169,67 @@ sandbox.
   if the plugin made it). (Changed: the first version installed it at `bosun init` and `bosun update`; the
   first launch on `agy` covers both, and windows added later.)
 - **What bosun's plugin approves.** Its `PreToolUse` hook answers `auto_approve` with `BypassSandbox` for a
-  `run_command` whose every command is `git`, `gh` or `bosun` with a subcommand of that program's allow-list
-  (`GIT`, `GH` and `BOSUN` in `lib/agy_state.py`: no global option before it, no `cd`, no prefix, no glob, run in
-  the payload's own workspace, and per subcommand the options and repositories it may name), in bosun windows
-  only, and nothing for every other command. A program that does not resolve on the hook's `PATH` to a full path
-  outside the payload's workspaces (a `git` the agent planted and put first) gets none either, and a
-  window-starting option of `bosun send` or `bosun delegate` is refused however it is abbreviated (`--ne`,
-  `--sta=w`), as `bosun delegate`'s own parser takes no abbreviation. (Changed: the first version took any `git`, `gh` or `bosun`
-  command past `cd` and refused a list of dangerous options, which two reviews showed could not be completed.) `allow` is not enough: it still
-  shows `agy`'s dialog, and the command still runs in the sandbox with no network. (Changed: the first version
-  said "approves".) `agy`'s reviewer can still ask, and the window is then `waiting`. Nothing in `agy`'s
-  global settings changes (my decision, 2026-11-10).
+  `run_command` that is one simple command alone (no `&&`, `||` or `;`, no pipe, `&`, redirection, group,
+  substitution, wrapper or newline: what runs before a push in the same line could change what its approval
+  read), and that command `git`, `gh` or `bosun` in one of the exact shapes of its allowlist (`GIT`, `GH` and
+  `BOSUN` in `lib/agy_state.py`: no global option before the subcommand, no `cd`, no prefix, no glob, run in
+  the payload's own workspace), in bosun windows only, and nothing for every other command. A
+  program that does not resolve on the hook's `PATH` to a full path outside the payload's workspaces (a `git`
+  the agent planted and put first) gets none either. `allow` is not enough: it still shows `agy`'s dialog, and
+  the command still runs in the sandbox with no network. (Changed: the first version said "approves".) Nothing
+  in `agy`'s global settings changes (my decision, 2026-11-10).
+
+  Since 1.5.13 the approval is final: a session showed an approved `git push --force origin HEAD:main` run with
+  no reviewer. So the allowlist holds only what the task files let a repo session do (`orchestrator/tasks/`),
+  and fails closed; everything else gets no answer, and `agy` handles it as it would without bosun (rebuilt
+  after a security review, 2026-11-20; `main`'s preview approves any `git`, `gh` or `bosun` subcommand of its
+  lists, any push included):
+
+  - `git push [-u | --set-upstream] <remote> <branch>` and no other push: the remote by its configured name
+    (never a URL or a path), the branch the one checked out, by a plain name (`[A-Za-z0-9._][A-Za-z0-9._/-]*`,
+    no `heads/`, `refs/`, `tags/` or `remotes/`, not `@` or HEAD in any case), never `main`, `master` or the
+    remote's default branch (in any case), and a branch that is the window's own. One live `git ls-remote
+    --symref <remote> HEAD refs/heads/<branch>`, within six seconds and asking for nothing, says the remote's
+    default branch (never the local `origin/HEAD`, which can be stale) and the branch's tip there; it fails
+    closed. The branch is the window's own when it is not on the remote yet, or when its tracking ref
+    (`refs/remotes/<remote>/<branch>`) was first made by this clone's own push (the first entry of its reflog
+    is "update by push"; no reflog is no record) and the remote's tip is still that ref (nobody pushed since).
+    The live call lists all the remote's branches (`HEAD 'refs/heads/*'`), and no other branch, there or here
+    (local branches and the remote's tracking refs), may differ from it only in case: on a case-insensitive
+    disk git reads one's tracking ref and reflog for the other's. The push's commits since the default
+    branch's tip may not touch anything under `.github/` (in any case; a workflow that runs on a push can hold
+    the repository's secrets) nor add or change a symlink or a submodule (`.gitmodules`, a gitlink), and that
+    tip must be here to tell. Nothing in git's
+    config may push elsewhere or more (`push.default` upstream or tracking, a remote's `push`, `pushurl` or
+    `mirror`, `receivepack` or `uploadpack`, more than one `url`, any `url.*.insteadOf` or `pushInsteadOf`,
+    `core.sshCommand` or `GIT_SSH_COMMAND`,
+    `push.followTags`, `push.recurseSubmodules`, `submodule.recurse`).
+    It can only write `refs/heads/<branch>`; tests run approved pushes against a real bare remote to show it.
+    The cost: a fix-my-pr push to a PR branch the window did not create (someone else's, or one this clone
+    fetched) gets no approval and is left to `agy`'s own review.
+  - git's local and read-only subcommands: `status`, `log`, `diff`, `show`, `add`, `rm`, `mv`, `restore`,
+    `reset`, `commit`, `checkout`, `switch`, `merge`, `rebase`, `cherry-pick`, `revert`, `stash`, `rev-parse`,
+    `ls-files`, `blame`, `describe`, `merge-base`, `remote` (listing only), `branch` only to make or list one
+    (never delete, rename, copy, force, track or set an upstream), and `git fetch|pull [-q] [<remote>
+    [<branch>...]]` with plain branch names only, and no remote with an `uploadpack` (no `+`, `*`, `:`, `refs/`,
+    `tag`, and no `--prune`, `--all`,
+    `--multiple`, `--depth`, `-u` or `--recurse-submodules`, which can delete or overwrite local branches; `pull`
+    also takes `--rebase`, `--no-rebase`, `--ff`, `--ff-only`, `--no-ff`). Never `tag`, `config`, `update-ref` or
+    `symbolic-ref`. These local approvals stay: the sessions on a Mac approved every git command through the
+    plugin, so no fact shows `agy`'s auto mode running them on its own (its sandbox keeps `.git` from being
+    written); the VM run records it (`auto-local-git`), and they go if it shows auto runs them.
+  - gh: `pr create` only as a draft (`-d`/`--draft`) and with `-H`/`--head <branch>`, once, a branch of the
+    window's own by the push rule that is already on `origin` by this clone's push, so that `gh` never pushes
+    or forks for it, and a `--base`, if any, that is `origin`'s default branch; `pr review` only approving or
+    commenting, `pr view`,
+    `list`, `status`, `checks` and `diff`, `run view`, `list` and `watch`, `issue view` and `list`, `repo view`
+    and `status`, each with its own options only (no `-R`/`--repo`, no `--web`, no URL, no `@file`, a short
+    option never glued or clustered), and `gh api` only as a read (no method but GET, no field, input or header)
+    of a path that, percent-decoded, is of `[A-Za-z0-9/_.-]` only, with no empty, `.` or `..` segment, no query,
+    and no `graphql` anywhere. Never `pr merge`, `close`, `ready`, `edit`, `comment` or `checkout`, nor `--request-changes`. A
+    reply in a review thread (fix-my-pr) is a `gh api` call with a field, so it is left to `agy` too.
+  - bosun: `ledger` (never `approve`) and the commands that only read; never `send` or `delegate`, since a repo
+    session reports through the ledger and messages no other session.
 - **Trust.** Each launch passes the folder, as given, in `--settings` (`trustedWorkspaces`), so the trust
   screen never shows and `agy`'s settings are never written. `agy` compares the folder as given, not its
   resolved path, and a trusted folder does not cover the folders under it. `bosun trust` has nothing to do for
@@ -186,16 +239,28 @@ sandbox.
 - **Connectors.** `agy` takes no MCP limit per launch, and switching servers off in the shared config would
   race between windows and change the app's setup. So before a launch the adapter lists every server `agy`
   would start there: the global `~/.gemini/config/mcp_config.json`, each `.agents/mcp_config.json` from the
-  repo up to its root, and the plugins' servers from `agy plugin list --json` (`<plugin>_<server>`); `agy mcp
-  list` shows only the first. It refuses the window unless each is on its list (or the list is `all`), and a
+  repo up to its root, the servers of each plugin in `.agents/plugins/` there (which `agy` loads but does not
+  list; an `.agents/plugins.json`, which registers plugins from elsewhere, refuses the window), and the plugins'
+  servers from `agy plugin list --json` (both `<plugin>_<server>`); `agy mcp list` shows only the first. It refuses the window unless each is on its list (or the list is `all`), and a
   listing that fails refuses too. bosun's own plugin brings no server. `bosun doctor` names the servers that
   block a window. In practice a repo window with no connectors starts on `agy` only if `agy` has no MCP servers
   set up at all, the app's included.
-- **What would run when `agy` starts.** `agy` reads hooks from `.agents/hooks.json` in a workspace and runs
-  them outside its sandbox, and bosun relaunches windows by itself. So a launch is refused when that file
-  exists in the window's folder or any folder up to its repo's root (the walk the connectors check uses,
-  `lib/agy_workspace.py`), with its path in the message. It is also refused when the log folder has a space
-  in it: the adapter finds a window by the one-word path after `--log-file` in its command line.
+- **What would run when `agy` starts.** `agy` reads hooks from `.agents/hooks.json` in a workspace, and from each
+  plugin in `.agents/plugins/` there (a 1.5.13 session ran a workspace plugin's SessionStart, PreInvocation,
+  PreToolUse and Stop hooks, though `agy plugin list` does not list it), and runs them outside its sandbox, and
+  bosun relaunches windows by itself. So a launch is refused, failing closed, when a customization folder in
+  the window's folder or any folder above it up to and including the home folder (by the path given and by its
+  resolved path; up to `/` for a folder outside the home folder) holds, at any depth, a link, a folder named
+  `plugins` or like `*hooks*` or `mcp*`, or a file named like `*hooks*`, `plugin.json`, `plugins.json`, `mcp*` (any
+  extension) or `settings*.json`, or is itself a link, too large to look through or unreadable (`lib/agy_workspace.py`), with
+  the path in the message. The customization folders are `.agents`, and `.agent` and `.gemini` in every folder
+  but the home folder itself: `~/.gemini` is `agy`'s own global config, and `~/.agent` may be `agy`'s own, so
+  neither is looked at. Whether `agy` reads `~/.agent` or a workspace `.agents/config.json` is the VM run's fact
+  (`home-agent`, `workspace-config`). Rules, skills and
+  workflows there are left alone. The check runs when a window starts, not while it runs: a hooks file the
+  agent writes in its workspace during a session is the VM run's fact (`midsession-hooks`). It is also refused
+  when the log folder has a space in it: the adapter finds a window by the one-word path after `--log-file` in
+  its command line.
 - **Reading its screen.** Readers for `pane_input`, from the run's captures. The box is the line starting with
   `>` between two grey rules, and text in it blanks the footer's hint. A question is a dialog ("↑/↓ Navigate",
   whose footer also says "esc to cancel", so it is checked before busy), the trust screen ("Do you trust the
@@ -238,7 +303,67 @@ window on `agy`.
   - a hook slower than `agy`'s timeout;
   - the plugin's install and uninstall leaving nothing else behind;
   - the connector refusal with a server set up, and with none;
-  - the morning `agy update` with automatic updates off.
+  - the morning `agy update` with automatic updates off;
+  - a window on a repo with a plugin of its own in `.agents/plugins/` refused, its hook never run;
+  - whether `agy` picks up a workspace hooks file written while a window runs, reads `~/.agent`, a workspace
+    `.agents/config.json` or a Gemini CLI extension in `.gemini/extensions/`, whether a hook sees the same
+    `GIT_*` variables as a command, and, with bosun's approval withheld, whether auto mode runs a local `git
+    checkout -b` and `git commit` on its own (each recorded as a fact: `midsession-hooks`, `home-agent`,
+    `workspace-config`, `gemini-extension`, `git-env`, `auto-local-git`).
+- **Rechecked on `agy` 1.5.13 with no login** (2026-11-20, `tests/fixtures/agy/no-login-1.5.13.txt`; a login does
+  not carry over to another HOME, so only what needs none). Unchanged: `--version`'s bare `1.5.13`; every flag a
+  launch passes is there, an unknown one is refused at start, and a value of `--effort` or `--mode` is not checked
+  before the sign-in; the sign-in screen, which bosun reads as a question (`waiting`); bosun's marker in `ps -ww`;
+  "Auto-update disabled via environment variable AGY_CLI_DISABLE_AUTO_UPDATE" in the log; no log of `agy`'s own
+  under `~/.gemini` with `--log-file`; `agy mcp list` (no `--json`, the global file only) and the file `agy mcp add`
+  writes; the connector refusal against those listings, with a global server, a workspace file and none; bosun's
+  plugin passing `agy plugin validate --strict`, installed as is, listed with its hooks and no servers. Settled:
+  either `SSH_CLIENT` or `SSH_CONNECTION` alone makes `agy` keep its sign-in in a file instead of the Keychain,
+  `SSH_AUTH_SOCK` alone does not; an uninstall with no session run leaves `import_manifest.json` (imports null) and
+  an empty `config/plugins/`, which bosun's removal leaves too; plugin servers start only after the sign-in. From
+  `agy`'s changelog and docs: Auto has been the default agent mode since 1.5.7 (a saved `"agentMode": ""` keeps
+  the old default, so the launch still passes it), needs the terminal sandbox, and falls back to the default mode
+  where it is unavailable; `--sandbox` is not new (1.0.x); `--effort` names `low` to `max` "depending on the
+  model"; since 1.5.10 the sandbox blocks reading `~/.config`, where bosun's own config is, so a `bosun` command
+  the plugin does not approve cannot read it inside the sandbox; Stop's payload has `terminationReason`
+  (`USER_CANCELED` among them) and `continuationActive`.
+- **Settled in sessions of `agy` 1.5.13 on a Mac** (2026-11-20, the person's own login, a throwaway repo with a
+  local bare remote and a stand-in `gh`, the launch line bosun's dry run printed but `--remote-control`, and bosun's
+  hooks as a plugin in the repo's own `.agents/plugins/`; payloads and screens masked in `tests/fixtures/agy/` as
+  `*-1.5.13.*`):
+  - the payloads of SessionStart, PreInvocation, PreToolUse and Stop (`fullyIdle` false while a background
+    command ran, true when `agy` started a turn by itself after it); a `run_command`'s args are `CommandLine`,
+    `WaitMsBeforeAsync` and `toolSummary`, with no folder;
+  - the trust screen never showed with `trustedWorkspaces`; Auto from `--settings`, shown in the footer (`auto ·`);
+    `SSH_AUTH_SOCK` (launchd's) was in the hooks' environment and the Keychain login worked;
+  - bosun's plugin approved `git status`, `checkout`, `add`, `commit`, a feature branch's push (it landed in the
+    bare remote) and `gh pr list` (the stand-in ran), and left `echo`, `ls` and other commands alone; an
+    approved commit ran no planted pre-commit hook, and `git rev-parse --git-path hooks` printed `/dev/null`:
+    the environment's pins reach what passes the sandbox;
+  - an approval is final: `git push --force origin HEAD:main`, approved, ran with no reviewer, which made the
+    allowlist above; a push to `main` left alone ran too, the remote being in `/tmp`,
+    which the sandbox lets commands write;
+  - a workspace plugin's hooks run (above), with `PLUGIN_ROOT` set and no `PLUGIN_DATA`;
+  - Esc: `Interrupted`, no hook, the status file left busy; bosun reads the window idle from its screen once the
+    footer is read with its escapes taken off (it read busy for good before); the footer says busy already when
+    PreInvocation runs, and one second later;
+  - a dialog (in default mode, from `--settings`): `waiting`; its third choice would save to `agy`'s
+    settings.json, so it was cancelled with Esc, which leaves `Interrupted` too;
+  - typed text is read as typed, a queued message as busy, a background task's footer as `shell`;
+  - a hook past its timeout (2 s, against a sleep of 8) is killed, and its tool fails: a refusal;
+  - each `run_command` starts a shell of its own (no variable or function carries over);
+  - a resume by id keeps the conversation and fires no SessionStart; an unknown id is "not found, ignoring
+    --conversation flag" in `agy`'s log, a new conversation whose SessionStart fires, which bosun's hook
+    leaves unnamed, and whose first model call bosun's guard stops, saying why on the screen;
+  - `--effort xhigh` on a model without it keeps the model and takes High ("gemini-4-argon has no "xhigh"
+    effort"), as the launch's cap passes anyway; `--mode plan` applies, and `--settings`' `agentMode` outranks
+    `--mode`;
+  - the sandbox refused a write to a worktree's `.git` file ("operation not permitted"), and `agy` did not take
+    the command past it.
+  Still for the VM run: windows started by bosun's launchd job and the Keychain login there, `--remote-control`,
+  the morning `agy update`, the plugin installed by bosun's launch and uninstalled after sessions ran, the
+  launch's connector refusal with a server set up, a push to a remote outside `/tmp` left to `agy`'s reviewer, and
+  bosun's own windows end to end (its `send`, `refresh` and `sessions`).
 
 ## What stops the second pull request
 

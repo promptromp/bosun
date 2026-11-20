@@ -13,8 +13,10 @@ Usage: connectors_agy.py --list <value> --plugins <value> --agent-bin <agy> [--c
            and where it comes from. A line on stderr per name of the list agy has no server by, which does
            not refuse. The servers are those of the global file (~/.gemini/config/mcp_config.json), of each
            `.agents/mcp_config.json` from <dir> up to its repo's root (the folder holding `.git`; none: <dir>
-           alone), and of the enabled plugins (`agy plugin list --json`, named `<plugin>_<server>`); a server
-           marked `"disabled": true` is not started. A plugin list (--plugins, lib/plugins.py) other
+           alone), of the plugins in each `.agents/plugins/` there (which agy loads but does not list; a
+           `.agents/plugins.json`, which registers others, refuses), and of the enabled plugins (`agy plugin
+           list --json`), these two named `<plugin>_<server>`; a server marked `"disabled": true` is not
+           started. A plugin list (--plugins, lib/plugins.py) other
            than `all` refuses the window (exit 1) before anything is listed: agy cannot switch
            plugins off per window either.
 
@@ -26,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -36,7 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import claude_state
 import connectors
 import plugins
-from agy_workspace import workspace_folders
+from agy_workspace import PLUGINS_FILE, workspace_folders, workspace_plugins
 from connectors import Allowed, ConnectorsError, is_url, parse, say
 
 
@@ -132,6 +135,29 @@ def plugin_entry(plugin: Any) -> tuple[str, list[str]]:
     return plugin["name"], servers
 
 
+def plugin_name(plugin: Path) -> str:
+    """A workspace plugin's name, as agy gives it: its plugin.json's `name`, else its folder's."""
+    try:
+        name = json.loads((plugin / "plugin.json").read_text(encoding="utf-8")).get("name")
+    except (OSError, UnicodeError, ValueError, AttributeError):
+        name = None
+    return name if isinstance(name, str) and name else plugin.name
+
+
+def workspace_plugin_servers(folder: Path) -> dict[str, str]:
+    """The servers of the plugins in <folder>'s `.agents/plugins/`, as `<plugin>_<server>`, which agy loads
+    though `agy plugin list` does not list them (1.5.13). A `.agents/plugins.json` registers plugins from
+    other folders, which bosun does not follow: an error, so the window is refused."""
+    if os.path.lexists(folder / PLUGINS_FILE):
+        raise ConnectorsError(f"{folder / PLUGINS_FILE} registers plugins that bosun cannot list")
+    found: dict[str, str] = {}
+    for plugin in workspace_plugins(folder):
+        name = plugin_name(plugin)
+        for server in read_servers(plugin / "mcp_config.json"):
+            found.setdefault(f"{name}_{server}", f"workspace plugin {name} in {plugin.parent}")
+    return found
+
+
 def sources(workdir: str, agent_bin: str) -> dict[str, str]:
     """Every server agy would start in <workdir>, each once, with where it comes from: the global file,
     the folder of a workspace file, or a plugin."""
@@ -143,6 +169,9 @@ def sources(workdir: str, agent_bin: str) -> dict[str, str]:
     )
     for path, source in places:
         for name in read_servers(path):
+            found.setdefault(name, source)
+    for folder in workspace_folders(Path(workdir).resolve()):
+        for name, source in workspace_plugin_servers(folder).items():
             found.setdefault(name, source)
     for name, source in plugin_servers(agent_bin).items():
         found.setdefault(name, source)

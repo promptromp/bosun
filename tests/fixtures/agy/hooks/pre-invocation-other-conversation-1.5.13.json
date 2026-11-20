@@ -1,0 +1,14 @@
+{
+  "artifactDirectoryPath": "/Users/me/.gemini/antigravity-cli/brain/00000002-0000-4000-8000-000000000002",
+  "conversationId": "00000002-0000-4000-8000-000000000002",
+  "cwd": "/Users/me/Development/exporter",
+  "hookEventName": "PreInvocation",
+  "initialNumSteps": 1,
+  "invocationNum": 0,
+  "lastUserInput": "Reply with just: ok",
+  "modelName": "gemini-4-argon-medium",
+  "transcriptPath": "/Users/me/.gemini/antigravity-cli/brain/00000002-0000-4000-8000-000000000002/.system_generated/logs/transcript_full.jsonl",
+  "workspacePaths": [
+    "/Users/me/Development/exporter"
+  ]
+}

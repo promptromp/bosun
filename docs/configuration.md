@@ -237,8 +237,22 @@ What an `agy` window does:
   Codex's.
 - When the first `agy` window starts, bosun installs a small plugin of its own into `agy`. It is recorded, and
   `bosun uninstall` takes it back. In a bosun window the plugin lets exactly allow-listed `git`, `gh` and `bosun`
-  commands run past `agy`'s sandbox, so that pushes and `gh` work; every other command is left to `agy`. In your
-  own `agy` sessions the plugin does nothing.
+  commands run past `agy`'s sandbox, so that pushes and `gh` work; every other command is left to `agy`. Since
+  `agy` 1.5.13 such an approval is final (`agy`'s own reviewer no longer looks at it), so the list is an allowlist
+  of exact shapes, each a command alone (never in a `&&` or `;` chain), what the task files let a repo session
+  do: a push only of the branch checked out
+  (`git push [-u] origin <branch>`), only of a branch that is the window's own (not on the remote yet, or pushed
+  there by this clone with nobody's push since, which bosun asks the remote live), never the default branch, and
+  never one whose commits change workflows; a PR only as a draft from such a branch, already pushed
+  (`gh pr create --draft --head <branch>`); a review that approves or comments; reads. A push to a PR branch the
+  window did not create is left to `agy`'s own review, and so is every push in a repo whose git config could send
+  it elsewhere than bosun checks (more than one URL, a pushurl, a `url.*.insteadOf` or `pushInsteadOf`, an ssh
+  command). In your own `agy` sessions the plugin does nothing.
+- A window is refused when an `.agents/` in its folder, or in any folder above it up to your home folder (or an
+  `.agent/` or `.gemini/` below your home folder; your own `~/.gemini` is never looked at), holds a link, a
+  `plugins`, `*hooks*` or `mcp*` folder, or a file named like `*hooks*`, `plugin.json`, `plugins.json`, `mcp*` or
+  `settings*.json`: `agy` would run such hooks outside its sandbox, or start such servers, at every start. Rules,
+  skills and workflows there are fine. This is checked when a window starts, not while it runs.
 - Repo git hooks do not run in an `agy` window: an approved commit would otherwise run the repo's own hook code
   outside the sandbox. Pre-commit-style checks therefore run in CI only.
 - Its status comes from `agy`'s hooks and, while a window is busy, from its screen (Esc, and `agy`'s dialogs).
